@@ -1,0 +1,160 @@
+{
+  "format": 1,
+  "note": "Sanitized review fixtures; raw runs remain under gitignored runs/.",
+  "runs": [
+    {
+      "run_id": "20260720-144346-9395403b",
+      "files": [
+        {
+          "path": "meta.json",
+          "sha256": "b7772de59923609b29eec242cdcca6f1c5102def57c8b6ad4f1aa283fd56a9e3"
+        },
+        {
+          "path": "events.jsonl",
+          "sha256": "36743df6f57879b6555394763744064674d768605fc5c0194aaf16276dd48096"
+        },
+        {
+          "path": "report.md",
+          "sha256": "36218dfaaad4c5cd2f59cabf171618e715400c7848a96a11741efcd3ca2c3f4d"
+        }
+      ],
+      "redactions": {
+        "user_home": 1
+      }
+    },
+    {
+      "run_id": "20260722-230100-a7d9209e",
+      "files": [
+        {
+          "path": "meta.json",
+          "sha256": "80e7b4acda75bb3619f5a000c23f5b2a0fdc789c7d66516063c4bfe4658be346"
+        },
+        {
+          "path": "events.jsonl",
+          "sha256": "cabe9a6493d279da388b4d2152f4fccccad7086e6bd0d6f9ed8363ab5b71ba66"
+        },
+        {
+          "path": "report.md",
+          "sha256": "d870f55b5c34c338ee16bc5da2e4a0ae7712da3b579a4440dd194d6ce64cb8cd"
+        }
+      ],
+      "redactions": {
+        "user_home": 1
+      }
+    },
+    {
+      "run_id": "20260723-113032-cc28ac2e",
+      "files": [
+        {
+          "path": "meta.json",
+          "sha256": "866873b9f91725a7eff73a1a140e01362576fc280998c720a24cdab6ac902a06"
+        },
+        {
+          "path": "events.jsonl",
+          "sha256": "051c5402d6bb907247647cd27e091779c97cfff4b2d88201edbe08156fdd12e1"
+        }
+      ],
+      "redactions": {}
+    },
+    {
+      "run_id": "20260723-120957-cc50f0ff",
+      "files": [
+        {
+          "path": "meta.json",
+          "sha256": "ed1ebf09fd567ba8c14c266c12a9d433272e7d3ff5246f606a437f89c94a2390"
+        },
+        {
+          "path": "events.jsonl",
+          "sha256": "e908cc3f29407519fd7f3dc66ce851f82f295171bc72abb4e67e28f51a2735a2"
+        },
+        {
+          "path": "report.md",
+          "sha256": "85a2a958c811d32ae357374f9b4331923b6d4948e3eb1500c6c4535d6c1e8651"
+        }
+      ],
+      "redactions": {
+        "user_home": 1
+      }
+    },
+    {
+      "run_id": "20260723-205315-716a677f",
+      "files": [
+        {
+          "path": "meta.json",
+          "sha256": "721cadce54faef96dd85a5b3d80201db6761b9a75d118c9b356f9540fc8bc652"
+        },
+        {
+          "path": "events.jsonl",
+          "sha256": "bef11b344891ac57854089ea7a1c37b78adc28e0116cdeb252e053d148d1754b"
+        },
+        {
+          "path": "report.md",
+          "sha256": "cdaf1abad17234e7ccda6c9bed06777c4bdd240f191ac25a63dcac10c4a6472f"
+        }
+      ],
+      "redactions": {
+        "user_home": 1
+      }
+    },
+    {
+      "run_id": "20260723-221026-75c7efe1",
+      "files": [
+        {
+          "path": "meta.json",
+          "sha256": "3ddccfabedea9321c9dbc4713584134cd5ee758d1466a43d74ad034b66574069"
+        },
+        {
+          "path": "events.jsonl",
+          "sha256": "96ede3409f98cbd292b6314ee0fcb6eaa2835d824764fc0471bd59961e5dc88a"
+        },
+        {
+          "path": "report.md",
+          "sha256": "49fdc14d40f3ec455f58c65a14785e8dac73e6aab788a669f92abeee947a45dd"
+        }
+      ],
+      "redactions": {
+        "user_home": 1
+      }
+    },
+    {
+      "run_id": "20260723-224942-8dbf0bf0",
+      "files": [
+        {
+          "path": "meta.json",
+          "sha256": "3496fa138affc41481985a3fb65b91e7309afb0681bae35b9a413337efe2a5f7"
+        },
+        {
+          "path": "events.jsonl",
+          "sha256": "c7c70f19a1654925704fa4e1f405bb867ab57a78cf6237e7896ade4a7f0f1161"
+        },
+        {
+          "path": "report.md",
+          "sha256": "0978091d7df29ea3f2e9cfe3926d0622a98323f7dedcdec1a795c711e564801e"
+        }
+      ],
+      "redactions": {
+        "user_home": 1
+      }
+    },
+    {
+      "run_id": "20260726-232556-9f2b8383",
+      "files": [
+        {
+          "path": "meta.json",
+          "sha256": "6d95a893dccbdf48b01efc992fa1702bbfea53254ba2f5fe37801b03e777bc4a"
+        },
+        {
+          "path": "events.jsonl",
+          "sha256": "36c5fa362de065ac537e09e9ad144ad695448ac83454d9e72893125e86c20d94"
+        },
+        {
+          "path": "report.md",
+          "sha256": "d53b5445f5a0e2ed5ae89325f9e31d231a8e47254c8cb3904d9051ded0ad7086"
+        }
+      ],
+      "redactions": {
+        "user_home": 1
+      }
+    }
+  ]
+}

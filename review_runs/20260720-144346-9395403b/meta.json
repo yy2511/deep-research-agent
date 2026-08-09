@@ -1,0 +1,250 @@
+{
+  "run_id": "20260720-144346-9395403b",
+  "query": "请帮我整理下目前全球具身智能发展的技术路线，以及各个路线的代表性公司，需要包括这些公司的技术路径，产品进度，商业化进度，融资情况，团队情况",
+  "plan": {
+    "planner_contract_version": "milestone-v1",
+    "clarified_query": "请帮我整理下目前全球具身智能发展的技术路线，以及各个路线的代表性公司，需要包括这些公司的技术路径，产品进度，商业化进度，融资情况，团队情况",
+    "milestones": [
+      {
+        "id": "m1",
+        "objective": "建立截至2026年7月20日全球具身智能的技术路线框架，明确各路线的核心模型与系统架构、训练数据与学习范式、控制与仿真方式、主要适用机器人形态及技术成熟度。",
+        "kind": "research",
+        "depends_on_ids": [],
+        "completion_criteria": "基于2025年至2026年7月20日前可核验的学术综述、技术论文、研究机构/公司技术资料，形成4至6条可区分但允许交叉的技术路线；每条路线均有关于技术机制、关键能力边界、部署挑战和代表性技术信号的证据。分类口径须覆盖模型/架构、数据与训练、控制/仿真三个维度，避免仅按机器人外形或应用行业分类。"
+      },
+      {
+        "id": "m2",
+        "objective": "建立全球具身智能代表性公司候选池，为后续按技术路线遴选公司提供可比较的公开证据。",
+        "kind": "research",
+        "depends_on_ids": [],
+        "completion_criteria": "在北美、欧洲及东亚市场中识别不少于12家候选公司，并覆盖至少3个地区市场；对每家候选公司记录其公开宣称的技术方向、主要产品或平台、产品/交付进度、商业化信号、最近一轮已公开融资信息和核心团队信息线索。优先采用公司公告、融资方公告、监管/招聘/客户资料及可信商业媒体；公开未披露的信息须标记为缺口，不以推测补全。"
+      },
+      {
+        "id": "m3",
+        "objective": "依据已建立的技术路线框架和公司候选池，选出各技术路线的代表性公司，并确定后续逐家公司核验所需的公司名称、路线归属和比较口径。",
+        "kind": "decision",
+        "depends_on_ids": [
+          "m1",
+          "m2"
+        ],
+        "completion_criteria": "产出一份有界的入选决定：每条技术路线选择1至2家代表性公司、入选公司总数不超过8家；对每家公司说明其路线归属、代表性理由及与其他候选者相比的取舍依据。决定须明确后续研究统一核验的字段为技术路径、产品进度、商业化进度、融资情况和团队情况，并保留支撑选择的上游证据引用。"
+      },
+      {
+        "id": "m4",
+        "objective": "核验前一步选出的各具身智能代表性公司的技术路径、产品进度、商业化进度、融资情况和团队情况，并在统一口径下比较其发展阶段。",
+        "kind": "research",
+        "depends_on_ids": [
+          "m3"
+        ],
+        "completion_criteria": "针对入选的每家公司，以截至2026年7月20日的公开证据核验五类事实：技术路径及其与所属路线的关系、产品原型/发布/量产或交付状态、客户/订单/试点/收入等商业化信号、最近已公开融资的日期金额轮次及主要投资方、核心创始人或关键技术负责人的背景与组织信息。优先使用公司、投资方、客户和权威媒体的一手或交叉验证来源；估值、收入、订单等未公开字段须明确标注未披露。"
+      }
+    ],
+    "sub_questions": [
+      {
+        "id": "3ec847bd",
+        "milestone_id": "m1",
+        "objective": "检索近期具身智能与机器人学习综述，提取可用于区分全球技术路线的模型架构、数据训练和控制部署维度。",
+        "search_query": "embodied AI robotics technical landscape survey VLA world model imitation learning diffusion policy 2025 2026",
+        "boundaries": "优先2025年至2026年7月20日前的学术综述、顶级会议论文和研究机构技术报告；关注可验证的技术分类依据，不按单一机器人品类罗列。"
+      },
+      {
+        "id": "a2bb21b1",
+        "milestone_id": "m1",
+        "objective": "检索机器人基础模型、视觉-语言-动作模型、世界模型和仿真到现实迁移等路线的一手技术资料，验证路线差异与当前能力边界。",
+        "search_query": "robot foundation model VLA world model sim-to-real embodied AI technical report 2025 2026",
+        "boundaries": "优先论文原文、实验室/公司技术博客和公开基准资料；提取训练数据、动作生成、控制闭环、仿真和真实部署证据。"
+      },
+      {
+        "id": "f96b872d",
+        "milestone_id": "m2",
+        "objective": "收集北美具身智能候选公司的公开信息，筛选具有明确技术方向、产品进度和融资/团队线索的公司。",
+        "search_query": "North America embodied AI humanoid robotics startups product deployment funding leadership 2025 2026",
+        "boundaries": "覆盖美国和加拿大；优先公司新闻稿、投资方公告、客户合作公告和可信商业媒体，记录候选公司及其可供后续遴选的证据线索。"
+      },
+      {
+        "id": "422dcf81",
+        "milestone_id": "m2",
+        "objective": "收集中国具身智能候选公司的公开信息，筛选具有明确技术方向、产品进度和融资/团队线索的公司。",
+        "search_query": "2026 具身智能 人形机器人 公司 产品 量产 商业化 融资 团队",
+        "boundaries": "覆盖中国大陆市场；优先企业公告、融资机构公告、客户合作或招投标信息及权威财经/科技媒体，区分演示、试点、交付与量产。"
+      },
+      {
+        "id": "36bf150a",
+        "milestone_id": "m2",
+        "objective": "收集欧洲、日本和韩国具身智能候选公司的公开信息，补足全球候选池的区域覆盖和可比证据。",
+        "search_query": "Europe Japan Korea embodied AI humanoid robotics companies product commercialization funding team 2025 2026",
+        "boundaries": "覆盖欧洲、日本和韩国；优先公司、投资方、客户及当地可信媒体来源，记录候选公司的技术主张、产品状态、商业化与融资团队线索。"
+      }
+    ],
+    "pending_goals": [
+      {
+        "id": "m3",
+        "objective": "依据已建立的技术路线框架和公司候选池，选出各技术路线的代表性公司，并确定后续逐家公司核验所需的公司名称、路线归属和比较口径。",
+        "dependency": "等待里程碑：m1, m2"
+      },
+      {
+        "id": "m4",
+        "objective": "核验前一步选出的各具身智能代表性公司的技术路径、产品进度、商业化进度、融资情况和团队情况，并在统一口径下比较其发展阶段。",
+        "dependency": "等待里程碑：m3"
+      }
+    ],
+    "budget": {
+      "max_frontier_waves": 3,
+      "max_frontier_tasks_per_wave": 5,
+      "max_total_tasks": 18,
+      "estimated_min_tasks": 6,
+      "recommended_tasks": 8,
+      "budget_tight": false
+    }
+  },
+  "status": "partial",
+  "started_at": 1784529826.151565,
+  "finished_at": 1784530928.866669,
+  "config_summary": {
+    "planner": "gpt-5.6-terra@codex_local",
+    "subagent": "deepseek-v4-flash@opencode",
+    "writer": "gpt-5.6-luna@codex_local",
+    "worker_mode": "loop",
+    "budget": {
+      "max_frontier_waves": 3,
+      "max_frontier_tasks_per_wave": 5,
+      "max_total_tasks": 18
+    }
+  },
+  "stats": {
+    "llm": [
+      {
+        "step": "tool_loop",
+        "model": "deepseek-v4-flash",
+        "calls": 88,
+        "total_ms": 643353.3,
+        "in_tok": 791860,
+        "out_tok": 62240
+      },
+      {
+        "step": "write_report",
+        "model": "gpt-5.6-luna",
+        "calls": 1,
+        "total_ms": 313303.7,
+        "in_tok": 20755,
+        "out_tok": 17295
+      },
+      {
+        "step": "assess_research_milestones",
+        "model": "gpt-5.6-terra",
+        "calls": 5,
+        "total_ms": 141535.19999999998,
+        "in_tok": 20291,
+        "out_tok": 7328
+      },
+      {
+        "step": "compile_milestone_frontier",
+        "model": "gpt-5.6-terra",
+        "calls": 2,
+        "total_ms": 70816.5,
+        "in_tok": 6433,
+        "out_tok": 3272
+      },
+      {
+        "step": "write_draft",
+        "model": "gpt-5.6-terra",
+        "calls": 1,
+        "total_ms": 50612.7,
+        "in_tok": 3624,
+        "out_tok": 2246
+      },
+      {
+        "step": "global_reflect",
+        "model": "gpt-5.6-terra",
+        "calls": 1,
+        "total_ms": 38810.8,
+        "in_tok": 9482,
+        "out_tok": 2067
+      }
+    ],
+    "steps": [
+      {
+        "step": "tool_loop",
+        "calls": 88,
+        "total_ms": 643595.3
+      },
+      {
+        "step": "write_report",
+        "calls": 1,
+        "total_ms": 313313.0
+      },
+      {
+        "step": "frontier_dispatch(W2)",
+        "calls": 1,
+        "total_ms": 197621.6
+      },
+      {
+        "step": "frontier_dispatch(W1)",
+        "calls": 1,
+        "total_ms": 151259.4
+      },
+      {
+        "step": "assess_research_milestones",
+        "calls": 3,
+        "total_ms": 141556.3
+      },
+      {
+        "step": "dispatch(并发)",
+        "calls": 1,
+        "total_ms": 138643.1
+      },
+      {
+        "step": "compile_milestone_frontier",
+        "calls": 2,
+        "total_ms": 70825.1
+      },
+      {
+        "step": "write_draft",
+        "calls": 1,
+        "total_ms": 50617.2
+      },
+      {
+        "step": "global_reflect",
+        "calls": 1,
+        "total_ms": 38815.7
+      },
+      {
+        "step": "dedup",
+        "calls": 1,
+        "total_ms": 0.7
+      }
+    ],
+    "tools": [
+      {
+        "tool": "fetch_page",
+        "calls": 107,
+        "ok": 92,
+        "accepted": 0,
+        "rejected": 0
+      },
+      {
+        "tool": "search",
+        "calls": 70,
+        "ok": 56,
+        "accepted": 0,
+        "rejected": 0
+      },
+      {
+        "tool": "save_evidence",
+        "calls": 23,
+        "ok": 22,
+        "accepted": 131,
+        "rejected": 62
+      },
+      {
+        "tool": "finish",
+        "calls": 1,
+        "ok": 1,
+        "accepted": 0,
+        "rejected": 0
+      }
+    ],
+    "wall_s": 1102.7,
+    "agg_s": 1746.2
+  }
+}

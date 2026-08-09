@@ -1,0 +1,281 @@
+{
+  "run_id": "20260723-221026-75c7efe1",
+  "query": "普通人如何实现财富自由",
+  "plan": {
+    "planner_contract_version": "milestone-v1",
+    "clarified_query": "普通人如何实现财富自由",
+    "milestones": [
+      {
+        "id": "m1",
+        "objective": "建立财富自由的基础认知：明确定义、关键原则、常见实现路径及其在当前经济环境下的可行性",
+        "kind": "research",
+        "depends_on_ids": [],
+        "completion_criteria": "提供至少3种主流财富自由定义（如FIRE、被动收入覆盖支出、资产阈值等）；列举至少10条普通人可行的路径（如指数基金定投、房地产投资、自媒体创业、电商、软件开发、自由职业等），并涵盖每条路径的简要描述、所需初始资本、时间投入、潜在收益和主要风险；结合2026年经济环境分析各路径的可行性；给出财务独立所需金额的计算方法和参考范围。"
+      },
+      {
+        "id": "m2",
+        "objective": "从M1识别的路径中筛选出最适合普通人的2-3条核心路径，并确定每条路径的深入研究方向",
+        "kind": "decision",
+        "depends_on_ids": [
+          "m1"
+        ],
+        "completion_criteria": "基于M1的路径评估，选择2-3条路径（如指数基金投资和垂直领域内容创业），并提供筛选理由；确定每条路径的深入研究重点（如具体操作步骤、关键成功因素、所需技能、启动成本、典型案例等）。"
+      },
+      {
+        "id": "m3",
+        "objective": "对M2选定的核心路径进行纵深研究，获取可操作的指南和现实案例",
+        "kind": "research",
+        "depends_on_ids": [
+          "m2"
+        ],
+        "completion_criteria": "针对每条选定路径，整理详细操作步骤（至少5个关键步骤）；收集至少2个真实成功案例（包括其起始条件、过程、结果）；明确所需启动资金范围、时间投入、必备技能和工具；揭示当前趋势下的潜在机会和常见陷阱。"
+      }
+    ],
+    "sub_questions": [
+      {
+        "id": "dd7f19e4",
+        "milestone_id": "m1",
+        "objective": "收集财富自由的标准定义和FIRE运动的核心原则",
+        "search_query": "financial freedom definition FIRE movement principles 4% rule",
+        "boundaries": null
+      },
+      {
+        "id": "d29c36f5",
+        "milestone_id": "m1",
+        "objective": "调查普通人实现财富自由的通用策略和路径",
+        "search_query": "common strategies for average people to achieve financial independence 2026",
+        "boundaries": null
+      },
+      {
+        "id": "9c070c30",
+        "milestone_id": "m1",
+        "objective": "了解当前（2026年）全球经济环境下各类资产的投资回报和风险",
+        "search_query": "investment return rates 2026 index funds real estate market trends risks",
+        "boundaries": null
+      },
+      {
+        "id": "d97bfa9c",
+        "milestone_id": "m1",
+        "objective": "获取各类财富自由路径所需的启动成本、时间和技能要求",
+        "search_query": "cost time skill requirements for passive income streams side hustles online business 2026",
+        "boundaries": null
+      },
+      {
+        "id": "cb55132b",
+        "milestone_id": "m1",
+        "objective": "查找财务独立所需金额的计算方法和实际案例",
+        "search_query": "how to calculate financial independence number net worth target examples",
+        "boundaries": null
+      }
+    ],
+    "pending_goals": [
+      {
+        "id": "m2",
+        "objective": "从M1识别的路径中筛选出最适合普通人的2-3条核心路径，并确定每条路径的深入研究方向",
+        "dependency": "等待里程碑：m1"
+      },
+      {
+        "id": "m3",
+        "objective": "对M2选定的核心路径进行纵深研究，获取可操作的指南和现实案例",
+        "dependency": "等待里程碑：m2"
+      }
+    ],
+    "budget": {
+      "max_frontier_waves": 3,
+      "max_frontier_tasks_per_wave": 5,
+      "max_total_tasks": 18,
+      "estimated_min_tasks": 6,
+      "recommended_tasks": 8,
+      "budget_tight": false
+    }
+  },
+  "status": "done",
+  "started_at": 1784815826.134625,
+  "finished_at": 1784816951.050834,
+  "config_summary": {
+    "planner": "deepseek-v4-pro@deepseek",
+    "subagent": "deepseek-v4-flash@deepseek",
+    "writer": "deepseek-v4-pro@deepseek",
+    "worker_mode": "loop",
+    "budget": {
+      "max_frontier_waves": 3,
+      "max_frontier_tasks_per_wave": 5,
+      "max_total_tasks": 18
+    }
+  },
+  "stats": {
+    "llm": [
+      {
+        "step": "tool_loop",
+        "model": "deepseek-v4-flash",
+        "calls": 73,
+        "total_ms": 379651.6000000001,
+        "in_tok": 656662,
+        "out_tok": 41991
+      },
+      {
+        "step": "summarize",
+        "model": "deepseek-v4-flash",
+        "calls": 47,
+        "total_ms": 297053.89999999997,
+        "in_tok": 161589,
+        "out_tok": 33581
+      },
+      {
+        "step": "assess_research_milestones",
+        "model": "deepseek-v4-pro",
+        "calls": 3,
+        "total_ms": 244332.2,
+        "in_tok": 39582,
+        "out_tok": 15020
+      },
+      {
+        "step": "write_report",
+        "model": "deepseek-v4-pro",
+        "calls": 1,
+        "total_ms": 136153.8,
+        "in_tok": 26395,
+        "out_tok": 8207
+      },
+      {
+        "step": "resolve_decisions",
+        "model": "deepseek-v4-pro",
+        "calls": 2,
+        "total_ms": 71673.4,
+        "in_tok": 7496,
+        "out_tok": 4598
+      },
+      {
+        "step": "compile_milestone_frontier",
+        "model": "deepseek-v4-pro",
+        "calls": 2,
+        "total_ms": 46461.3,
+        "in_tok": 1528,
+        "out_tok": 2930
+      },
+      {
+        "step": "write_draft",
+        "model": "deepseek-v4-pro",
+        "calls": 1,
+        "total_ms": 39267.3,
+        "in_tok": 6282,
+        "out_tok": 2994
+      },
+      {
+        "step": "global_reflect",
+        "model": "deepseek-v4-pro",
+        "calls": 1,
+        "total_ms": 39078.4,
+        "in_tok": 11387,
+        "out_tok": 2606
+      },
+      {
+        "step": "assess_decision_artifacts",
+        "model": "deepseek-v4-pro",
+        "calls": 1,
+        "total_ms": 8772.3,
+        "in_tok": 2098,
+        "out_tok": 508
+      }
+    ],
+    "steps": [
+      {
+        "step": "tool_loop",
+        "calls": 73,
+        "total_ms": 379699.9999999999
+      },
+      {
+        "step": "dispatch(并发)",
+        "calls": 1,
+        "total_ms": 342112.7
+      },
+      {
+        "step": "summarize",
+        "calls": 46,
+        "total_ms": 297083.99999999994
+      },
+      {
+        "step": "assess_research_milestones",
+        "calls": 3,
+        "total_ms": 244343.1
+      },
+      {
+        "step": "write_report",
+        "calls": 1,
+        "total_ms": 136160.0
+      },
+      {
+        "step": "frontier_dispatch(W1)",
+        "calls": 1,
+        "total_ms": 105864.9
+      },
+      {
+        "step": "frontier_dispatch(W2)",
+        "calls": 1,
+        "total_ms": 91010.1
+      },
+      {
+        "step": "resolve_decisions",
+        "calls": 1,
+        "total_ms": 71679.4
+      },
+      {
+        "step": "compile_milestone_frontier",
+        "calls": 2,
+        "total_ms": 46464.6
+      },
+      {
+        "step": "write_draft",
+        "calls": 1,
+        "total_ms": 39269.7
+      },
+      {
+        "step": "global_reflect",
+        "calls": 1,
+        "total_ms": 39081.5
+      },
+      {
+        "step": "assess_decision_artifacts",
+        "calls": 1,
+        "total_ms": 8774.8
+      },
+      {
+        "step": "dedup",
+        "calls": 1,
+        "total_ms": 0.5
+      }
+    ],
+    "tools": [
+      {
+        "tool": "fetch_page",
+        "calls": 77,
+        "ok": 67,
+        "accepted": 0,
+        "rejected": 0
+      },
+      {
+        "tool": "search",
+        "calls": 62,
+        "ok": 53,
+        "accepted": 0,
+        "rejected": 0
+      },
+      {
+        "tool": "save_evidence",
+        "calls": 15,
+        "ok": 15,
+        "accepted": 169,
+        "rejected": 1
+      },
+      {
+        "tool": "finish",
+        "calls": 9,
+        "ok": 9,
+        "accepted": 0,
+        "rejected": 0
+      }
+    ],
+    "wall_s": 1124.9,
+    "agg_s": 1801.5
+  }
+}

@@ -1,0 +1,46 @@
+name: deep-research-agent
+
+services:
+  web:
+    image: ${DRA_IMAGE:-dra-web:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    env_file:
+      - path: ${DRA_APP_ENV_FILE:-./.env}
+        required: true
+    # 本地沿用镜像内 uid/gid 999；生产机可映射到宿主机数据所有者，避免 chown 共享数据。
+    user: "${DRA_RUNTIME_UID:-999}:${DRA_RUNTIME_GID:-999}"
+    environment:
+      # 镜像内路径不能被宿主机 .env 中的同名值改回去。
+      DRA_DATA_DIR: /data
+      DRA_MAX_ACTIVE_RUNS: ${DRA_MAX_ACTIVE_RUNS:-1}
+      HOME: ${DRA_RUNTIME_HOME:-/home/dra}
+
+    ports:
+      # 只给同机 Caddy/本机浏览器访问，不直接暴露到公网网卡。
+      - "127.0.0.1:${DRA_WEB_PORT:-8765}:8765"
+
+    volumes:
+      - type: bind
+        source: ${DRA_HOST_DATA_DIR:-./.docker-data}
+        target: /data
+        bind:
+          # 防止拼错生产路径时由 Docker 静默创建 root 所有的空目录。
+          create_host_path: false
+
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

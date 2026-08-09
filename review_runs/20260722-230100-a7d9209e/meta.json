@@ -1,0 +1,268 @@
+{
+  "run_id": "20260722-230100-a7d9209e",
+  "query": "请帮我整理下目前全球具身智能发展的技术路线，以及各个路线的代表性公司，需要包括这些公司的技术路径，产品进度，商业化进度，融资情况，团队情况",
+  "plan": {
+    "planner_contract_version": "milestone-v1",
+    "clarified_query": "请帮我整理下目前全球具身智能发展的技术路线，以及各个路线的代表性公司，需要包括这些公司的技术路径，产品进度，商业化进度，融资情况，团队情况",
+    "milestones": [
+      {
+        "id": "m1",
+        "objective": "梳理全球具身智能发展的主要技术路线分类，并建立各路线的代表性公司候选池",
+        "kind": "research",
+        "depends_on_ids": [],
+        "completion_criteria": "证据需覆盖具身智能主流技术路线（如端到端学习、分层架构、强化学习、模仿学习等），每条路线列出至少3-5家代表性公司，包含中英文公司名称及简述其所属路线。地区覆盖中国及海外。"
+      },
+      {
+        "id": "m2",
+        "objective": "根据技术路线分类，从候选池中筛选出最具代表性的公司清单",
+        "kind": "decision",
+        "depends_on_ids": [
+          "m1"
+        ],
+        "completion_criteria": "每条技术路线选出1-2家最具代表性的公司，总数控制在5-8家以内。DecisionArtifact需给出入选公司清单、所属路线及选择理由，供下游研究使用。"
+      },
+      {
+        "id": "m3",
+        "objective": "深入研究入选代表性公司的技术路径、产品进度、商业化进度、融资情况及团队情况",
+        "kind": "research",
+        "depends_on_ids": [
+          "m2"
+        ],
+        "completion_criteria": "针对前一步选出的公司，逐一收集其技术路径、产品进度、商业化进度、融资情况、团队情况。公开未披露即标注缺口，不构成失败。"
+      }
+    ],
+    "sub_questions": [
+      {
+        "id": "f4477774",
+        "milestone_id": "m1",
+        "objective": "检索全球具身智能领域的主要技术路线分类及学术综述",
+        "search_query": "embodied AI technology roadmap survey 2025 2026 end-to-end hierarchical",
+        "boundaries": "时间范围2023-2026，关注技术架构分类"
+      },
+      {
+        "id": "d6f69dcd",
+        "milestone_id": "m1",
+        "objective": "检索端到端与分层架构技术路线的代表性公司",
+        "search_query": "embodied AI robotics companies end-to-end vs hierarchical architecture 2025 2026",
+        "boundaries": "关注公司名称及其对应的技术架构"
+      },
+      {
+        "id": "0fba8a22",
+        "milestone_id": "m1",
+        "objective": "检索强化学习与模仿学习路线的代表性公司",
+        "search_query": "humanoid robot companies reinforcement learning imitation learning 2025 2026",
+        "boundaries": "关注公司名称及其对应的学习方法"
+      },
+      {
+        "id": "c1e6ec47",
+        "milestone_id": "m1",
+        "objective": "检索中国具身智能代表性公司及其技术路线",
+        "search_query": "中国 具身智能 人形机器人 代表性公司 技术路线 2025 2026",
+        "boundaries": "聚焦中国本土公司"
+      },
+      {
+        "id": "693ccee0",
+        "milestone_id": "m1",
+        "objective": "检索海外具身智能代表性公司及其技术路线",
+        "search_query": "global embodied AI robotics leading companies 2025 2026 Figure Agility Tesla",
+        "boundaries": "聚焦海外公司"
+      }
+    ],
+    "pending_goals": [
+      {
+        "id": "m2",
+        "objective": "根据技术路线分类，从候选池中筛选出最具代表性的公司清单",
+        "dependency": "等待里程碑：m1"
+      },
+      {
+        "id": "m3",
+        "objective": "深入研究入选代表性公司的技术路径、产品进度、商业化进度、融资情况及团队情况",
+        "dependency": "等待里程碑：m2"
+      }
+    ],
+    "budget": {
+      "max_frontier_waves": 3,
+      "max_frontier_tasks_per_wave": 5,
+      "max_total_tasks": 18,
+      "estimated_min_tasks": 6,
+      "recommended_tasks": 8,
+      "budget_tight": false
+    }
+  },
+  "status": "partial",
+  "started_at": 1784732460.7961118,
+  "finished_at": 1784733636.995347,
+  "config_summary": {
+    "planner": "glm-5.2@opencode",
+    "subagent": "deepseek-v4-flash@opencode",
+    "writer": "deepseek-v4-pro@opencode",
+    "worker_mode": "loop",
+    "budget": {
+      "max_frontier_waves": 3,
+      "max_frontier_tasks_per_wave": 5,
+      "max_total_tasks": 18
+    }
+  },
+  "stats": {
+    "llm": [
+      {
+        "step": "tool_loop",
+        "model": "deepseek-v4-flash",
+        "calls": 86,
+        "total_ms": 739497.4999999997,
+        "in_tok": 930045,
+        "out_tok": 58286
+      },
+      {
+        "step": "assess_research_milestones",
+        "model": "glm-5.2",
+        "calls": 4,
+        "total_ms": 222142.8,
+        "in_tok": 44399,
+        "out_tok": 9291
+      },
+      {
+        "step": "write_report",
+        "model": "deepseek-v4-pro",
+        "calls": 1,
+        "total_ms": 105636.6,
+        "in_tok": 21396,
+        "out_tok": 7907
+      },
+      {
+        "step": "write_draft",
+        "model": "glm-5.2",
+        "calls": 1,
+        "total_ms": 34414.8,
+        "in_tok": 3311,
+        "out_tok": 2434
+      },
+      {
+        "step": "compile_milestone_frontier",
+        "model": "glm-5.2",
+        "calls": 2,
+        "total_ms": 32500.4,
+        "in_tok": 2324,
+        "out_tok": 1807
+      },
+      {
+        "step": "global_reflect",
+        "model": "glm-5.2",
+        "calls": 1,
+        "total_ms": 19139.8,
+        "in_tok": 8959,
+        "out_tok": 1279
+      },
+      {
+        "step": "resolve_decisions",
+        "model": "glm-5.2",
+        "calls": 1,
+        "total_ms": 19098.4,
+        "in_tok": 6514,
+        "out_tok": 1198
+      },
+      {
+        "step": "assess_decision_artifacts",
+        "model": "glm-5.2",
+        "calls": 1,
+        "total_ms": 16363.7,
+        "in_tok": 2538,
+        "out_tok": 499
+      }
+    ],
+    "steps": [
+      {
+        "step": "tool_loop",
+        "calls": 86,
+        "total_ms": 739544.0999999999
+      },
+      {
+        "step": "frontier_dispatch(W2)",
+        "calls": 1,
+        "total_ms": 263952.1
+      },
+      {
+        "step": "frontier_dispatch(W1)",
+        "calls": 1,
+        "total_ms": 233984.7
+      },
+      {
+        "step": "dispatch(并发)",
+        "calls": 1,
+        "total_ms": 228853.5
+      },
+      {
+        "step": "assess_research_milestones",
+        "calls": 3,
+        "total_ms": 222154.3
+      },
+      {
+        "step": "write_report",
+        "calls": 1,
+        "total_ms": 105641.6
+      },
+      {
+        "step": "write_draft",
+        "calls": 1,
+        "total_ms": 34416.6
+      },
+      {
+        "step": "compile_milestone_frontier",
+        "calls": 2,
+        "total_ms": 32503.300000000003
+      },
+      {
+        "step": "global_reflect",
+        "calls": 1,
+        "total_ms": 19142.1
+      },
+      {
+        "step": "resolve_decisions",
+        "calls": 1,
+        "total_ms": 19101.4
+      },
+      {
+        "step": "assess_decision_artifacts",
+        "calls": 1,
+        "total_ms": 16365.6
+      },
+      {
+        "step": "dedup",
+        "calls": 1,
+        "total_ms": 0.4
+      }
+    ],
+    "tools": [
+      {
+        "tool": "fetch_page",
+        "calls": 88,
+        "ok": 77,
+        "accepted": 0,
+        "rejected": 0
+      },
+      {
+        "tool": "search",
+        "calls": 75,
+        "ok": 63,
+        "accepted": 0,
+        "rejected": 0
+      },
+      {
+        "tool": "save_evidence",
+        "calls": 13,
+        "ok": 13,
+        "accepted": 115,
+        "rejected": 1
+      },
+      {
+        "tool": "finish",
+        "calls": 10,
+        "ok": 10,
+        "accepted": 0,
+        "rejected": 0
+      }
+    ],
+    "wall_s": 1176.2,
+    "agg_s": 1915.7
+  }
+}

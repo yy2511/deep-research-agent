@@ -1,0 +1,254 @@
+{
+  "run_id": "20260726-232556-9f2b8383",
+  "query": "2026 年全球人形机器人出货量有哪些不同口径的统计?主要厂商(特斯拉/Figure/宇树/智元等)各自的出货与订单进展如何?不同来源数据矛盾之处要明确指出。",
+  "plan": {
+    "clarified_query": "2026 年全球人形机器人出货量有哪些不同口径的统计?主要厂商(特斯拉/Figure/宇树/智元等)各自的出货与订单进展如何?不同来源数据矛盾之处要明确指出。",
+    "milestones": [
+      {
+        "id": "m1",
+        "objective": "收集2026年全球人形机器人出货量的不同统计口径数据，并识别出货量较大的主要厂商",
+        "kind": "research",
+        "depends_on_ids": [],
+        "completion_criteria": "至少找到5个不同来源的出货量统计（如行业报告、新闻稿），列出统计口径（如出货量单位、地区范围、时间范围等），明确指出数据矛盾之处；同时至少列出5家出货量较大的厂商名称及初步出货量信息，为后续决策提供候选列表。"
+      },
+      {
+        "id": "d1",
+        "objective": "基于m1收集的厂商出货量数据，选择排名前5的厂商作为主要厂商深入研究对象",
+        "kind": "decision",
+        "depends_on_ids": [
+          "m1"
+        ],
+        "completion_criteria": "根据m1出货量数据，选择排名前5的厂商；若m1中厂商数量不足5家，则全部选择。给出每家厂商的出货量估计及来源，并说明选择理由。"
+      },
+      {
+        "id": "m2",
+        "objective": "针对d1选出的主要厂商，逐一调查每家厂商在2026年的具体出货量数字、订单进展和产能规划",
+        "kind": "research",
+        "depends_on_ids": [
+          "d1"
+        ],
+        "completion_criteria": "针对入选的每家厂商：1) 获取2026年出货量（官方或权威媒体估计）；2) 至少找到1-2项重要订单或交付里程碑；3) 记录产能信息（如有）；4) 全部信息标注来源；5) 无法获取的信息明确标注‘未公开’；6) 比较不同来源对同一厂商报道的一致性，指出矛盾。"
+      }
+    ],
+    "sub_questions": [
+      {
+        "id": "2a0a1e38",
+        "milestone_id": "m1",
+        "objective": "搜索2026年全球人形机器人出货量的行业统计报告，获取出货量数字和统计口径",
+        "search_query": "2026 global humanoid robot shipments statistics industry report",
+        "boundaries": null
+      },
+      {
+        "id": "78887271",
+        "milestone_id": "m1",
+        "objective": "搜索中文渠道发布的2026年全球人形机器人出货量统计，包括不同机构发布的数据",
+        "search_query": "2026年 全球 人形机器人 出货量 统计",
+        "boundaries": null
+      },
+      {
+        "id": "9b0456e0",
+        "milestone_id": "m1",
+        "objective": "搜索特斯拉、Figure、宇树、智元等厂商2026年人形机器人出货量的新闻报道，获取各厂商初步出货量数字",
+        "search_query": "(Tesla Optimus OR Figure AI OR Unitree OR Agile Robots) humanoid robot shipments 2026",
+        "boundaries": null
+      },
+      {
+        "id": "49d57fbf",
+        "milestone_id": "m1",
+        "objective": "搜索Agility Robotics、Boston Dynamics、1X等其他人形机器人厂商2026年出货信息，以发现更多出货量较大的厂商",
+        "search_query": "Agility Robotics Digit 2026 shipments OR Boston Dynamics Atlas 2026 shipments OR 1X neo 2026 shipments",
+        "boundaries": null
+      },
+      {
+        "id": "15142112",
+        "milestone_id": "m1",
+        "objective": "搜索宇树、智元、傅利叶等中国厂商2026年人形机器人出货量和订单新闻",
+        "search_query": "宇树 人形机器人 出货 2026 订单",
+        "boundaries": null
+      }
+    ],
+    "budget": {
+      "max_frontier_waves": 3,
+      "max_frontier_tasks_per_wave": 5,
+      "max_total_tasks": 18,
+      "estimated_min_tasks": 6,
+      "recommended_tasks": 8,
+      "budget_tight": false
+    }
+  },
+  "status": "done",
+  "started_at": 1785079556.523915,
+  "finished_at": 1785080257.721899,
+  "config_summary": {
+    "planner": "deepseek-v4-pro@deepseek",
+    "subagent": "deepseek-v4-flash@deepseek",
+    "writer": "deepseek-v4-flash@deepseek",
+    "budget": {
+      "max_frontier_waves": 3,
+      "max_frontier_tasks_per_wave": 5,
+      "max_total_tasks": 18
+    }
+  },
+  "stats": {
+    "llm": [
+      {
+        "step": "tool_loop",
+        "model": "deepseek-v4-flash",
+        "calls": 80,
+        "total_ms": 530889.0,
+        "in_tok": 439112,
+        "out_tok": 59226
+      },
+      {
+        "step": "summarize",
+        "model": "deepseek-v4-flash",
+        "calls": 49,
+        "total_ms": 243665.40000000005,
+        "in_tok": 113328,
+        "out_tok": 25986
+      },
+      {
+        "step": "assess_research_milestones",
+        "model": "deepseek-v4-pro",
+        "calls": 3,
+        "total_ms": 181477.2,
+        "in_tok": 49290,
+        "out_tok": 10635
+      },
+      {
+        "step": "resolve_decisions",
+        "model": "deepseek-v4-pro",
+        "calls": 1,
+        "total_ms": 79118.0,
+        "in_tok": 8188,
+        "out_tok": 4692
+      },
+      {
+        "step": "write_draft",
+        "model": "deepseek-v4-pro",
+        "calls": 1,
+        "total_ms": 73663.1,
+        "in_tok": 4188,
+        "out_tok": 4691
+      },
+      {
+        "step": "write_report",
+        "model": "deepseek-v4-flash",
+        "calls": 1,
+        "total_ms": 50197.4,
+        "in_tok": 28887,
+        "out_tok": 5143
+      },
+      {
+        "step": "compile_milestone_frontier",
+        "model": "deepseek-v4-pro",
+        "calls": 2,
+        "total_ms": 43731.8,
+        "in_tok": 1659,
+        "out_tok": 3554
+      },
+      {
+        "step": "assess_decision_artifacts",
+        "model": "deepseek-v4-pro",
+        "calls": 1,
+        "total_ms": 15090.5,
+        "in_tok": 2053,
+        "out_tok": 962
+      }
+    ],
+    "steps": [
+      {
+        "step": "tool_loop",
+        "calls": 80,
+        "total_ms": 530931.4
+      },
+      {
+        "step": "summarize",
+        "calls": 49,
+        "total_ms": 243696.59999999998
+      },
+      {
+        "step": "assess_research_milestones",
+        "calls": 3,
+        "total_ms": 181487.7
+      },
+      {
+        "step": "frontier_dispatch(W1)",
+        "calls": 1,
+        "total_ms": 93947.4
+      },
+      {
+        "step": "dispatch(并发)",
+        "calls": 1,
+        "total_ms": 92021.6
+      },
+      {
+        "step": "resolve_decisions",
+        "calls": 1,
+        "total_ms": 79121.8
+      },
+      {
+        "step": "write_draft",
+        "calls": 1,
+        "total_ms": 73665.6
+      },
+      {
+        "step": "frontier_dispatch(W2)",
+        "calls": 1,
+        "total_ms": 71881.8
+      },
+      {
+        "step": "write_report",
+        "calls": 1,
+        "total_ms": 50203.2
+      },
+      {
+        "step": "compile_milestone_frontier",
+        "calls": 2,
+        "total_ms": 43738.5
+      },
+      {
+        "step": "assess_decision_artifacts",
+        "calls": 1,
+        "total_ms": 15093.5
+      },
+      {
+        "step": "dedup",
+        "calls": 1,
+        "total_ms": 0.4
+      }
+    ],
+    "tools": [
+      {
+        "tool": "fetch_page",
+        "calls": 110,
+        "ok": 98,
+        "accepted": 0,
+        "rejected": 0
+      },
+      {
+        "tool": "search",
+        "calls": 50,
+        "ok": 45,
+        "accepted": 0,
+        "rejected": 0
+      },
+      {
+        "tool": "save_evidence",
+        "calls": 15,
+        "ok": 15,
+        "accepted": 154,
+        "rejected": 0
+      },
+      {
+        "tool": "finish",
+        "calls": 14,
+        "ok": 14,
+        "accepted": 0,
+        "rejected": 0
+      }
+    ],
+    "wall_s": 701.2,
+    "agg_s": 1475.8
+  }
+}

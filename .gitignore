@@ -1,0 +1,69 @@
+# 密钥与环境变量（永不提交）
+.env
+.env.local
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# 虚拟环境
+.venv/
+venv/
+
+# 大体积原始输出
+*.log
+
+# CLI 跑出的研究报告（运行产物，可重生成，不入库；想看历史在本地翻 reports/）
+/reports/
+
+# web 工作台 run 落盘（RunStore：meta/events.jsonl/report，运行产物不入库）
+/runs/
+
+# 计划阶段尝试落盘（PlanAttemptStore：meta/events.jsonl，运行产物不入库）
+/plans/
+
+# web 前端依赖与构建产物（npm install/build 可重建，不入库）
+web/node_modules/
+web/dist/
+
+# RAG 索引产物（可重建：uv run python -m dra.rag.indexer）
+# 语料源 docs.jsonl 入库（queries/relevance 已随离线评测退役删除），向量矩阵不入库
+data/corpus/**/index/
+data/corpus/**/index-*/
+data/corpus/**/index_*/
+*.npy
+
+# 下载的 embedding 模型权重（bge-m3 ~2.3GB，可重下，不入库）
+data/models/
+
+# 系统 / 编辑器
+.DS_Store
+.vscode/
+.idea/
+
+# 本地实验草稿区（探针脚本 / 日志 / 中间 dump，随手写随手扔，不入库）
+/scratchpad/
+
+# superpowers 工具产出（brainstorm 可视化伴侣 mockup、sdd 进度台账等本地工作态，不入库）
+.superpowers/
+
+# 运行时模型配置（网页设置面板可改，本地运行态，跟 .env 一个待遇不入库）
+/runtime_config.json
+
+# Docker Compose 本机持久数据（生产由 DRA_HOST_DATA_DIR 指向服务器 shared 目录）
+/.docker-data/
+
+# Claude Code 本地个人设置（权限白名单等，因人而异不入库；launch.json 是 preview 共享配置，入库）
+.claude/settings.local.json
+
+# 下载的参考项目源码（仅供本地阅读，体积大且包含第三方 license，不入库）
+refs/
+
+# Git linked worktrees（隔离功能开发目录，不入库）
+/.worktrees/

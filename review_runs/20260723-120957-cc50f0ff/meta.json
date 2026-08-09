@@ -1,0 +1,274 @@
+{
+  "run_id": "20260723-120957-cc50f0ff",
+  "query": "请帮我整理下目前全球具身智能发展的技术路线，以及各个路线的代表性公司，需要包括这些公司的技术路径，产品进度，商业化进度，融资情况，团队情况",
+  "plan": {
+    "planner_contract_version": "milestone-v1",
+    "clarified_query": "请帮我整理下目前全球具身智能发展的技术路线，以及各个路线的代表性公司，需要包括这些公司的技术路径，产品进度，商业化进度，融资情况，团队情况",
+    "milestones": [
+      {
+        "id": "m1",
+        "objective": "研究当前全球具身智能的主要技术路线分类，包括各路线的基本定义、关键特点和典型应用场景",
+        "kind": "research",
+        "depends_on_ids": [],
+        "completion_criteria": "至少识别4-6条公认的技术路线分类（如基于AI模型架构、硬件形态、任务类型等不同维度），每条路线有清晰描述和至少一个具体例子；允许使用行业报告、研究文章等权威来源。"
+      },
+      {
+        "id": "m2",
+        "objective": "根据m1识别的各技术路线，筛选出每条路线最具代表性的1-2家公司",
+        "kind": "decision",
+        "depends_on_ids": [
+          "m1"
+        ],
+        "completion_criteria": "输出每条路线下的公司名称列表，并简要说明选择理由；总数不超过10家；提供公司官方网站或权威提及。"
+      },
+      {
+        "id": "m3",
+        "objective": "针对m2选出的全部公司，逐一收集其技术路径、产品进度、商业化进度、融资情况、团队情况",
+        "kind": "research",
+        "depends_on_ids": [
+          "m2"
+        ],
+        "completion_criteria": "每家公司至少覆盖上述5个维度；每个维度若有公开信息，提供具体事实和数据，并注明来源；若某维度信息未公开，标注为“信息未公开”；时间截止到2026年7月。"
+      }
+    ],
+    "sub_questions": [
+      {
+        "id": "acab9422",
+        "milestone_id": "m1",
+        "objective": "收集具身智能整体技术路线分类的综述或报告，涵盖主流分类维度",
+        "search_query": "embodied intelligence technology taxonomy 2025 2026",
+        "boundaries": null
+      },
+      {
+        "id": "15786743",
+        "milestone_id": "m1",
+        "objective": "从AI算法层面（如端到端学习、世界模型、强化学习）区分技术路线",
+        "search_query": "end-to-end vs model-based reinforcement learning embodied AI robotics",
+        "boundaries": null
+      },
+      {
+        "id": "7fdf422a",
+        "milestone_id": "m1",
+        "objective": "从硬件形态和任务层面（如人形机器人、移动操作、自动驾驶、工业机器人）区分技术路线",
+        "search_query": "humanoid robot mobile manipulator autonomous vehicle embodied AI comparison",
+        "boundaries": null
+      },
+      {
+        "id": "3b985eb2",
+        "milestone_id": "m1",
+        "objective": "从语言区域补充中文行业对具身智能技术路线的常见划分",
+        "search_query": "具身智能 技术路线 分类 2025 2026",
+        "boundaries": null
+      }
+    ],
+    "pending_goals": [
+      {
+        "id": "m2",
+        "objective": "根据m1识别的各技术路线，筛选出每条路线最具代表性的1-2家公司",
+        "dependency": "等待里程碑：m1"
+      },
+      {
+        "id": "m3",
+        "objective": "针对m2选出的全部公司，逐一收集其技术路径、产品进度、商业化进度、融资情况、团队情况",
+        "dependency": "等待里程碑：m2"
+      }
+    ],
+    "budget": {
+      "max_frontier_waves": 3,
+      "max_frontier_tasks_per_wave": 5,
+      "max_total_tasks": 18,
+      "estimated_min_tasks": 5,
+      "recommended_tasks": 7,
+      "budget_tight": false
+    }
+  },
+  "status": "done",
+  "started_at": 1784779797.7693691,
+  "finished_at": 1784780644.825011,
+  "config_summary": {
+    "planner": "deepseek-v4-pro@deepseek",
+    "subagent": "deepseek-v4-flash@deepseek",
+    "writer": "deepseek-v4-pro@deepseek",
+    "worker_mode": "loop",
+    "budget": {
+      "max_frontier_waves": 3,
+      "max_frontier_tasks_per_wave": 5,
+      "max_total_tasks": 18
+    }
+  },
+  "stats": {
+    "llm": [
+      {
+        "step": "summarize",
+        "model": "deepseek-v4-flash",
+        "calls": 39,
+        "total_ms": 357059.0999999999,
+        "in_tok": 123224,
+        "out_tok": 36927
+      },
+      {
+        "step": "tool_loop",
+        "model": "deepseek-v4-flash",
+        "calls": 60,
+        "total_ms": 295491.50000000006,
+        "in_tok": 518285,
+        "out_tok": 29878
+      },
+      {
+        "step": "assess_research_milestones",
+        "model": "deepseek-v4-pro",
+        "calls": 4,
+        "total_ms": 170719.3,
+        "in_tok": 42526,
+        "out_tok": 10112
+      },
+      {
+        "step": "write_report",
+        "model": "deepseek-v4-pro",
+        "calls": 1,
+        "total_ms": 161093.8,
+        "in_tok": 20051,
+        "out_tok": 10446
+      },
+      {
+        "step": "global_reflect",
+        "model": "deepseek-v4-pro",
+        "calls": 2,
+        "total_ms": 85513.9,
+        "in_tok": 16755,
+        "out_tok": 4600
+      },
+      {
+        "step": "resolve_decisions",
+        "model": "deepseek-v4-pro",
+        "calls": 1,
+        "total_ms": 59964.9,
+        "in_tok": 2556,
+        "out_tok": 4840
+      },
+      {
+        "step": "write_draft",
+        "model": "deepseek-v4-pro",
+        "calls": 1,
+        "total_ms": 52157.3,
+        "in_tok": 4343,
+        "out_tok": 2759
+      },
+      {
+        "step": "assess_decision_artifacts",
+        "model": "deepseek-v4-pro",
+        "calls": 1,
+        "total_ms": 27811.4,
+        "in_tok": 2193,
+        "out_tok": 1552
+      },
+      {
+        "step": "compile_milestone_frontier",
+        "model": "deepseek-v4-pro",
+        "calls": 1,
+        "total_ms": 19026.5,
+        "in_tok": 646,
+        "out_tok": 1281
+      }
+    ],
+    "steps": [
+      {
+        "step": "summarize",
+        "calls": 38,
+        "total_ms": 357082.0
+      },
+      {
+        "step": "tool_loop",
+        "calls": 60,
+        "total_ms": 295521.4
+      },
+      {
+        "step": "assess_research_milestones",
+        "calls": 2,
+        "total_ms": 170726.9
+      },
+      {
+        "step": "write_report",
+        "calls": 1,
+        "total_ms": 161098.2
+      },
+      {
+        "step": "frontier_dispatch(W1)",
+        "calls": 1,
+        "total_ms": 103035.6
+      },
+      {
+        "step": "dispatch(并发)",
+        "calls": 1,
+        "total_ms": 97079.4
+      },
+      {
+        "step": "global_reflect",
+        "calls": 2,
+        "total_ms": 85519.6
+      },
+      {
+        "step": "replan_dispatch",
+        "calls": 1,
+        "total_ms": 70601.2
+      },
+      {
+        "step": "resolve_decisions",
+        "calls": 1,
+        "total_ms": 59967.5
+      },
+      {
+        "step": "write_draft",
+        "calls": 1,
+        "total_ms": 52159.7
+      },
+      {
+        "step": "assess_decision_artifacts",
+        "calls": 1,
+        "total_ms": 27813.2
+      },
+      {
+        "step": "compile_milestone_frontier",
+        "calls": 1,
+        "total_ms": 19028.0
+      },
+      {
+        "step": "dedup",
+        "calls": 1,
+        "total_ms": 0.3
+      }
+    ],
+    "tools": [
+      {
+        "tool": "fetch_page",
+        "calls": 74,
+        "ok": 63,
+        "accepted": 0,
+        "rejected": 0
+      },
+      {
+        "tool": "search",
+        "calls": 37,
+        "ok": 37,
+        "accepted": 0,
+        "rejected": 0
+      },
+      {
+        "tool": "save_evidence",
+        "calls": 14,
+        "ok": 14,
+        "accepted": 127,
+        "rejected": 3
+      },
+      {
+        "tool": "finish",
+        "calls": 6,
+        "ok": 5,
+        "accepted": 0,
+        "rejected": 0
+      }
+    ],
+    "wall_s": 847.1,
+    "agg_s": 1499.6
+  }
+}

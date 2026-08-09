@@ -1,0 +1,9 @@
+# Template only: replace the username and bcrypt hash before installation.
+# Generate the hash with: caddy hash-password
+deepresearch.emberecho.de {
+	basic_auth {
+		<username> <bcrypt-hash>
+	}
+
+	reverse_proxy 127.0.0.1:8765
+}

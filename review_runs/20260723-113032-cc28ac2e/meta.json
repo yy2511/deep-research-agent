@@ -1,0 +1,185 @@
+{
+  "run_id": "20260723-113032-cc28ac2e",
+  "query": "请帮我整理下目前全球具身智能发展的技术路线，以及各个路线的代表性公司，需要包括这些公司的技术路径，产品进度，商业化进度，融资情况，团队情况",
+  "plan": {
+    "planner_contract_version": "milestone-v1",
+    "clarified_query": "请帮我整理下目前全球具身智能发展的技术路线，以及各个路线的代表性公司，需要包括这些公司的技术路径，产品进度，商业化进度，融资情况，团队情况",
+    "milestones": [
+      {
+        "id": "m1",
+        "objective": "梳理全球具身智能主要技术路线分类，并识别各路线的代表性公司候选池，涵盖技术路径关键词、公司名称、所属路线及地区",
+        "kind": "research",
+        "depends_on_ids": [],
+        "completion_criteria": "需覆盖至少3条主流技术路线（如端到端VLA大模型驱动、分层架构/模块化、模仿学习+强化学习等），每条路线列出至少2家代表性公司，总计覆盖不少于15家公司，涵盖北美、中国、欧洲等主要地区，时间边界为2024-2026年最新进展。允许公开未披露的信息标注为缺口。"
+      },
+      {
+        "id": "m2",
+        "objective": "基于m1产出的技术路线分类与候选公司池，选出每条路线最具代表性的1-2家公司作为深入研究对象，确保总数不超过8家以匹配后续研究预算",
+        "kind": "decision",
+        "depends_on_ids": [
+          "m1"
+        ],
+        "completion_criteria": "产出DecisionArtifact，包含：每条技术路线选定的1-2家代表公司名称及选择理由（基于技术代表性、产品成熟度、融资规模等维度），入选公司总数上限8家，并为下游研究提供明确的实体名称清单。"
+      },
+      {
+        "id": "m3",
+        "objective": "对m2选出的代表性公司逐一深入研究，覆盖技术路径、产品进度、商业化进度、融资情况、团队情况五个维度",
+        "kind": "research",
+        "depends_on_ids": [
+          "m2"
+        ],
+        "completion_criteria": "对每家入选公司，需覆盖五个维度：技术路径（具体算法/架构选择）、产品进度（已发布产品及里程碑）、商业化进度（客户/订单/营收）、融资情况（最新轮次/金额/投资方）、团队情况（核心成员背景/规模）。逐对象逐字段允许公开未披露即标注缺口，不构成失败。"
+      }
+    ],
+    "sub_questions": [
+      {
+        "id": "67096c7b",
+        "milestone_id": "m1",
+        "objective": "梳理具身智能主流技术路线分类框架，包括端到端VLA大模型、分层架构、模仿学习+强化学习等路线的定义与区别",
+        "search_query": "embodied AI technical approaches taxonomy 2025 2026 end-to-end VLA vs hierarchical architecture",
+        "boundaries": "聚焦技术路线分类框架本身，不深入单个公司细节"
+      },
+      {
+        "id": "2ce87ebd",
+        "milestone_id": "m1",
+        "objective": "识别北美代表性具身智能公司及其所属技术路线，包括但不限于Figure、Tesla Optimus、1X、Agility Robotics、Apptronik等",
+        "search_query": "North America embodied AI robotics companies 2025 2026 Figure Tesla 1X Agility Apptronik technology approach",
+        "boundaries": "聚焦北美地区，需标注每家公司所属技术路线"
+      },
+      {
+        "id": "f98026d5",
+        "milestone_id": "m1",
+        "objective": "识别中国代表性具身智能公司及其所属技术路线，包括但不限于宇树科技、智元机器人、银河通用、星动纪元、银河通用等",
+        "search_query": "中国具身智能机器人公司 2025 2026 宇树科技 智元机器人 银河通用 星动纪元 技术路线",
+        "boundaries": "聚焦中国地区，需标注每家公司所属技术路线"
+      },
+      {
+        "id": "a00d8106",
+        "milestone_id": "m1",
+        "objective": "识别欧洲及其他地区代表性具身智能公司及其所属技术路线",
+        "search_query": "Europe embodied AI robotics companies 2025 2026 Neura Robotics Sanctuary AI technology approach",
+        "boundaries": "聚焦欧洲及其他非北美非中国地区"
+      },
+      {
+        "id": "31d93b8f",
+        "milestone_id": "m1",
+        "objective": "梳理具身智能技术路线与公司映射的最新行业综述，补充遗漏的公司和路线",
+        "search_query": "embodied intelligence industry landscape 2026 robotics companies technology roadmap survey",
+        "boundaries": "作为补充检索，确保候选池的完整性，时间聚焦2025-2026年最新进展"
+      }
+    ],
+    "pending_goals": [
+      {
+        "id": "m2",
+        "objective": "基于m1产出的技术路线分类与候选公司池，选出每条路线最具代表性的1-2家公司作为深入研究对象，确保总数不超过8家以匹配后续研究预算",
+        "dependency": "等待里程碑：m1"
+      },
+      {
+        "id": "m3",
+        "objective": "对m2选出的代表性公司逐一深入研究，覆盖技术路径、产品进度、商业化进度、融资情况、团队情况五个维度",
+        "dependency": "等待里程碑：m2"
+      }
+    ],
+    "budget": {
+      "max_frontier_waves": 3,
+      "max_frontier_tasks_per_wave": 5,
+      "max_total_tasks": 18,
+      "estimated_min_tasks": 6,
+      "recommended_tasks": 8,
+      "budget_tight": false
+    }
+  },
+  "status": "failed",
+  "started_at": 1784777432.585143,
+  "finished_at": 1784777697.878166,
+  "config_summary": {
+    "planner": "glm-5.2@opencode",
+    "subagent": "deepseek-v4-flash@opencode",
+    "writer": "deepseek-v4-pro@opencode",
+    "worker_mode": "loop",
+    "budget": {
+      "max_frontier_waves": 3,
+      "max_frontier_tasks_per_wave": 5,
+      "max_total_tasks": 18
+    }
+  },
+  "stats": {
+    "llm": [
+      {
+        "step": "tool_loop",
+        "model": "deepseek-v4-flash",
+        "calls": 29,
+        "total_ms": 178744.09999999998,
+        "in_tok": 258224,
+        "out_tok": 15264
+      },
+      {
+        "step": "summarize",
+        "model": "deepseek-v4-flash",
+        "calls": 21,
+        "total_ms": 89640.99999999999,
+        "in_tok": 67635,
+        "out_tok": 7999
+      }
+    ],
+    "steps": [
+      {
+        "step": "assess_research_milestones",
+        "calls": 1,
+        "total_ms": 181379.3
+      },
+      {
+        "step": "tool_loop",
+        "calls": 29,
+        "total_ms": 178785.9
+      },
+      {
+        "step": "summarize",
+        "calls": 21,
+        "total_ms": 89659.99999999999
+      },
+      {
+        "step": "dispatch(并发)",
+        "calls": 1,
+        "total_ms": 83900.5
+      },
+      {
+        "step": "dedup",
+        "calls": 1,
+        "total_ms": 0.4
+      }
+    ],
+    "tools": [
+      {
+        "tool": "fetch_page",
+        "calls": 31,
+        "ok": 25,
+        "accepted": 0,
+        "rejected": 0
+      },
+      {
+        "tool": "search",
+        "calls": 27,
+        "ok": 25,
+        "accepted": 0,
+        "rejected": 0
+      },
+      {
+        "tool": "save_evidence",
+        "calls": 4,
+        "ok": 4,
+        "accepted": 43,
+        "rejected": 2
+      },
+      {
+        "tool": "finish",
+        "calls": 4,
+        "ok": 4,
+        "accepted": 0,
+        "rejected": 0
+      }
+    ],
+    "wall_s": 265.3,
+    "agg_s": 533.7
+  }
+}
