@@ -1,6 +1,6 @@
 # 项目状态
 
-最近验证：2026-08-07。
+最近验证：2026-08-10。
 
 ## 1. 概览
 
@@ -18,7 +18,7 @@
 | Research / Decision 分流 | 已实现 | research 节点由 Assessor 裁决；decision 节点由 Resolver 生成、确定性 Validator 校验，不再调用第二个 LLM Assessor。 |
 | Grounded evidence | 已实现 | Worker 通过 `doc_id + excerpt_no` 选择连续原文；服务端回填 quote、标题、URL 与日期并生成 `EvidenceCard`。 |
 | Final Research Pass | 已实现 | 正常轮次结束后至多一个并行批次；每个 eligible research 节点最多补一个 Worker。 |
-| Report Plan / Writer | 已实现 | 研究冻结后生成报告蓝图；Writer 只消费节点正式授权的证据，引用列表由代码恢复。 |
+| Report Plan / Writer | 已实现 | 研究冻结后生成报告蓝图；Writer 只消费节点正式授权的证据，引用列表由代码恢复；非数字伪引用会触发重写并在终稿兜底移除。 |
 | Cross-Worker Audit | 已实现，默认关 | 只补充跨 Worker 冲突和覆盖风险；不改变节点状态、不创建 Worker。 |
 | Web 工作台 | 已实现 | 计划确认、实时事件、取消、历史回放、Worker/证据查看、报告、统计和本机模型配置。 |
 | Checkpoint / resume | Python API 可用 | schema v11 + identity/hash 校验；CLI/Web 当前未接入恢复入口。 |
@@ -44,9 +44,9 @@
 
 ## 4. 验证结果
 
-- 后端：`uv run pytest` → **504 passed, 11 skipped, 1 warning**（2026-08-07）。
+- 后端：`uv run pytest` → **508 passed, 11 skipped, 1 warning**（2026-08-10）。
 - 前端：`npm test` → **98 passed**；`npm run build` 通过；`npm run lint` 仅保留 `LlmCalls.tsx` 的既有 Fast Refresh warning（2026-08-07）。
-- GitHub Actions：后端、前端和本地容器 smoke test 通过（2026-08-07）。
+- GitHub Actions：提交 `1b8ec2c` 的后端、前端和本地容器 smoke test 通过（2026-08-10）。
 - 容器：镜像以非 root 用户运行；首页和 `/healthz` 返回 200；生产依赖与开发工具边界通过 smoke test。
 
 默认测试不调用网络或付费模型；只有 `--run-live` 才执行真实 API 用例。
