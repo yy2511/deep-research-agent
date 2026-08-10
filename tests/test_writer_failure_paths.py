@@ -28,6 +28,7 @@ from dra.models import (
     WorkerAttempt,
 )
 from dra.orchestrator import OrchestratorConfig, run_orchestrator
+from dra.nodes import format_gate
 
 _GOOD_REPORT = Report(
     title="首稿",
@@ -138,6 +139,53 @@ def test_rewrite_error_keeps_first_report_plan(monkeypatch):
     assert state.report is _GOOD_REPORT            # 首稿保住
     assert state.status == "done"
     assert "writer_rewrite_failed" in state.warnings
+
+
+def test_invalid_letter_citation_triggers_rewrite(monkeypatch):
+    calls = {"write": 0}
+
+    def fake_write(*_args, **kwargs):
+        calls["write"] += 1
+        plan_id = kwargs["report_plan"].sections[0].id
+        suffix = "[E]" if calls["write"] == 1 else ""
+        return Report(title="T", sections=[ReportSection(
+            heading="执行摘要",
+            markdown=f"事实[1]{suffix}",
+            coverage_ids=[plan_id],
+        )])
+
+    state = _run(
+        monkeypatch,
+        write_report_mock=fake_write,
+        format_gate_mock=format_gate,
+    )
+
+    assert calls["write"] == 2
+    assert "[E]" not in state.report.sections[0].markdown
+    assert "shape_gate_failed" not in state.warnings
+
+
+def test_invalid_letter_citation_is_removed_if_rewrite_repeats_it(monkeypatch):
+    calls = {"write": 0}
+
+    def fake_write(*_args, **kwargs):
+        calls["write"] += 1
+        plan_id = kwargs["report_plan"].sections[0].id
+        return Report(title="T", sections=[ReportSection(
+            heading="执行摘要",
+            markdown="事实[1][E]",
+            coverage_ids=[plan_id],
+        )])
+
+    state = _run(
+        monkeypatch,
+        write_report_mock=fake_write,
+        format_gate_mock=format_gate,
+    )
+
+    assert calls["write"] == 2
+    assert state.report.sections[0].markdown == "事实[1]"
+    assert "shape_gate_failed" in state.warnings
 
 
 def test_cancellation_not_swallowed(monkeypatch):

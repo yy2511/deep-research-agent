@@ -30,6 +30,7 @@ from dra.nodes import (
     build_report_plan,
     build_markdown_report,
     fallback_report_plan,
+    format_gate,
     render_report_markdown,
     write_report,
 )
@@ -370,6 +371,22 @@ def test_write_system_output_example_includes_coverage_ids():
     """示例不能和正式 JSON schema 打架，否则模型会照旧例漏掉 coverage IDs。"""
     example = _WRITE_SYSTEM.split("【输出示例】", 1)[1]
     assert example.count('"coverage_ids"') == 3
+
+
+def test_format_gate_rejects_letter_citation_but_preserves_normal_bracket_terms():
+    plan = _report_plan()
+    report = Report(title="T", sections=[ReportSection(
+        heading="执行摘要",
+        markdown="事实成立[1][E]，术语 [RFC] 保持原样。",
+        coverage_ids=[plan.sections[0].id],
+    )])
+
+    missing = format_gate(report, report_plan=plan)
+
+    assert len(missing) == 1
+    assert "非法引用标记" in missing[0]
+    assert "[E]" in missing[0]
+    assert "[RFC]" not in missing[0]
 
 
 def test_write_report_injects_current_date(monkeypatch):

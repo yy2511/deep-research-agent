@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 from dra import timing
 from dra.llm import DEFAULT_MODEL, call_json, chat
+from dra.postprocess import find_invalid_citation_markers
 from dra.models import (
     Conflict,
     DecisionOutput,
@@ -2826,6 +2827,7 @@ C4. 不要自行统计或宣称“本报告基于多少项定量证据、多少�
 
 引用规则（关键）：
 5. 在正文句子里【内联】写引用标记 [n]，n 是下方证据列表的整数编号（1-based），放在被它支撑的信息之后；多个来源写 [1][3]。
+5.1 禁止使用 [E]、[A]、[source] 等字母或文字脚注；找不到对应的数字证据编号时，删除没有证据支撑的事实，不得自造占位引用。
 6. 【CLEANING_RESISTANT 铁律】事实、数字、人名、日期必须写在正文文字里，引用只是补充——把所有 [n] 删掉后，每句话仍然语义完整、读得通。绝不把关键信息只塞进引用标记。
 7. 【表格就近引用】表格单元格里的价格、比例、日期、排名和其他外部事实，必须在该单元格内容后直接写 [n]；多个来源写 [1][3]。不要把一个引用挂在表头后冒充整列来源。邻近正文负责解释表格含义，不必为了补引用机械复述一遍所有数字。
 8. 只能基于提供的证据写，禁止引入证据外的事实。没有证据支撑的话不要写。
@@ -2966,7 +2968,7 @@ def format_gate(
     *,
     report_plan: ReportPlan,
 ) -> list[str]:
-    """确定性结构门：只校验 Report Plan 蓝图要求的语义覆盖与执行摘要。"""
+    """确定性格式门：校验蓝图覆盖、执行摘要与高置信非法引用标记。"""
     if not report.sections or not any(s.markdown.strip() for s in report.sections):
         return ["缺【报告正文】：writer 未生成可用章节或正文"]
     missing: list[str] = []
@@ -2987,6 +2989,18 @@ def format_gate(
                     f"{section.heading}（{section.id}）" for section in uncovered
                 )
             )
+    invalid_markers = list(dict.fromkeys(
+        marker
+        for section in report.sections
+        for marker in find_invalid_citation_markers(section.markdown)
+    ))
+    if invalid_markers:
+        missing.append(
+            "存在【非法引用标记】："
+            + "、".join(invalid_markers)
+            + "。正文引用只能使用授权证据的整数编号 [n]；请替换为对应数字引用，"
+              "找不到对应证据时删除不受支持的事实，不得保留字母或文字脚注"
+        )
     return missing
 
 

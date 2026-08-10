@@ -20,6 +20,16 @@ def test_table_cell_citation_preserved():
     assert "table_cites_removed" not in stats
 
 
+def test_invalid_letter_citation_removed_without_touching_markdown_links_or_terms():
+    md = "事实[44][E]。保留 [RFC]、[E](https://example.com) 和 ![E](image.png)。"
+    rep, stats = postprocess_report(_rep(md), n_evidence=50)
+
+    assert rep.sections[0].markdown == (
+        "事实[44]。保留 [RFC]、[E](https://example.com) 和 ![E](image.png)。"
+    )
+    assert stats["invalid_citations_removed"] == 1
+
+
 def test_heading_demoted():
     rep, stats = postprocess_report(_rep("# 大标题\n\n## 次级\n\n### 保持"), n_evidence=1)
     md = rep.sections[0].markdown
