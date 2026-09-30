@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>交互报告验收</title>
+  <link rel="stylesheet" href="https://assets.example.test/report.css">
+  <style>
+    @import url("https://assets.example.test/imported.css");
+    html { scroll-behavior: smooth; }
+    body { font-family: sans-serif; padding: 24px; }
+    button { padding: 12px 24px; }
+    canvas, svg, img { display: block; margin: 16px 0; }
+    .accent { background-image: image-set("https://assets.example.test/chart.svg" 1x); }
+  </style>
+</head>
+<body>
+  <main role="main" data-report="interactive" aria-label="交互报告">
+    <h1>交互报告验收</h1>
+    <button onclick="document.getElementById('count').textContent=String(++window.clickCount)">更新计算</button>
+    <p>点击次数：<output id="count">0</output></p>
+    <p id="external-script">外部脚本待加载</p>
+    <p id="external-data">外部数据待加载</p>
+    <canvas id="chart" width="160" height="60" aria-label="计算图表"></canvas>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 60" width="220" height="60" role="img">
+      <rect width="220" height="60" fill="#e5f4ee"/>
+      <foreignObject width="220" height="60"><div xmlns="http://www.w3.org/1999/xhtml">内联 SVG 与排版</div></foreignObject>
+    </svg>
+    <img src="https://assets.example.test/chart.svg" alt="外部示意图" width="160" height="60" loading="lazy">
+    <a href="https://example.com/research" target="_blank" rel="noopener">来源 [c1]</a>
+  </main>
+  <script>
+    window.clickCount = 0;
+    const chart = document.getElementById('chart').getContext('2d');
+    chart.fillStyle = '#276749';
+    chart.fillRect(0, 0, 120, 60);
+    document.getElementById('chart').dataset.drawn = 'true';
+    fetch('https://assets.example.test/data.json').then(r => r.json()).then(data => {
+      document.getElementById('external-data').textContent = '外部数据：' + data.value;
+    });
+  </script>
+  <script src="https://assets.example.test/report.js"></script>
+</body>
+</html>

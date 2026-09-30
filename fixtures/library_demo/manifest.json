@@ -1,0 +1,22 @@
+[
+  {
+    "file_name": "orchid-requirements.md",
+    "sha256": "486d9b6840b43f7e093a957e76fe0628924b7113133a655f4fa1d974cbc3925d",
+    "source": "authored simulated fixture"
+  },
+  {
+    "file_name": "orchid-operations.txt",
+    "sha256": "235998d90fb4efe952f02f9631645cddf6c6dfdfd3e26cb1f8d18dd11f5f372c",
+    "source": "authored simulated fixture"
+  },
+  {
+    "file_name": "orchid-data-policy.pdf",
+    "sha256": "a1d6a49f2f18631ceadbee6666fb95a30a9faf7c918db517aaedf324ed7c8e08",
+    "source": "authored simulated fixture"
+  },
+  {
+    "file_name": "python-3.13-asyncio-task.txt",
+    "sha256": "f3cbb9d7f174f152127bb4eaea37784484f4a8c2db866d21aaf31edfce7ec7a1",
+    "source": "CPython v3.13.0 official documentation"
+  }
+]

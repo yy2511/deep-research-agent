@@ -1,0 +1,20 @@
+# Explicit opt-in: docker compose -f compose.yaml -f compose.execution.yaml up -d
+# Build the sandbox on the same daemon first. Linux: DRA_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock).
+# This grants the trusted DRA backend control of Docker; the research container never receives this socket.
+services:
+  web:
+    environment:
+      DRA_EXECUTION_ENABLED: "true"
+      DRA_EXECUTION_IMAGE: ${DRA_EXECUTION_IMAGE:-dra-sandbox:local}
+      DRA_DOCKER_HOST: unix:///var/run/docker.sock
+      # Docker 解析的是宿主路径；不能传 web 容器内的 /data。
+      # 开启执行时 DRA_HOST_DATA_DIR 必须设为宿主机绝对路径。
+      DRA_EXECUTION_HOST_WORKSPACE_ROOT: ${DRA_HOST_DATA_DIR:?Set an absolute host data directory}/runs/.workspaces
+    group_add:
+      - "${DRA_DOCKER_GID:?Set the Docker socket group ID}"
+    volumes:
+      - type: bind
+        source: ${DRA_DOCKER_SOCKET:-/var/run/docker.sock}
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false

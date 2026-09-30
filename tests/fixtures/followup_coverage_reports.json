@@ -1,0 +1,20 @@
+[
+  {
+    "run_id": "coverage-case-one",
+    "query": "请总结示例主题",
+    "requirements": [{"id": "followup", "text": "请总结示例主题", "kind": "goal"}],
+    "coverage": [{"requirement_id": "goal", "status": "answered", "note": "使用了错误的要求编号"}]
+  },
+  {
+    "run_id": "coverage-case-two",
+    "query": "请补充一个依据",
+    "requirements": [{"id": "followup", "text": "请补充一个依据", "kind": "goal"}],
+    "coverage": [{"requirement_id": "goal", "status": "answered", "note": "模型沿用了上一轮编号"}]
+  },
+  {
+    "run_id": "coverage-case-three",
+    "query": "请给简短结论",
+    "requirements": [{"id": "followup", "text": "请给简短结论", "kind": "goal"}],
+    "coverage": [{"requirement_id": "goal", "status": "answered", "note": "错误编号不得自动修复"}]
+  }
+]

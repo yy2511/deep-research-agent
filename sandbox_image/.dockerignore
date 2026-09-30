@@ -1,0 +1,7 @@
+**
+!Dockerfile
+!helper.py
+!lifetime.py
+!render.py
+!pyproject.toml
+!uv.lock

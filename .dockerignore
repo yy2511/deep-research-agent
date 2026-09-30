@@ -1,0 +1,28 @@
+# 白名单构建上下文：默认排除一切，避免密钥、运行记录、本机虚拟环境和 worktree
+# 被发送给 Docker daemon 或意外进入镜像。
+**
+
+!pyproject.toml
+!uv.lock
+
+!src/
+!src/**
+
+!web/
+!web/package.json
+!web/package-lock.json
+!web/index.html
+!web/tsconfig*.json
+!web/vite.config.ts
+!web/public/
+!web/public/**
+!web/src/
+!web/src/**
+
+# 父目录解禁后再次显式封锁本机平台产物，形成第二道防线。
+web/node_modules/
+web/dist/
+
+!fixtures/
+!fixtures/demo_run/
+!fixtures/demo_run/events.jsonl
