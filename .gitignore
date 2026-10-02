@@ -96,3 +96,7 @@ eval/drb2/runs/
 eval/**/*.out
 eval/**/*.err
 eval/**/__pycache__/
+eval/bcp/data/
+eval/bcp/runs/
+eval/bcp/.official/
+eval/bcp/evals/
