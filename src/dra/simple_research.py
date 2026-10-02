@@ -160,6 +160,13 @@ class SimpleConfig(BaseModel):
     把最后几手用在**存证与收尾**上。0 = 关闭。
     """
 
+    search_snippet_chars: int = 600
+    """search_sources 每条结果展示给模型的摘要上限（字符）。
+
+    网页检索的摘要多是服务商挑出的相关片段，600 字符够判断要不要读；评测里文档库只给
+    开头一段时可调大，与评测的官方设置对齐。
+    """
+
     storage_max_chars: int = 200_000
     """单个正文快照的存储上限。
 
@@ -212,6 +219,10 @@ class SimpleConfig(BaseModel):
     estimate_chars_per_token: float = 2.0
     """无真实用量可锚定时的字符→token 估算系数（兜底）。有上一次 API 真实用量时优先锚定；
     估算值与真实 usage 分开记账，字符数不冒充准确 token 数。"""
+    delegation_enabled: bool = True
+    """主 Agent 能否派子任务。关掉时工具清单里不给派发、消息、等待、取消四个工具，
+    系统提示补一句由主 Agent 独自完成；用于评测对比单 Agent 与主子协作。"""
+
     condense_over_chars: int | None = 40_000
     """正文超过这个长度时，首次精读给**压缩视图**而不是全文（``None`` ＝ 关闭压缩）。
 
@@ -1216,6 +1227,7 @@ TOOL_SCHEMAS: list[dict] = [
             "description": (
                 "在本次允许的网页或资料库内检索，返回来源摘要与本地文件命中范围。"
                 "摘要只是线索；要引用某来源必须先 read_source 落盘全文。"
+                "检索已带回正文的结果附 total_chars（全文字符数），可据此决定怎么读。"
             ),
             "parameters": {
                 "type": "object",
@@ -1242,6 +1254,9 @@ TOOL_SCHEMAS: list[dict] = [
                 "返回带 excerpt_no 的可引用片段。"
                 "单次回执只展示有限窗口（超出会被截断并给出 next_cursor），"
                 "用 cursor=next_cursor 或 range 继续读后文。"
+                "长文整篇读入会占用大量上下文（开启压缩时，超过阈值的长文不带 range/find/cursor "
+                "首读先给压缩视图，要多花一次模型调用）；已知要找什么时，长文优先用 find 或 range "
+                "直接定位，短文可整篇读。"
                 "首次读取会把正文落盘为可引用快照；同一 ref 或同一 URL 重复读取不会重新抓取。"
                 "取得的是**这次取回的这份内容**，不保证覆盖整站或原页面全量。"
             ),
@@ -1505,6 +1520,9 @@ LEAD_TOOL_SCHEMAS: list[dict] = [
     *(LEAD_FINISH_SCHEMA if s is FINISH_SCHEMA else s for s in TOOL_SCHEMAS),
     DELEGATE_SCHEMA, UPDATE_PLAN_SCHEMA, SEND_RESEARCH_SCHEMA, WAIT_RESEARCH_SCHEMA, CANCEL_RESEARCH_SCHEMA,
 ]
+DELEGATION_TOOL_NAMES = frozenset(s["function"]["name"] for s in (
+    DELEGATE_SCHEMA, SEND_RESEARCH_SCHEMA, WAIT_RESEARCH_SCHEMA, CANCEL_RESEARCH_SCHEMA))
+_NO_DELEGATION_NOTE = "\n【本轮不派子任务】本轮没有 delegate_research 等协作工具，检索、阅读、存证都由你自己完成；上文关于分工与子任务的说明不适用。"
 
 EXECUTION_FINISH_SCHEMA = deepcopy(LEAD_FINISH_SCHEMA)
 _file_finish = EXECUTION_FINISH_SCHEMA["function"]["parameters"]
@@ -1892,8 +1910,11 @@ class ToolContext:
                     "source_ref": snapshot.ref,
                     "title": snapshot.title,
                     "url": snapshot.url,
-                    "snippet": clean_markdown(doc.snippet or "")[:600],
+                    "snippet": clean_markdown(doc.snippet or "")[:self.config.search_snippet_chars],
                     "published_at": snapshot.published_at,
+                    # 检索已带回正文时告诉模型全文多长，读之前就能决定整篇读还是 find/range。
+                    **({"total_chars": min(len(doc.raw_content), self.config.storage_max_chars)}
+                       if not doc.document and (doc.raw_content or "").strip() else {}),
                     **({"document": {k: v for k, v in doc.document.items() if k != "matches"},
                         "matches": doc.document["matches"]} if doc.document else {}),
                 }
@@ -4033,6 +4054,8 @@ def run_lead_loop(
         # 子 Agent 共用 store.query，但检索补查必须采用自己的任务，不能跑回主线范围。
         context.effective_query = mission_text or store.query
     schemas = schemas if schemas is not None else LEAD_TOOL_SCHEMAS
+    if role == "lead" and not config.delegation_enabled:
+        schemas = [s for s in schemas if s["function"]["name"] not in DELEGATION_TOOL_NAMES]
     context.mcp.prepare(deadline=budget.deadline, cancelled=llm.cancellation_requested)
     schemas = [*schemas, *context.mcp.schemas, *skills.schemas(context.skills.bundle)]
     if role == "lead" and config.execution.enabled:
@@ -4062,7 +4085,8 @@ def run_lead_loop(
     """
     base_messages = [
         {"role": "system", "content": (system_prompt or _LEAD_SYSTEM) + time_hint(store.state["research_time"]) + _source_scope_prompt(context.config)
-         + _answer_language_prompt(store.query)},
+         + _answer_language_prompt(store.query)
+         + (_NO_DELEGATION_NOTE if role == "lead" and not config.delegation_enabled else "")},
         {
             "role": "user",
             "content": _render_mission(
