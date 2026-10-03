@@ -46,7 +46,7 @@ def test_reserve_single_card_read_is_complete_and_leaves_saving_quota(tmp_path):
         budget=budget, context=context, model_call=script)
     reread = next((r for r in context.receipts if r["tool"] == "inspect_research"), None)
     assert reread and reread["ok"]
-    assert json.loads(reread["payload"])["quote"] == QUOTE
+    assert json.loads(reread["payload"])["quotes"][0]["quote"] == QUOTE
     assert context.tool_calls == 3, "本地单卡回读不能吃掉存证额度"
     assert outcome["stop_reason"] == "finished"
     assert context.plan_items == PLAN["items"]
@@ -260,7 +260,7 @@ def test_final_plan_written_as_bare_list_is_accepted(tmp_path):
     ("请对人工智能在政府决策中的应用进行全面综述", "用中文撰写"),
     ("请比较 Naive SP、FSP、NFSP、PSRO、Pipeline PSRO 和 α-PSRO 的核心思想与优缺点", "用中文撰写"),
     ("Compare PSRO and NFSP for two-player zero-sum games", "用英文撰写"),
-    ("12345", ""),
+    ("12345", "使用用户提问的语言"),
 ])
 def test_answer_language_is_named_explicitly(query, expected):
     hint = sr._answer_language_prompt(query)

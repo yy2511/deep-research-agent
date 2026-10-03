@@ -39,9 +39,10 @@ def test_distant_and_cross_source_spans_are_one_card_one_judgment(tmp_path, monk
     row = json.loads(text)["results"][0]
     assert row["accepted"] and len(ctx.store.cards()) == len(seen) == 1
     assert len(row["quotes"]) == len(seen[0]["state"]["evidence"]) == 3
-    assert row["judgment"]["prompt_version"] == "evidence-support-v2"
+    assert ctx.store.cards()[0].judgment.prompt_version == "evidence-support-v3"
     saved = ctx.store.cards()[0].model_dump()
-    assert sr._card_payload(ctx.store.cards()[0])["quotes"] == saved["quotes"] == row["quotes"]
+    assert sr._card_payload(ctx.store.cards()[0])["quotes"] == row["quotes"]
+    assert [(q["quote"], q["location"]) for q in saved["quotes"]] == [(q["quote"], q["location"]) for q in row["quotes"]]
     for original, span in zip(quotes, saved["quotes"]):
         assert span["submitted_quote"] == original["quote"]
         assert span["quote"] == original["quote"]
@@ -90,8 +91,9 @@ def test_legacy_submission_gains_context_but_keeps_full_submitted_quote(tmp_path
     text, ok = ctx.save_evidence({"cards": [{"claim": "有 Uzi", "source_ref": refs[0], "quote": "Uzi  属于 Team Ice。"}]})
     assert ok, text
     row = json.loads(text)["results"][0]
-    assert row["quote"] == "Uzi 属于 Team Ice。"
-    assert row["quotes"][0]["submitted_quote"] == "Uzi  属于 Team Ice。"
+    assert row["quotes"][0]["quote"] == "Uzi 属于 Team Ice。"
+    # 回执不再重复模型提交的原文；保存的卡片仍保留它供界面展示。
+    assert ctx.store.cards()[0].quotes[0].submitted_quote == "Uzi  属于 Team Ice。"
     assert row["quotes"][0]["context"]
 
 
@@ -128,7 +130,7 @@ def test_import_multisource_context_verifies_every_span_and_remaps(tmp_path):
     # 占据 s1，让跨轮映射确实产生新编号。
     child.store.write_source(RetrievedDoc(title="本轮", snippet="", source_url="https://example.com/new", raw_content="不同内容"))
     imported = child.history.import_card(1, saved_id)
-    assert imported["source_ref"] != "s1"
+    assert imported["quotes"][0]["source_ref"] != "s1"
     for span in imported["quotes"]:
         local = child.store.read_source_text(span["source_ref"])
         for block in [{"text": span["quote"], "location": span["location"]}, *span["context"]]:

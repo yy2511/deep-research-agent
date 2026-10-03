@@ -392,10 +392,18 @@ def test_render_brief_context_carries_goal_route_and_assumptions():
     """给研究内核的任务背景：目标、初步路线、没确认的前提都要在，且标明可调整。"""
     brief = build(payload(assumptions=["服务规模中等"]))
     text = render_brief_context(brief)
-    assert "【确认过的目标】" in text and brief.objective in text
+    assert "【用户确认的研究目标】" in text and brief.objective in text
+    assert "不得丢掉原问题里的对象、范围和限定" in text
     assert "【初步路线】" in text and "运行中可依据证据调整" in text
     assert "1. 先看清两者的能力边界" in text
     assert "【未经用户确认的前提】" in text and "服务规模中等" in text
+
+
+def test_unconfirmed_brief_goal_is_not_labelled_as_confirmed():
+    """不需要确认时前端直接开跑，用户没看过目标，标签不能说“确认过”。"""
+    text = render_brief_context(build(payload(needs_confirmation=False)))
+    assert "【规划阶段理解的研究目标（未经用户确认）】" in text
+    assert "【用户确认的研究目标】" not in text
 
 
 def test_render_brief_context_without_assumptions_omits_that_block():

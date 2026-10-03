@@ -691,7 +691,7 @@ def test_inspect_cards_returns_full_quote_only_when_one_card_is_named(tmp_path):
     listing = next(r for r in tool_receipts if "cards" in r and isinstance(r["cards"], list))
     assert all("quote" not in card for card in listing["cards"]), "列表视图不该带上原文"
     single = next(r for r in tool_receipts if r.get("card_id") == "c1" and r.get("found"))
-    assert single["quote"] == result.cards[0].quote
+    assert single["quotes"][0]["quote"] == result.cards[0].quote
     missing = next(r for r in tool_receipts if r.get("card_id") == "c99")
     assert missing["found"] is False
     assert result.delivery_status == "delivered"

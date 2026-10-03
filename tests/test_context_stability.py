@@ -78,7 +78,7 @@ def test_new_cards_state_and_scope_only_append(tmp_path):
     ctx.plan_items = [{"id": "p1", "text": "Compare", "status": "doing"}]
     b = build(ctx, history)
     assert b[:len(a)] == a == frozen
-    assert json.loads(next(m["content"] for m in b if m.get("tool_call_id") == "save"))["results"][0]["quote"] == "Alpha fact."
+    assert json.loads(next(m["content"] for m in b if m.get("tool_call_id") == "save"))["results"][0]["quotes"][0]["quote"] == "Alpha fact."
     assert build(ctx, history) == b  # retry/no change does not grow messages
     changed_base = [{"role": "system", "content": "fixed rules"}, {"role": "user", "content": "NEW goal"}]
     history.append([{"role": "user", "content": "User: change direction"}])
@@ -105,7 +105,7 @@ def test_child_notifications_are_per_agent_once_and_full_reread_stays(tmp_path):
     assert "c1" in json.dumps(sibling_after[len(sibling_before):])
     assert build(sibling, []) == sibling_after  # parent delivery cannot consume sibling's cursor
     payload, ok = ctx.inspect_research({"view": "cards", "card_ids": ["c1"]})
-    assert ok and json.loads(payload)["cards"][0]["quote"] == "Beta condition."
+    assert ok and json.loads(payload)["cards"][0]["quotes"][0]["quote"] == "Beta condition."
     history = [read, exchange("inspect_research", payload, "inspect")]
     c = build(ctx, history)
     assert c[:len(b)] == b
@@ -124,8 +124,12 @@ def test_grouped_reads_preserve_full_cards_and_report_missing(tmp_path):
     assert [g["label"] for g in body["groups"]] == ["Exceptions", "Baseline"]
     for group, card in zip(body["groups"], reversed(ctx.store.cards())):
         row = group["cards"][0]
-        for key in ("card_id", "quote", "claim", "source_ref", "source_url", "location"):
-            assert row[key] == getattr(card, key)
+        assert row["card_id"] == card.card_id and row["claim"] == card.claim
+        quote = row["quotes"][0]
+        for key in ("quote", "source_ref", "location"):
+            assert quote[key] == getattr(card, key)
+        # 网址、深链等展示字段留在卡片数据里，不再随回读重复给模型。
+        assert "source_url" not in quote and "deep_link" not in quote
 
 
 @pytest.mark.parametrize("args", [
@@ -176,7 +180,7 @@ def test_long_batch_quotes_and_group_duplicates_are_not_truncated(tmp_path):
     assert ok
     groups = json.loads(payload)["groups"]
     assert [len(g["cards"]) for g in groups] == [1, 1]
-    assert all(g["cards"][0]["quote"] == raw for g in groups)
+    assert all(g["cards"][0]["quotes"][0]["quote"] == raw for g in groups)
 
 
 def test_reserved_batch_reads_do_not_consume_save_budget_or_allow_duplicates(tmp_path):
@@ -193,5 +197,5 @@ def test_reserved_batch_reads_do_not_consume_save_budget_or_allow_duplicates(tmp
                               budget=budget, context=ctx, model_call=script)
     reads = [r for r in ctx.receipts if r["tool"] == "inspect_research"]
     assert [r["ok"] for r in reads] == [True, False]
-    assert json.loads(reads[0]["payload"])["groups"][0]["cards"][0]["quote"] == QUOTE
+    assert json.loads(reads[0]["payload"])["groups"][0]["cards"][0]["quotes"][0]["quote"] == QUOTE
     assert ctx.tool_calls == 2 and result["stop_reason"] == "finished"

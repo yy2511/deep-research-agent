@@ -369,7 +369,10 @@ def render_brief_context(brief: ResearchBrief) -> str:
     只进**任务上下文**，不进 ``requirements``：要求清单会被核查逐条判定，把路线或假设塞进去
     会变成"必须逐条交差"的门槛。这些是给模型的背景。
     """
-    lines = [f"【确认过的目标】{brief.objective}"]
+    # needs_confirmation=false 时前端直接开跑，用户没看过这份目标，不能写成“确认过的”。
+    label = "【用户确认的研究目标】" if brief.needs_confirmation else "【规划阶段理解的研究目标（未经用户确认）】"
+    lines = [f"{label}{brief.objective}",
+             "研究目标是对原问题的澄清；两者表述不同时按目标执行，但不得丢掉原问题里的对象、范围和限定。"]
     lines.append("【初步路线】（运行中可依据证据调整，不必逐条交差）")
     lines += [f"{index}. {item.text}" for index, item in enumerate(brief.route, 1)]
     if brief.assumptions:

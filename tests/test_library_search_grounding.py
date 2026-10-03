@@ -135,8 +135,9 @@ def test_partial_save_receipt_maps_real_ids_to_full_quotes_and_retry(tmp_path):
     assert ok and data["results"][0]["claim"] == "应拒收的结论"
     for row, card in zip(data["results"][1:], ctx.store.cards()):
         assert row["card_id"] == card.card_id
-        assert row["claim"] == card.claim and row["quote"] == card.quote
-        assert row["source_ref"] == card.source_ref and row["location"] == card.location
+        span = row["quotes"][0]
+        assert row["claim"] == card.claim and span["quote"] == card.quote
+        assert span["source_ref"] == card.source_ref and span["location"] == card.location
     assert data["results"][1]["index"] == 2 and data["results"][1]["card_id"] == "c1"
     assert "序号" in data["note"]
     # 模拟历史交换含早前错误配号；当前权威卡片映射在历史之后、含尾部条件。

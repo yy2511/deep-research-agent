@@ -54,7 +54,10 @@ def test_save_judges_only_bound_quotes_and_persists_same_receipt(tmp_path, monke
     judgment = rows[0]["judgment"]
     assert judgment["relation"] == "insufficient" and judgment["status"] == "complete"
     persisted = json.loads((tmp_path / "run.json").read_text())
-    assert persisted["cards"][0]["judgment"] == judgment
+    # 模型只拿到结论三项；用量、重试等完整记录仍保存在卡片里。
+    assert set(judgment) == {"status", "relation", "error_code"}
+    assert sr._judgment_for_model(persisted["cards"][0]["judgment"]) == judgment
+    assert persisted["cards"][0]["judgment"]["attempts"]
     assert sr._card_payload(ctx.store.cards()[0])["judgment"] == judgment
     assert any(a["action"] == "evidence_judgment" for a in persisted["actions"])
     assert "unit-test-secret" not in json.dumps(persisted)

@@ -330,7 +330,8 @@ class ResearchHistory:
                 self.context.saved_card_ids.append(card.card_id)
         if imported:
             self.context.judge_saved_cards([card.card_id])
-        return self.store.card_by_id(card.card_id).model_dump()
+        from dra.simple_research import _card_payload
+        return _card_payload(self.store.card_by_id(card.card_id))
 
     def read(self,args):
         view=args.get("view","turns")

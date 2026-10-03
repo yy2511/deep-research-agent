@@ -8,8 +8,11 @@ from dra.llm import LLMPersistenceError
 from dra.models import RetrievedDoc
 
 
-def register_result(ctx, args: dict, payload: dict) -> None:
-    """只赋予本次 stdout 实际展示部分的引用权限，未展示日志仍须读取。"""
+def register_result(ctx, args: dict, payload: dict, declared: list) -> None:
+    """只赋予本次 stdout 实际展示部分的引用权限，未展示日志仍须读取。
+
+    declared 是 bash 声明且已核对存在的输入来源；标题写明输入，模型和 Jev 才知道数据从哪来。
+    """
     visible = payload['stdout']
     execution_id = payload['execution_id']
     output_truncated = payload.get('stdout_log_truncated', payload.get('log_truncated', False))
@@ -41,8 +44,9 @@ def register_result(ctx, args: dict, payload: dict) -> None:
             ],
             'files': deepcopy(list(ctx.execution_files.values())),
         }
+        names = '、'.join(dict.fromkeys(item.title or item.url or item.ref for item in declared))
         source, raw = ctx.store.write_source(RetrievedDoc(
-            title=f'计算结果 · {execution_id}', source_url='', snippet='', raw_content=raw),
+            title=f'计算结果（输入：{names}）', source_url='', snippet='', raw_content=raw),
             computation=provenance)
         if output_truncated and not source.truncated:
             source.truncated = True

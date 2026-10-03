@@ -26,7 +26,10 @@ def test_profile_reaches_real_model_call_without_mutating_defaults(tmp_path, pro
     else:
         assert ('answers 数组' if profile == 'concise_qa_v2' else '<final_answer>') in system
         assert '因果、比较与总结等分析' not in system + finish['description']
-        assert sr._EVIDENCE_USE_INSTRUCTIONS in system
+        assert (sr._WRAPUP_EVIDENCE_INSTRUCTIONS if wrapup else sr._EVIDENCE_USE_INSTRUCTIONS) in system
+    if wrapup:
+        # 收尾只剩一次交稿：不能再要求补读、重存或调用其他工具。
+        assert '重新 save_evidence' not in system and 'update_research_plan 的 scope_update' not in system
         if profile == 'concise_qa_v2':
             assert 'draft' not in finish['parameters']['properties']
             assert 'answers' in finish['parameters']['required']

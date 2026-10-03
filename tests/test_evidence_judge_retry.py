@@ -7,6 +7,7 @@ import time
 import httpx2
 import pytest
 
+from dra import simple_research as sr
 from test_evidence_judge import context, install_transport, response
 
 CARD = {"card_id": "c1", "claim": "室内使用", "quote": "产品仅在室内使用。"}
@@ -131,8 +132,8 @@ def test_retry_persists_on_original_card_and_receipt(tmp_path, monkeypatch):
     stored = json.loads((tmp_path / "run.json").read_text())
     assert ok and len(stored["cards"]) == 1 and row["card_id"] == "c1"
     assert row["judgment"]["relation"] == "supported"
-    assert row["judgment"] == stored["cards"][0]["judgment"]
-    assert len(row["judgment"]["attempts"]) == 2
+    assert row["judgment"] == sr._judgment_for_model(stored["cards"][0]["judgment"])
+    assert len(stored["cards"][0]["judgment"]["attempts"]) == 2
 
 @pytest.mark.parametrize("choice", ["A", "B", "C"])
 def test_valid_semantic_judgment_is_not_retried(monkeypatch, choice):

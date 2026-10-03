@@ -60,7 +60,7 @@ def test_scope_validation_is_atomic_and_next_request_sees_effective_requirements
             return _turn(('update_research_plan', PLAN), ('update_research_plan', second))
         assert messages[:len(seen[0])] == seen[0]  # 改向保留原有前缀
         effective = next(m['content'] for m in messages if m.get('content', '').startswith('【当前有效任务】'))
-        assert '【已确认问题】只核对齿科软件兼容事实' in effective
+        assert '【当前研究目标（已按用户中途补充调整）】只核对齿科软件兼容事实' in effective
         assert '【用户要求】\n- id=software；kind=goal' in effective
         return _turn(('finish_research', {'draft': '暂未找到可靠公开资料。'}))
     result = sr.run_simple_research('面扫价格', [sr.Requirement(id='price', text='比较价格')],

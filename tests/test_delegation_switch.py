@@ -12,8 +12,10 @@ def test_delegation_switch_removes_coordination_tools_and_says_so(tmp_path):
         return set(script.tool_schemas[0]), script.seen[0][0]["content"]
 
     tools, prompt = tools_and_prompt()
-    assert sr.DELEGATION_TOOL_NAMES <= tools and "本轮不派子任务" not in prompt
+    assert sr.DELEGATION_TOOL_NAMES <= tools and "【分工与协作】" in prompt and "也能把子问题派给子 Agent" in prompt
     tools, prompt = tools_and_prompt(delegation_enabled=False)
     assert not sr.DELEGATION_TOOL_NAMES & tools
     assert {"search_sources", "read_source", "save_evidence", "finish_research"} <= tools
-    assert "本轮不派子任务" in prompt
+    # 不开分工时不再发分工说明再让模型忽略，而是直接不放这些段落。
+    assert "【分工与协作】" not in prompt and "子 Agent" not in prompt
+    assert "send_research_message" not in prompt and "cancel_research" not in prompt

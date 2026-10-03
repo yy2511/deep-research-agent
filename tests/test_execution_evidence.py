@@ -42,6 +42,13 @@ def context(tmp_path, **config):
     return ctx
 
 
+def input_ref(ctx, text='value\n1\n'):
+    """登记一个可声明的输入来源；计算结果只有声明输入才会登记为证据来源。"""
+    source, _ = ctx.store.write_source(RetrievedDoc(title='input.csv', source_url='https://example.org/input.csv',
+                                                    snippet='', raw_content=text))
+    return source.ref
+
+
 def bash(ctx, code, **kwargs):
     command = f"{sys.executable} - <<'PY'\n{code}\nPY"
     result, ok = ctx.execute('bash', {'command': command, **kwargs})
@@ -75,6 +82,7 @@ with open('counties.csv', newline='') as f:
     assert payload['stdout'].strip() == expected
     ref = payload['source_ref']
     assert ref != source.ref and source.ref not in ctx.read_exposures
+    assert ctx.store.source(ref).title == '计算结果（输入：counties.csv）'
     assert cite(ctx, ref, expected)[1]
     assert not cite(ctx, source.ref, 'Beta,0.31,0.12')[1]
     assert not cite(ctx, ref, 'Gamma qualifies')[1]
@@ -91,7 +99,8 @@ with open('counties.csv', newline='') as f:
 def test_long_stdout_reading_grants_only_observed_result(tmp_path):
     ctx = context(tmp_path)
     ctx.execution.preview = 20
-    payload, ok = bash(ctx, "print('first row = 1'); print('.' * 1500); print('second row = 987654321')")
+    payload, ok = bash(ctx, "print('first row = 1'); print('.' * 1500); print('second row = 987654321')",
+                       source_refs=[input_ref(ctx)])
     assert ok and payload['has_more']
     ref = payload['source_ref']
     assert cite(ctx, ref, 'first row = 1')[1]
@@ -104,7 +113,7 @@ def test_long_stdout_reading_grants_only_observed_result(tmp_path):
 def test_utf8_preview_boundary_and_library_computation(tmp_path):
     ctx = context(tmp_path, source_mode='library')
     ctx.execution.preview = 5  # 截在第二个汉字内部。
-    payload, ok = bash(ctx, "print('总数=3')")
+    payload, ok = bash(ctx, "print('总数=3')", source_refs=[input_ref(ctx)])
     assert ok and payload['shown_range'] == 'chars=0-1'
     ref = payload['source_ref']
     assert not cite(ctx, ref, '总数=3')[1]
@@ -114,11 +123,28 @@ def test_utf8_preview_boundary_and_library_computation(tmp_path):
 
 def test_failed_execution_and_empty_stdout_do_not_create_evidence(tmp_path):
     ctx = context(tmp_path)
-    payload, ok = bash(ctx, "print('partial'); raise ValueError('bad input')")
+    ref = input_ref(ctx)
+    payload, ok = bash(ctx, "print('partial'); raise ValueError('bad input')", source_refs=[ref])
     assert not ok and 'source_ref' not in payload
-    payload, ok = bash(ctx, 'pass')
+    payload, ok = bash(ctx, 'pass', source_refs=[ref])
     assert ok and 'source_ref' not in payload
+    assert [s['ref'] for s in ctx.store.state['sources']] == [ref]
+
+
+def test_output_without_declared_inputs_is_work_only(tmp_path):
+    """ls、调试打印等不声明输入的输出不登记为来源，也不能存证。"""
+    ctx = context(tmp_path)
+    payload, ok = bash(ctx, "print('debug 42')")
+    assert ok and 'source_ref' not in payload and '不能存证' in payload['note']
     assert ctx.store.state['sources'] == []
+
+
+def test_unknown_declared_input_is_rejected_before_running(tmp_path):
+    ctx = context(tmp_path)
+    marker = tmp_path / 'ran'
+    payload, ok = bash(ctx, f"open({str(marker)!r}, 'w').write('x')", source_refs=['s404'])
+    assert not ok and payload['error_code'] == 'unknown_source' and 's404' in payload['message']
+    assert not marker.exists() and ctx.store.state['sources'] == []
 
 
 def test_history_preserves_distinct_execution_and_script_record(tmp_path):
@@ -127,8 +153,9 @@ def test_history_preserves_distinct_execution_and_script_record(tmp_path):
     ctx.execution = LocalSession(store)
     script_args = {'path': '/workspace/work/a.py', 'content': 'print(60)'}
     ctx.receipts.append({'tool': 'write_file', 'args': script_args, 'ok': True, 'payload': '{}'})
-    first, _ = bash(ctx, 'print(60)')
-    second, _ = bash(ctx, 'print(sum([10,20,30]))')
+    ref = store.state['sources'][0]['ref']
+    first, _ = bash(ctx, 'print(60)', source_refs=[ref])
+    second, _ = bash(ctx, 'print(sum([10,20,30]))', source_refs=[ref])
     assert cite(ctx, first['source_ref'], '60')[1]
     script_args['content'] = 'print(999)'
     child, _ = child_context(ws, parent)
@@ -146,11 +173,12 @@ def test_history_preserves_distinct_execution_and_script_record(tmp_path):
 def test_result_persistence_failure_does_not_become_retryable_tool_error(tmp_path, monkeypatch):
     from dra.llm import LLMPersistenceError
     ctx = context(tmp_path)
+    ref = input_ref(ctx)
     def fail(*a, **kw):
         raise OSError('disk full')
     monkeypatch.setattr(ctx.store, 'write_source', fail)
     with pytest.raises(LLMPersistenceError, match='计算结果'):
-        bash(ctx, 'print(1)')
+        bash(ctx, 'print(1)', source_refs=[ref])
 
 
 @pytest.mark.parametrize('stderr_first', [False, True])

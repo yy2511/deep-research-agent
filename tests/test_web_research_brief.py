@@ -293,7 +293,7 @@ class TestResearchWithBrief:
             _wait_done(client, run_id)
 
         context = seen["brief_context"]
-        assert "【确认过的目标】" in context and BRIEF["objective"] in context
+        assert "【用户确认的研究目标】" in context and BRIEF["objective"] in context
         assert "【初步路线】" in context and "先看清两者的能力边界" in context
         assert "【未经用户确认的前提】" in context and "假设服务规模中等" in context
 
