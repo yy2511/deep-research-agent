@@ -182,8 +182,23 @@ class ResearchHistory:
             original = p.read_bytes()
             if _hash(original) != source.document.get("original_sha256") or _hash(data) != source.document.get("text_sha256"):
                 raise HistoryError("历史资料原件或文本版本校验失败")
+        elif source.computation:
+            if self.context.config.source_mode == "library":
+                computation = source.computation
+                if (computation.get("source_mode") != "library" or
+                        not set(computation.get("library_version_ids", [])).issubset(
+                            self.context.config.library_selection.get("version_ids", []))):
+                    raise HistoryError("历史计算的输入资料不在本轮固定版本范围内")
         elif self.context.config.source_mode == "library":
             raise HistoryError("本轮仅资料模式不允许导入网页")
+        elif source.download:
+            p = directory / "sources" / (ref + ".original")
+            if not p.exists() or p.resolve().parent != (directory / "sources").resolve():
+                raise HistoryError("历史下载原件缺失")
+            original = p.read_bytes()
+            if (_hash(original) != source.download.get("original_sha256")
+                    or len(original) != source.download.get("size")):
+                raise HistoryError("历史下载原件校验失败")
         return source, raw, original
 
     def import_source(self, turn, ref):
@@ -210,6 +225,12 @@ class ResearchHistory:
                     return d and d.get("version_id")==source.document["version_id"] and d.get("original_sha256")==source.document["original_sha256"]
                 if source.mcp or s.get("mcp"):
                     return s.get("mcp") == source.mcp
+                if source.computation or s.get("computation"):
+                    return s.get("computation") == source.computation
+                if source.download or s.get("download"):
+                    return (not d and normalize_url(s["url"]) == normalize_url(source.url)
+                            and (s.get("download") or {}).get("original_sha256") ==
+                                (source.download or {}).get("original_sha256"))
                 return not d and normalize_url(s["url"])==normalize_url(source.url)
             existing = next((s for s in self.store.state["sources"] if same(s)),None)
             if existing:

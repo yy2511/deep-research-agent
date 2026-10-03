@@ -3,13 +3,14 @@
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from dra.models import (
     RetrievedDoc,
     normalize_url,
 )
 from dra.tools import ddg_search, exa_search, web_search
+from dra.search_observation import SearchCall
 
 
 class SubAgentConfig(BaseModel):
@@ -25,6 +26,8 @@ class SubAgentConfig(BaseModel):
     reasoning: bool = False
     # 非 None 时透传 reasoning_effort，并要求 reasoning=True；provider 可能严格校验取值。
     effort: str | None = None
+    # 研究循环的采样温度；None＝按 llm 的默认（开思考 0.6、不开 0.3）。评测对齐服务商默认时显式给值。
+    temperature: float | None = Field(default=None, ge=0, le=2)
     # 双源并行每源各取的 top_k。
     search_top_k_per_source: int = 4
     # 墙钟熔断（协作式 deadline）：单个子代理总时长预算，超时带着已抽证据正常返回
@@ -61,7 +64,8 @@ class SubAgentConfig(BaseModel):
 
 
 def _retrieve(
-    query: str, config: SubAgentConfig, *, verbose: bool = False, exclude_domains: list[str] | None = None
+    query: str, config: SubAgentConfig, *, verbose: bool = False,
+    exclude_domains: list[str] | None = None, on_provider_event=None,
 ) -> list[RetrievedDoc]:
     """Tavily + Exa 双源 Web 检索，合并后按 URL 与片段精确去重。
 
@@ -70,7 +74,7 @@ def _retrieve(
     合并后覆盖面接近翻倍（详见 docs/RETRIEVAL_SOURCES_DECISION.md）。
 
     错误语义:
-    - 部分源成功部分源失败 → 用成功的,记 verbose print
+    - 部分源成功部分源失败 → 用成功的，逐源诊断交给 on_provider_event；verbose 可另打印
     - 所有源都失败 → 抛 RuntimeError(对齐 web_search 单源契约,避免子代理空跑烧 LLM 钱)
     - 所有源返空列表(没失败也没结果) → 返 [],不抛(Tavily/Exa 偶发 0 results 是正常)
 
@@ -84,14 +88,17 @@ def _retrieve(
     def _run_one(name: str, fn, top_k: int):
         """单源执行:成功返 (name, docs),失败返 (name, Exception)。"""
         t0 = time.monotonic()
-        try:
-            extra = {"exclude_domains": exclude_domains} if exclude_domains else {}
-            result = fn(query, top_k=top_k, **extra)
-            dt = time.monotonic() - t0
-            return name, result, dt, None
-        except Exception as e:  # 各源独立隔离,不阻塞他源
-            dt = time.monotonic() - t0
-            return name, None, dt, e
+        with SearchCall(on_provider_event, name, query, top_k).scope() as trace:
+            try:
+                extra = {"exclude_domains": exclude_domains} if exclude_domains and name != "ddg" else {}
+                result = fn(query, top_k=top_k, **extra)
+                dt = time.monotonic() - t0
+                trace.finish(result_count=len(result))
+                return name, result, dt, None
+            except Exception as e:  # 各源独立隔离,不阻塞他源
+                dt = time.monotonic() - t0
+                trace.finish(error=e)
+                return name, None, dt, e
 
     docs: list[RetrievedDoc] = []
     errors: dict[str, Exception] = {}
@@ -113,12 +120,13 @@ def _retrieve(
         from dra.llm import cancellation_requested
 
         if config.enable_search_fallback and not cancellation_requested():
-            try:
-                docs = ddg_search(query, top_k=config.search_top_k)
+            _, fallback_docs, _, e = _run_one("ddg", ddg_search, config.search_top_k)
+            if e is not None:
+                errors["ddg"] = e
+            else:
+                docs = fallback_docs
                 if verbose:
                     print(f"  [检索] ⚠️ 双源全挂 → DDG 兜底 → {len(docs)} 篇（snippet-only 降档）")
-            except Exception as e:
-                errors["ddg"] = e
         if not docs:
             raise RuntimeError(
                 "all sources failed: " +

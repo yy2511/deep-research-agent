@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { initialView, reduce } from './reducer';
-import { ConversationWorkspace, ProcessList, UsageOverview } from './components/ConversationWorkspace';
+import { ConversationWorkspace, FailedToolCalls, ProcessList, UsageOverview } from './components/ConversationWorkspace';
 import { processRows } from './conversationModel';
 
 it('正式答案使用独立正文，不把下载报告封装标题与状态段再次显示', () => {
@@ -24,6 +24,40 @@ it('结束过程可完整收起，用户补充和失败提示仍在外面', () =
   expect(html).toContain('改为只查官方资料');
   expect(html).toContain('1 次工具调用未成功');
   expect(html).not.toContain('大段工具参数');
+});
+
+it('每次失败都有独立入口，包含子 Agent；重放不重复计数，运行中不算失败', () => {
+  const first={type:'subagent_tool_call',mode:'simple',phase:'done',status:'failed',tool:'read_source',call_id:'reused',turn:6,call_no:13,ok:false,result_summary:'没有找到指定片段'};
+  let view=reduce(initialView(),first,1000);
+  view=reduce(view,first,1000);
+  view=reduce(view,{...first,turn:10,call_no:18,tool:'bash',result_summary:JSON.stringify({ok:false,stderr:'Traceback\nIndexError: list index out of range\n'})},2000);
+  view=reduce(view,{...first,call_id:'child',delegation_id:'sub1',turn:2,call_no:3,result_summary:'子任务读取超时',status:'timeout'},2500);
+  view=reduce(view,{...first,call_id:'working',phase:'running',status:'running'},3000);
+  const html=renderToStaticMarkup(<FailedToolCalls view={view} expanded={{}} toggle={()=>{}}/>);
+  expect(html).toContain('3 次工具调用未成功');
+  expect(html.match(/aria-expanded="false"/g)).toHaveLength(3);
+  expect(html).toContain('主 Agent · 第 6 轮 · 工具 #13');
+  expect(html).toContain('主 Agent · 第 10 轮 · 工具 #18');
+  expect(html).toContain('子 Agent sub1 · 第 2 轮 · 工具 #3');
+  expect(html).toContain('IndexError: list index out of range');
+  expect(html).toContain('子任务读取超时');
+  expect(html).not.toContain('查看最近一次');
+  expect(html.indexOf('没有找到指定片段')).toBeLessThan(html.indexOf('IndexError'));
+});
+
+it('关闭运行记录视图后，较早和较晚的失败仍能各自展开输入输出', () => {
+  let view=initialView();
+  for(const [i,id] of ['earlier','later'].entries())view=reduce(view,{type:'subagent_tool_call',mode:'simple',phase:'done',status:'failed',tool:'bash',call_id:id,turn:i+1,call_no:i+1,ok:false,args_summary:`input-${id}`,result_summary:`error-${id}`},1000+i);
+  const entries=Object.entries(view.simpleTools!);
+  const expanded=Object.fromEntries(entries.map(([key])=>[`failure:${key}`,true]));
+  const html=renderToStaticMarkup(<FailedToolCalls view={view} expanded={expanded} toggle={()=>{}}/>);
+  for(const id of ['earlier','later']){
+    expect(html).toContain(`input-${id}`);
+    expect(html).toContain(`error-${id}`);
+    expect(html).toContain(`<code>${id}</code>`);
+  }
+  expect(html.match(/aria-expanded="true"/g)).toHaveLength(2);
+  expect(html).not.toContain('在运行记录中查看');
 });
 
 it('思考与公开说明分开呈现，中断的思考保留且明确标识', () => {

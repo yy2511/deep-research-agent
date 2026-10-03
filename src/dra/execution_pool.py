@@ -29,7 +29,7 @@ class WarmContainer:
 
 def _policy(session):
     config=session.config
-    return (config.image,config.memory_mb,config.pids,config.docker_host,
+    return (config.image,config.memory_mb,config.pids,config.docker_host,config.network_mode,
             config.host_workspace_root,session.workspace.worker)
 
 

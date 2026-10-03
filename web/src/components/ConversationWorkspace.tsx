@@ -11,6 +11,7 @@ import {toolCallLabel,STOP_LABEL,COVERAGE_LABEL} from '../displayLabels';
 import {ResearchComposer} from './ResearchComposer';
 import {DocumentLink} from './DocumentLink';
 import {McpSourceDetails} from './McpSourceDetails';
+import {ComputationSourceDetails} from './ComputationSourceDetails';
 import {EvidenceJudgment} from './EvidenceJudgment';
 import {cardQuotes} from '../evidenceQuotes';
 import {ArtifactFiles} from './ArtifactFiles';
@@ -25,7 +26,7 @@ interface Navigation {tab:Tab;card:string|null;agent:string|null;source:boolean;
 interface SavedUI {nav:Navigation;expanded:Record<string,boolean>;scroll:Record<string,number>;}
 const saved=new Map<string,SavedUI>();
 const RunIdentity=createContext<string|null>(null);
-interface EventDetail {input?:string;output?:string;tools?:unknown[];arguments_raw?:string;result_full?:string;request_messages?:Array<{role:string;[key:string]:unknown}>;request_tools?:unknown[];}
+interface EventDetail {input?:string;output?:string;tools?:unknown[];arguments_raw?:string;result_full?:string;io_complete?:boolean;request_messages?:Array<{role:string;[key:string]:unknown}>;request_tools?:unknown[];}
 function useEventDetail(seq?:number) {
  const runId=useContext(RunIdentity),key=runId&&seq!==undefined?`${runId}/${seq}`:null;
  const [state,setState]=useState<{key:string;data?:EventDetail;error?:string}|null>(null);
@@ -39,7 +40,39 @@ function ToolIO({call}:{call:ToolCall}) {
  const detail=useEventDetail(call.detailSeq);
  if(detail.loading)return <p className='cw-muted'>正在读取调用详情…</p>;
  if(detail.error)return <p className='cw-warning'>{detail.error}</p>;
- return <><strong className='cw-io-label'>输入{call.ioComplete?'':'（摘要）'}</strong><Payload value={detail.data?.arguments_raw??call.argsFull??call.args}/><strong className='cw-io-label'>输出{call.ioComplete?'':'（摘要）'}</strong><Payload value={detail.data?.result_full??call.resultFull??call.result}/></>;
+ const complete=detail.data?.io_complete??call.ioComplete;
+ return <><strong className='cw-io-label'>输入{complete?'':'（摘要）'}</strong><Payload value={detail.data?.arguments_raw??call.argsFull??call.args}/><strong className='cw-io-label'>输出{complete?'':'（摘要）'}</strong><Payload value={detail.data?.result_full??call.resultFull??call.result}/></>;
+}
+function failureSummary(call:ToolCall):string {
+ const raw=call.resultFull??call.result;
+ try {
+  const result=JSON.parse(raw);
+  const detail=result.stderr||result.reason||result.error?.message||result.error||result.error_code;
+  if(typeof detail==='string')return detail.trim().split('\n').filter(Boolean).at(-1)??toolStatus(call).label;
+ } catch { /* 文本回执直接展示；完整回执在展开后查看。 */ }
+ return raw||toolStatus(call).label;
+}
+
+export function FailedToolCalls({view,expanded,toggle,onCall}:{view:RunView;expanded:Record<string,boolean>;toggle:(id:string,open:boolean)=>void;onCall?:(key:string)=>void}) {
+ const failed=Object.entries(view.simpleTools??{}).filter(([,call])=>call.phase==='done'&&!call.ok)
+  .sort(([,a],[,b])=>a.atMs-b.atMs);
+ if(!failed.length)return null;
+ return <section className='cw-tool-failures' aria-label='未成功的工具调用'>
+  <div className='cw-failure-heading'><TriangleAlert size={18}/><strong>{failed.length} 次工具调用未成功</strong></div>
+  <p className='cw-muted'>每次调用都保留在下面，点击可查看输入和错误详情。</p>
+  <div className='cw-failure-list'>{failed.map(([key,call])=>{
+   const status=toolStatus(call),reason=failureSummary(call).replace(/\s+/g,' ').slice(0,240);
+   const identity=`${call.delegationId?`子 Agent ${call.delegationId}`:'主 Agent'}${call.turn!==undefined?` · 第 ${call.turn} 轮`:''}${call.callNo?` · 工具 #${call.callNo}`:''}`;
+   return <Fold key={key} id={`failure:${key}`} expanded={expanded} toggle={toggle} className='cw-failure-entry'
+    label={<><span className='cw-failure-label'><span><strong>{toolCallLabel(call)}</strong><small>{identity}</small></span><span className='cw-failure-reason'>{reason}</span></span><span className={`cw-status ${status.tone}`}>{status.label}</span></>}>
+     <p className='cw-muted'>{identity} · <code>{call.tool}</code></p>
+     {call.callId&&<p className='cw-muted'>调用 ID：<code>{call.callId}</code></p>}
+     <ToolIO call={call}/>
+     {call.tool==='bash'&&call.display&&<ExecutionDetails display={call.display}/>}
+     {onCall&&<div className='cw-detail-actions'><button className='cw-link' onClick={()=>onCall(`tool:${key}`)}>在运行记录中查看 <ArrowUpRight size={13}/></button></div>}
+    </Fold>;
+  })}</div>
+ </section>;
 }
 const blank=():SavedUI=>({nav:{tab:'conversation',card:null,agent:null,source:false,call:null,recordTab:'概览',scope:'all'},expanded:{},scroll:{}});
 const fmt=(v:unknown)=>typeof v==='string'?v:JSON.stringify(v,null,2);
@@ -120,42 +153,46 @@ export function ProcessList({rows,view,expanded,toggle,onCall,onAgent}:{rows:Pro
 }
 
 function SourceText({runId,card,wide=false}:{runId:string;card:EvidenceQuote;wide?:boolean}) {
+ const contentName=card.source_kind==='computation'?'计算输出':'原文';
  const [text,setText]=useState<string|null>(null),[error,setError]=useState('');
  const mark=useRef<HTMLElement>(null);
  useEffect(()=>{let alive=true;setText(null);setError('');const abort=new AbortController();
-  fetch(`/api/runs/${runId}/sources/${card.source_ref}`,{signal:abort.signal}).then(async res=>{if(!res.ok)throw new Error('保存的原文不可用，或校验没有通过');return res.text()}).then(t=>{if(alive)setText(t)}).catch(e=>{if(alive)setError(e.message)});
+  fetch(`/api/runs/${runId}/sources/${card.source_ref}`,{signal:abort.signal}).then(async res=>{if(!res.ok)throw new Error(`保存的${contentName}不可用，或校验没有通过`);return res.text()}).then(t=>{if(alive)setText(t)}).catch(e=>{if(alive)setError(e.message)});
   return ()=>{alive=false;abort.abort()};
- },[runId,card.source_ref]);
+ },[runId,card.source_ref,contentName]);
  useEffect(()=>{if(wide&&text!==null)mark.current?.scrollIntoView({block:'center'})},[text,wide]);
  if(error)return <p role='alert' className='cw-warning'>{error}</p>;
- if(text===null)return <p className='cw-empty'>正在读取保存的原文…</p>;
+ if(text===null)return <p className='cw-empty'>正在读取保存的{contentName}…</p>;
  const chars=Array.from(text),match=/^chars=(\d+)-(\d+)$/.exec(card.location??'');
  const a=Number(match?.[1]),b=Number(match?.[2]);
  const valid=!!match&&a>=0&&b>a&&b<=chars.length&&chars.slice(a,b).join('')===card.quote;
- if(!valid)return <p className='cw-warning'>引文和保存的原文对不上，没法标出位置。<a href={`/api/runs/${runId}/sources/${card.source_ref}`} target='_blank' rel='noreferrer'>查看保存的原文</a></p>;
+ if(!valid)return <p className='cw-warning'>引文和保存的{contentName}对不上，没法标出位置。<a href={`/api/runs/${runId}/sources/${card.source_ref}`} target='_blank' rel='noreferrer'>查看保存的{contentName}</a></p>;
  const start=wide?0:Math.max(0,a-400),end=wide?chars.length:Math.min(chars.length,b+400);
- return <><p className='cw-found'><Check size={14}/>在保存的原文中找到了这段话（找到原话不等于事实已核实）</p><div className='cw-source-text'>{start>0&&'…'}{chars.slice(start,a).join('')}<mark ref={mark}>{chars.slice(a,b).join('')}</mark>{chars.slice(b,end).join('')}{end<chars.length&&'…'}</div></>;
+ return <><p className='cw-found'><Check size={14}/>在保存的{contentName}中找到了这段话（找到原话不等于事实已核实）</p><div className='cw-source-text'>{start>0&&'…'}{chars.slice(start,a).join('')}<mark ref={mark}>{chars.slice(a,b).join('')}</mark>{chars.slice(b,end).join('')}{end<chars.length&&'…'}</div></>;
 }
 
 function QuoteDetail({quote,source,runId,index,total,onSource}:{quote:EvidenceQuote;source?:SimpleSource;runId:string;index:number;total:number;onSource:()=>void}) {
  const [expanded,setExpanded]=useState(false);
  const url=quote.deep_link||quote.source_url||source?.url;
+ const contentName=source?.computation||quote.source_kind==='computation'?'计算输出':'原文';
  return <section className='cw-quote-section' aria-label={`依据 ${index+1}`}>
   <div className='cw-source-row'>
    <span className='cw-source-badge'>{(hostOf(source?.url??quote.source_url)||source?.document?.file_name||'资料').slice(0,2).toUpperCase()}</span>
    <div><p className='cw-source-title'>{source?.title??quote.source_title??'没有记录来源标题'}</p>
     <small className='cw-muted'>{source?.document?`我的资料 · ${source.document.file_name}`:hostOf(source?.url??quote.source_url)||'来源'}{quote.published_at??source?.published_at?` · 发布于 ${quote.published_at??source?.published_at}`:''}</small></div>
   </div>
-  <label className='cw-label'>{total>1?`依据 ${index+1} · 原文`:'原文'}</label><blockquote>{quote.quote}</blockquote>
+  <label className='cw-label'>{total>1?`依据 ${index+1} · `:''}{contentName}</label><blockquote>{quote.quote}</blockquote>
   {quote.submitted_quote&&quote.submitted_quote!==quote.quote&&<details className='cw-judge-context'><summary>查看模型提交的摘句</summary><p className='cw-muted'>匹配时允许空白差异，上面保留的是原文里的原话。</p><pre>{quote.submitted_quote}</pre></details>}
-  {!!quote.context?.length&&<details className='cw-judge-context'><summary>判断时参考的上下文 · {quote.context.length} 处</summary><p className='cw-muted'>从同一份原文里提取，按原文位置排列；各段之间可能有省略。</p>{quote.context.map((c,i)=><div key={i}><small className='cw-muted'>{c.kind==='structure'?'章节 / 表头':'附近原文'} · {c.location}</small><pre>{c.text}</pre></div>)}</details>}
+  {!!quote.context?.length&&<details className='cw-judge-context'><summary>判断时参考的上下文 · {quote.context.length} 处</summary><p className='cw-muted'>从同一份{contentName}里提取，按位置排列；各段之间可能有省略。</p>{quote.context.map((c,i)=><div key={i}><small className='cw-muted'>{c.kind==='structure'?'章节 / 表头':`附近${contentName}`} · {c.location}</small><pre>{c.text}</pre></div>)}</details>}
   {source?.document&&<p className='cw-muted'>使用的是固定版本 <code title={source.document.version_id}>{source.document.version_id.slice(0,12)}</code>，之后更新资料库不会改动它。</p>}
   {source?.mcp&&<McpSourceDetails source={source} runId={runId}/>}
+  {source?.computation&&<ComputationSourceDetails source={source}/>}
   {source?.truncated&&<p className='cw-warning'>来源太长，只保存了前面一部分。</p>}
   <div className='cw-detail-actions'>
    <button onClick={()=>setExpanded(!expanded)}>{expanded?'收起上下文':'看前后文'}</button>
-   <button onClick={onSource}><BookOpen size={14}/>读保存的全文</button>
+   <button onClick={onSource}><BookOpen size={14}/>{source?.computation?'读保存的计算输出':'读保存的全文'}</button>
    {source?.document?<DocumentLink runId={runId} source={source} location={quote.location}/>:!source?.mcp&&url&&<a className='cw-link' href={url} target='_blank' rel='noreferrer'>打开原网页 <ArrowUpRight size={13}/></a>}
+   {source?.download&&<DocumentLink runId={runId} source={source}/>}
   </div>
   {expanded&&<SourceText runId={runId} card={quote}/>}
   <p className='cw-muted cw-fetched'>获取于 {source?.fetched_at?new Date(source.fetched_at*1000).toLocaleString():'未记录'}{source?.revalidated_at?` · 本轮重新获取 ${new Date(source.revalidated_at*1000).toLocaleString()}`:''}</p>
@@ -232,7 +269,7 @@ function RunRecords({view,nav,navigate}:{view:RunView;nav:Navigation;navigate:(p
   <div className='cw-call-detail'>
    {selected&&<><h2>{selected.name}</h2><div className='cw-subtabs'>{tabs.map(tab=><button key={tab} aria-pressed={nav.recordTab===tab} onClick={()=>navigate({recordTab:tab})}>{tab}</button>)}</div>
    {requests.length>1&&<label className='cw-call-filter'>HTTP 尝试 <select value={attempt?.request_id} onChange={e=>setAttemptId(e.target.value)}>{requests.map(r=><option key={r.request_id} value={r.request_id}>第 {r.attempt} 次 · {r.outcome}</option>)}</select></label>}
-   {(selected.type==='tool'?!selected.tool.ioComplete:!attempt?.io_complete)&&<p className='cw-muted'>没有保存完整输入输出，下面可能是截断后的摘要。</p>}</>}{body}</div></div></section>;
+   {(selected.type==='tool'?needsIO&&!callDetail.loading&&!(callDetail.data?.io_complete??selected.tool.ioComplete):!attempt?.io_complete)&&<p className='cw-muted'>没有保存完整输入输出，下面可能是截断后的摘要。</p>}</>}{body}</div></div></section>;
 }
 
 const PLAN_ICON:Record<PlanItemView['status'],ReactNode>={done:<Check size={15}/>,doing:<span className='plan-dot'/>,todo:<Circle size={11}/>,dropped:<Minus size={14}/>};
@@ -305,7 +342,6 @@ export function ConversationWorkspace({view:original,runId,canSend=false,onSend,
  const cancelled=view.simple?.stopReason==='cancelled';
  const noDeliverable=cancelled||view.simple?.delivery==='failed';
  const answer=!view.simple?.draftRejected?(view.simple?.draft||(noDeliverable?'':view.reportMd)):'';
- const failedTools=Object.values(view.simpleTools??{}).filter(t=>!t.delegationId&&t.phase==='done'&&t.ok===false);
  const pane=nav.tab==='conversation'&&(card||agent)&&!nav.source;
  const activity=activityState(view);
  const outcome=runOutcome(view);
@@ -348,7 +384,7 @@ export function ConversationWorkspace({view:original,runId,canSend=false,onSend,
   {ended&&planItems.length>0&&<Fold id='plan' expanded={ui.expanded} toggle={toggle} className='cw-process' label={<span className='cw-process-title'>研究计划 · {planItems.filter(i=>i.status==='done').length}/{planItems.length} 完成</span>}><PlanList view={view}/></Fold>}
   {ended&&tasks.length>0&&<Fold id='agents' expanded={ui.expanded} toggle={toggle} className='cw-process' label={<span className='cw-process-title'>子任务 · {tasks.length} 个</span>}>{tasks.map(d=><button className='cw-agent-link' key={d.id} onClick={()=>openAgent(d.id)}><GitBranch size={14}/><span>{d.goal}</span><small>{statusName(d.status)} · {d.cardCount} 条证据</small></button>)}</Fold>}
   {live&&<p className='cw-activity'><span className='lamp lamp-current'/>{activity?.text??'正在处理…'}</p>}
-  {failedTools.length>0&&<p className='cw-warning'>{failedTools.length} 次工具调用未成功，已有成果都保留了。{onCall&&<button className='cw-link' onClick={()=>openCall(`tool:${Object.entries(view.simpleTools??{}).find(([,c])=>c===failedTools.at(-1))?.[0]}`)}>查看最近一次</button>}</p>}
+  <FailedToolCalls view={view} expanded={ui.expanded} toggle={toggle} onCall={onCall}/>
   {(view.banner&&view.banner.kind!=='done'&&!(ended&&view.simple))&&<p className='cw-notice'>{view.banner.text}</p>}
   {view.simple?.scopeHistory?.at(-1)&&<p className='cw-notice'><strong>研究范围已调整：</strong>{view.simple.scopeHistory.at(-1)!.goal}<br/><small>{view.simple.scopeHistory.at(-1)!.reason}</small></p>}
   {view.inputError&&<p className='cw-warning'>{view.inputError}</p>}

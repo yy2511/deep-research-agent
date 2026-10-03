@@ -1,6 +1,21 @@
 import pytest
 
 
+def test_network_mode_is_explicit_and_reversible(tmp_path, monkeypatch):
+    from dra import execution
+    from pydantic import ValidationError
+    monkeypatch.setattr(execution, '_ENV_PATH', tmp_path / '.env')
+    monkeypatch.delenv('DRA_EXECUTION_NETWORK_MODE', raising=False)
+    assert execution.ExecutionConfig.from_env().network_mode == 'none'
+    (tmp_path / '.env').write_text('DRA_EXECUTION_NETWORK_MODE=bridge\n')
+    assert execution.ExecutionConfig.from_env().network_mode == 'bridge'
+    monkeypatch.setenv('DRA_EXECUTION_NETWORK_MODE', 'none')
+    assert execution.ExecutionConfig.from_env().network_mode == 'none'
+    monkeypatch.setenv('DRA_EXECUTION_NETWORK_MODE', 'host')
+    with pytest.raises(ValidationError):
+        execution.ExecutionConfig.from_env()
+
+
 def test_execution_disabled_never_connects(tmp_path, monkeypatch):
     from dra.execution import ExecutionConfig, ExecutionSession, ExecutionError
     monkeypatch.setattr('docker.DockerClient', lambda **kw: pytest.fail('must not connect'))

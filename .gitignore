@@ -100,3 +100,6 @@ eval/bcp/data/
 eval/bcp/runs/
 eval/bcp/.official/
 eval/bcp/evals/
+eval/deepsearchqa/data/
+eval/deepsearchqa/.official/
+eval/deepsearchqa/runs/

@@ -16,6 +16,7 @@ from tavily import TavilyClient
 from tavily.errors import BadRequestError, ForbiddenError, InvalidAPIKeyError, MissingAPIKeyError
 
 from dra.models import RetrievedDoc
+from dra.search_observation import request_attempt
 
 # 显式定位项目根的 .env（src/dra/tools.py → parents[2] 即项目根），
 # 不依赖运行方式（脚本 / pytest / stdin 都能稳定加载）。
@@ -103,16 +104,18 @@ def web_search(
         # 缺配置无需重试；连接级故障后下一轮仍会取得全新 client。
         client = _get_client()
         try:
-            resp = client.search(
-                query=query,
-                max_results=top_k,
-                search_depth="basic",
-                # A-1 读取层（叉 a）：让 Tavily 回填整页正文 raw_content，不止 snippet。
-                # search_depth 仍用 basic（最省 1 credit）；advanced（2 credit，更狠的
-                # 正文抽取）是另一档成本旋钮，效果不够再上，不进叉 a。
-                include_raw_content=True,
-                **({"exclude_domains": exclude_domains} if exclude_domains else {}),
-            )
+            with request_attempt(attempt + 1) as observation:
+                resp = client.search(
+                    query=query,
+                    max_results=top_k,
+                    search_depth="basic",
+                    # A-1 读取层（叉 a）：让 Tavily 回填整页正文 raw_content，不止 snippet。
+                    # search_depth 仍用 basic（最省 1 credit）；advanced（2 credit，更狠的
+                    # 正文抽取）是另一档成本旋钮，效果不够再上，不进叉 a。
+                    include_raw_content=True,
+                    **({"exclude_domains": exclude_domains} if exclude_domains else {}),
+                )
+                observation.received()  # SDK 不暴露 HTTP 状态码，不能猜成 200。
             break
         except Exception as e:  # 工具边界统一兜底，再决定重试/上抛
             # SSL EOF / 连接重置：重置 client，强制下一轮用全新连接重试，
@@ -184,29 +187,31 @@ def exa_search(
     resp = None
     for attempt in range(max_retries + 1):
         try:
-            r = requests.post(
-                _EXA_ENDPOINT,
-                headers={"x-api-key": key, "Content-Type": "application/json"},
-                json={
-                    "query": query,
-                    "numResults": top_k,
-                    # text 留作 fetch_page/逐字门的全文；highlights 是 Exa 按当前
-                    # query 抽取的原文片段，专供 search 列表判断是否值得精读。
-                    # 不能再用全文开头冒充 snippet：正文开头常是背景或模板内容。
-                    "contents": {
-                        "text": True,
-                        "highlights": {
-                            "query": query,
-                            "maxCharacters": _EXA_HIGHLIGHT_MAX_CHARS,
+            with request_attempt(attempt + 1) as observation:
+                r = requests.post(
+                    _EXA_ENDPOINT,
+                    headers={"x-api-key": key, "Content-Type": "application/json"},
+                    json={
+                        "query": query,
+                        "numResults": top_k,
+                        # text 留作 fetch_page/逐字门的全文；highlights 是 Exa 按当前
+                        # query 抽取的原文片段，专供 search 列表判断是否值得精读。
+                        # 不能再用全文开头冒充 snippet：正文开头常是背景或模板内容。
+                        "contents": {
+                            "text": True,
+                            "highlights": {
+                                "query": query,
+                                "maxCharacters": _EXA_HIGHLIGHT_MAX_CHARS,
+                            },
                         },
+                        **({"excludeDomains": exclude_domains} if exclude_domains else {}),
                     },
-                    **({"excludeDomains": exclude_domains} if exclude_domains else {}),
-                },
-                timeout=30,
-            )
-            if r.status_code != 200:
-                raise requests.HTTPError(f"exa_search HTTP {r.status_code}: {r.text[:200]}", response=r)
-            resp = r.json()
+                    timeout=30,
+                )
+                observation.received(r.status_code)
+                if r.status_code != 200:
+                    raise requests.HTTPError(f"exa_search HTTP {r.status_code}: {r.text[:200]}", response=r)
+                resp = r.json()
             break
         except Exception as e:
             status = e.response.status_code if isinstance(e, requests.HTTPError) and e.response is not None else None
@@ -526,8 +531,10 @@ def ddg_search(query: str, top_k: int = 5) -> list[RetrievedDoc]:
     这条罕见路径上才可能发生，超时幅度上限是一次 DDG 请求的耗时。"""
     from ddgs import DDGS  # 惰性 import：主路径不依赖它
 
-    with DDGS() as d:
-        results = list(d.text(query, max_results=top_k))
+    with request_attempt(1) as observation:
+        with DDGS() as d:
+            results = list(d.text(query, max_results=top_k))
+        observation.received()
     return [
         RetrievedDoc(
             source_url=r.get("href"),

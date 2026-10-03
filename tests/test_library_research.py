@@ -94,7 +94,7 @@ def test_out_of_scope_local_source_cannot_be_read(setup):
 def test_mixed_search_preserves_local_hits_and_reports_web_failure(setup, monkeypatch):
     _, _, _, ctx = setup
     ctx.config = ctx.config.model_copy(update={"source_mode":"mixed"})
-    monkeypatch.setattr(sr, "_retrieve", lambda *a: (_ for _ in ()).throw(RuntimeError("web down")))
+    monkeypatch.setattr(sr, "_retrieve", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("web down")))
     receipt, ok = ctx.search_sources({"query":"日志"})
     assert ok
     data = json.loads(receipt)

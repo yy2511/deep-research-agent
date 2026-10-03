@@ -30,6 +30,7 @@ def _close_execution_pools():
 def _execution_requires_explicit_test_opt_in(monkeypatch):
     """个人 .env 开启执行，不应把全部离线 Web 测试变成真实 Docker 测试。"""
     monkeypatch.setenv('DRA_EXECUTION_ENABLED', 'false')
+    monkeypatch.setenv('DRA_EXECUTION_NETWORK_MODE', 'none')
 
 
 @pytest.fixture(autouse=True)

@@ -80,6 +80,21 @@ def test_lease_helper_failure_is_not_success(tmp_path):
     with pytest.raises(ExecutionError,match='lease_failed'): one._renew_lease(600)
 
 
+@pytest.mark.parametrize('first,second', [('bridge', 'none'), ('none', 'bridge')])
+def test_network_policy_change_destroys_warm_container(tmp_path, first, second):
+    pool=pool_type()(tmp_path,ExecutionConfig(enabled=True),start_checker=False)
+    one=fake_session(tmp_path,'r1')
+    one.config=one.config.model_copy(update={'network_mode':first})
+    two=fake_session(tmp_path,'r2','r1')
+    two.config=two.config.model_copy(update={'network_mode':second})
+    removed=[]
+    one.container.remove=lambda **kw:removed.append('r1')
+    pool.acquire(one);pool.park(one)
+    assert pool.acquire(two) is None
+    assert removed==['r1'] and not pool.warm
+    pool.forget(two)
+
+
 @pytest.mark.docker
 def test_periodic_idle_checker_reclaims_without_another_request(tmp_path):
     import docker

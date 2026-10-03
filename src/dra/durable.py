@@ -6,6 +6,21 @@ import tempfile
 from pathlib import Path
 
 
+def atomic_bytes(path: Path, content: bytes):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = None
+    try:
+        with tempfile.NamedTemporaryFile('wb', dir=path.parent, prefix=f'.{path.name}.', delete=False) as handle:
+            temp = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
+
+
 def atomic_json(path: Path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = None

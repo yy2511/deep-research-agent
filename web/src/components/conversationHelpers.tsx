@@ -184,11 +184,12 @@ export function toolFacts(call: ToolCall, index: RunIndex): ToolFact {
     if (accepted === undefined && call.ok && call.phase !== "running") {
       warn = "结果摘要不完整（本次运行未带结构化展示字段）";
     }
-  } else if (["bash","read_file","write_file","edit_file","export_research_materials"].includes(call.tool)) {
+  } else if (["bash","read_file","write_file","edit_file","export_research_materials","download_source"].includes(call.tool)) {
     main = display?.command || display?.path || args?.command || args?.path || toolCallLabel(call);
     if (typeof display?.exit_code === "number") counters.push(`退出码 ${display.exit_code}`);
     if (typeof display?.elapsed_ms === "number") counters.push(`${(display.elapsed_ms/1000).toFixed(2)}s`);
     if (typeof display?.size === "number") counters.push(`${display.size} bytes`);
+    if ((display?.source_kind??result?.source_kind)==='computation') counters.push(`计算结果 ${display?.source_ref??result?.source_ref}`);
     if (display?.workspace_available === false) warn = "工作区已不可用";
     if (display?.error_code) warn = display.message || display.error_code;
   } else if (call.tool === "finish_research") {

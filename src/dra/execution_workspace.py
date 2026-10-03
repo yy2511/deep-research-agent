@@ -32,8 +32,8 @@ class ConversationWorkspace:
 
     def _validate(self, *, create=False):
         from dra.execution import ExecutionError
-        # 父目录均由可信控制端管理；容器只见 work/output 这两个叶目录。
-        for path in (self.root, self.path, self.path/'work', self.path/'output'):
+        # 父目录由控制端管理；容器只见 input/work/output 三个叶目录。
+        for path in (self.root, self.path, self.path/'input', self.path/'work', self.path/'output'):
             if create:
                 try: path.mkdir(mode=0o700, parents=False)
                 except FileExistsError: pass
@@ -43,12 +43,18 @@ class ConversationWorkspace:
     def prepare(self):
         self.run_dir.parent.mkdir(parents=True, exist_ok=True)
         self._validate(create=True)
-        for name in ('work', 'output'):
+        for name in ('input', 'work', 'output'):
             path = self.path/name
             if os.getuid() == 0:
                 os.chown(path, self.uid, self.gid)
             os.chmod(path, 0o700)
         return self.path
+
+    def reset_input(self):
+        """每轮重新导入原件；由控制端清空，容器始终只读。"""
+        self._validate()
+        for path in (self.path/'input').iterdir():
+            path.unlink()
 
     def mounts(self):
         from dra.execution import ExecutionError
@@ -62,7 +68,7 @@ class ConversationWorkspace:
         else:
             source = self.path
         return [docker.types.Mount(target=f'/workspace/{name}', source=str(source/name),
-                                   type='bind', read_only=False) for name in ('work','output')]
+                                   type='bind', read_only=name=='input') for name in ('input','work','output')]
 
     def describe(self):
         """只列有界路径与大小；不读模型文件内容，不跟随任何链接。"""

@@ -51,12 +51,58 @@ def test_compact_sse_matches_history_without_mutating_live_buffer(tmp_path, monk
     handle.done = True
     handle.buffer = [
         {"seq": 0, "type": "llm_usage", "call_id": "m1", "request_messages": [{"role": "user", "content": "正文"}]},
-        {"seq": 1, "type": "end"},
+        {"seq": 1, "type": "subagent_tool_call", "call_id": "t1", "phase": "done", "result_summary": "失败摘要"},
+        {"seq": 2, "type": "end"},
     ]
     with TestClient(web.app) as client:
         response = client.get(f"/api/research/{run_id}/stream?compact=true")
         projected = [json.loads(line.removeprefix("data: ")) for line in response.text.splitlines() if line.startswith("data: ")]
         assert projected[0].get("detail_seq") == 0
         assert "request_messages" not in projected[0]
+        assert projected[1]["detail_seq"] == 1
         assert projected[-1]["type"] == "end"
     assert handle.buffer[0]["request_messages"][0]["content"] == "正文"
+
+
+def test_tool_detail_reads_full_journal_without_trace_and_matches_call_identity(tmp_path, monkeypatch):
+    store, run_id, _, _ = history_fixture(tmp_path)
+    monkeypatch.setattr(web, "STORE", store)
+    event = {"type": "subagent_tool_call", "seq": 0, "call_id": "reused", "phase": "done",
+             "tool": "bash", "delegation_id": "sub1", "model_call_id": "sub1-2", "turn": 2,
+             "args_summary": "输入摘要", "result_summary": "错误摘要", "ok": False}
+    original = json.dumps(event, ensure_ascii=False) + "\n"
+    path = store._dir(run_id) / "events.jsonl"
+    path.write_text(original)
+    correct = {"run_id": run_id, "agent_id": "sub1", "model_call_id": "sub1-2", "turn": 2,
+               "tool_call_id": "reused", "tool": "bash", "phase": "done",
+               "arguments_raw": "完整输入" * 200, "result": "完整错误" * 200}
+    rows = [
+        {**correct, "agent_id": "lead", "result": "另一个 Agent"},
+        {**correct, "model_call_id": "sub1-1", "turn": 1, "result": "前一轮"},
+        {**correct, "phase": "running", "result": None},
+        correct,
+    ]
+    journal = store._dir(run_id) / "tool_calls.jsonl"
+    journal_text = "".join(json.dumps(row) + "\n" for row in rows)
+    journal.write_text(journal_text)
+    with TestClient(web.app) as client:
+        compact = json.loads(client.get(f"/api/runs/{run_id}/events?compact=true").text)
+        assert compact["detail_seq"] == 0 and "arguments_raw" not in compact
+        detail = client.get(f"/api/runs/{run_id}/events/0").json()
+        assert detail == {**event, "arguments_raw": correct["arguments_raw"],
+                          "result_full": correct["result"], "io_complete": True}
+    assert path.read_text() == original
+    assert journal.read_text() == journal_text
+
+
+def test_tool_detail_without_journal_preserves_summary_and_reports_corruption(tmp_path, monkeypatch):
+    store, run_id, _, _ = history_fixture(tmp_path)
+    monkeypatch.setattr(web, "STORE", store)
+    event = {"type": "subagent_tool_call", "seq": 0, "call_id": "t1", "phase": "done",
+             "tool": "read_source", "model_call_id": "lead-1", "turn": 1,
+             "result_summary": "旧运行只有摘要"}
+    (store._dir(run_id) / "events.jsonl").write_text(json.dumps(event) + "\n")
+    with TestClient(web.app) as client:
+        assert client.get(f"/api/runs/{run_id}/events/0").json() == event
+        (store._dir(run_id) / "tool_calls.jsonl").write_text("{broken\n")
+        assert client.get(f"/api/runs/{run_id}/events/0").status_code == 503

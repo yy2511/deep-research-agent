@@ -74,6 +74,15 @@ docker build -t dra-sandbox:local sandbox_image
 ```
 
 在后端 `.env` 中设置 `DRA_EXECUTION_ENABLED=true`，然后重启后端。
+需要下载公开数据时，再设置 `DRA_EXECUTION_NETWORK_MODE=bridge`。主 Agent 可用 `download_source`
+直接下载 CSV/TSV/JSON/文本原文件，保留 URL、原始字节、编码和 SHA-256，导入只读 input 后用 Python 处理。
+下载与 input 导入不设文件大小上限；input 从磁盘只读挂载，不再使用原有的 32 MiB 输入区。
+下载目前仍有 45 秒总时限（且不超过研究剩余时间）、10 秒单次 socket 等待和最多 4 次重定向；仅接收公开文本数据，二进制 PDF/XLSX 不由此工具读取。
+原文件须完整下载并按声明编码或 BOM 解码；CSV 链接返回 HTML、压缩传输未遵守 identity 请求或解码失败时会明确报错。
+用户显式配置的 `storage_max_chars` 仍生效，默认不限制；work/output 的写入与附件交付配额独立于原件下载。
+表格可直接交给 `bash` 中的 Python 按行列提取和计算；可选 `source_refs` 注明输入来源。成功命令的非空 stdout 返回独立的计算结果 `source_ref`，已展示部分可直接 `save_evidence`，不用重读原 CSV 的字符片段。未展示输出按结果编号 `read_source` 续读；引用原文件原话时仍须实际读取原文件。
+计算证据与原始资料分开标注，详情保留输入文件哈希、命令、工作目录及本轮脚本写入/修改记录；提示词要求输出行标识、字段、单位和计算方法。它提供过程追溯，不自动验证计算逻辑或建立单元格级血缘。执行预览和日志仍使用已有上限，日志不完整时有标记。
+将网络配置改回 `none` 并重启即可恢复禁网模式；纯资料研究始终禁用 Web 下载和容器联网。
 启用后，主 Agent 可按需使用文件和 Bash 工具；没有指定文件格式时照常交付站内正文。
 要求 HTML、PDF 或导图时，交付文件会出现在答案下方，可预览或下载。HTML 可包含脚本交互、SVG、canvas 和外部资源；
 只要求 HTML 不会自动附带 PDF。制作环境与文件支持范围见 [STATUS.md](STATUS.md)。
@@ -145,6 +154,8 @@ npm run build
 | Python API `dra.research.run_minimal_research` | `SimpleConfig` | 主 Agent 自主研究 / 异步协作 + 引用门，拒绝恢复 |
 
 Web 与自动化读取本机模型配置；Python API 接受显式配置。开发 live 测试使用用户指定的模型，见 STATUS；不会因此改写本机 Web 配置。旧编排引擎与交互 CLI 已删除。
+
+每次研究的 `runs/<run_id>/search_calls.jsonl` 始终记录 Tavily、Exa 和触发时的 DDG 逐服务诊断，包含搜索词、主/子 Agent、模型与工具调用 ID、耗时、结果数、HTTP 状态和错误分类。`started/done` 是服务调用，`request_started/request_done` 是一次 HTTP 或 SDK 尝试；重试按 `attempt` 编号。缺密钥时只有服务失败记录，没有请求开始记录。Tavily/DDG SDK 未暴露的 HTTP 状态保持 `null`；尝试次数不代表服务商计费次数。记录不含请求头、密钥或上游错误原文，也不加入模型回执；历史运行无法补回这些诊断。
 
 ## 项目结构
 

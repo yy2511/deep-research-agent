@@ -51,8 +51,8 @@ RELATIONS = {"A": "supported", "B": "contradicted", "C": "insufficient"}
 def evidence_state(card: dict) -> dict:
     quotes = card.get("quotes") or [card]
     return {"claim": card["claim"], "evidence": [
-        {key: q[key] for key in ("quote", "source_ref", "source_title", "published_at", "location", "context")
-         if key in q} for q in quotes]}
+        {key: q[key] for key in ("quote", "source_ref", "source_title", "source_kind", "published_at", "location", "context")
+         if key in q and (key != "source_kind" or q[key] == "computation")} for q in quotes]}
 
 
 class JudgeConfig(BaseModel):

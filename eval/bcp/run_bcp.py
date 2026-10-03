@@ -11,9 +11,12 @@
   摘要与官方一致（全文前 512 个 token，由检索服务截好），产品的 600 字符摘要上限在评测里放开；
 - 按网址读网页一律拒绝，否则 Agent 可能上真实网络找到答案，结果作废；被拒次数记在 meta 里；
 - 关闭代码执行；不接外部资料服务（MCP）、不用本地资料库（这条调用路径本来就不启用）；
-- 跳过澄清，直接把题目交给研究；时间上限 900 秒，与 Question's Gambit 论文一致。
+- 跳过澄清（评测没有用户可问）；--plan 时先像网页一样生成研究计划（规划模型固定开思考），把目标与要求、
+  路线说明、初始任务清单交给主 Agent，计划内容与耗时记在 meta.plan；不加则主 Agent 拿原题自己列计划。
+  研究时间上限 900 秒（从计划生成完开始算），与 Question's Gambit 论文一致。
 - 默认关闭长文压缩（读长文不再先压缩成摘要）和派子任务（主 Agent 独自完成），可用
-  --condense / --subagents 打开，用于对比；设置记在每题 meta 里。
+  --condense / --subagents 打开，用于对比；--no-thinking 关闭模型思考（与官方框架同模式对比）。
+  设置记在每题 meta 里。
 - 题目用官方的作答格式模板（不要求按文档编号引用，见 QUERY_TEMPLATE）。交给评分的正文里，
   证据卡引用 [c1] 换成卡片来源的文档编号 [5412]，官方脚本据此算引用精确率与召回率；
   完整报告（.md）保留原样。
@@ -37,6 +40,7 @@ from pathlib import Path
 import requests
 
 from dra import research, runtime_config, simple_research
+from dra.research_brief import build_research_brief, render_brief_context
 from dra.execution import ExecutionConfig
 from dra.models import RetrievedDoc
 from dra.paths import RUNS_DIR
@@ -153,33 +157,55 @@ class FetchBlock:
 
 
 def eval_config(model: str = MODEL, provider: str = PROVIDER, *, subagents: bool = False, condense: bool = False,
-                **overrides) -> simple_research.SimpleConfig:
-    """网页设置为底，只换研究模型；不改写网页的设置文件。"""
+                thinking: bool = True, temperature: float | None = None, **overrides) -> simple_research.SimpleConfig:
+    """网页设置为底，只换研究模型（及按需关思考）；不改写网页的设置文件。"""
     settings = runtime_config.current()
-    settings = settings.model_copy(update={
-        "subagent": settings.subagent.model_copy(update={"model": model, "provider": provider})})
+    node = {"model": model, "provider": provider}
+    if not thinking:
+        node.update(reasoning=False, effort=None)  # 产品对 opencode 关思考时发 thinking=disabled
+    adapter_overrides = {"temperature": temperature} if temperature is not None else {}
+    settings = settings.model_copy(update={"subagent": settings.subagent.model_copy(update=node)})
     config = runtime_config.to_simple_config(
         settings, execution=ExecutionConfig(enabled=False), wall_timeout_s=WALL_TIMEOUT_S,
         search_snippet_chars=SNIPPET_CHARS, delegation_enabled=subagents,
         **({} if condense else {"condense_over_chars": None}), **overrides)
+    if adapter_overrides:
+        config = config.model_copy(update={"adapter": config.adapter.model_copy(update=adapter_overrides)})
     if config.mcp_servers or config.source_mode != "web" or config.execution.enabled:
         raise SystemExit("评测配置不对：必须不接外部资料服务、不用资料库、不开代码执行")
     return config
 
 
+def make_plan(query: str, planner_model: str, planner_provider: str, *, model_call=None):
+    """同网页开跑前的规划步骤（跳过澄清）；返回交给研究内核的三样东西和记录用的摘要。"""
+    started = time.monotonic()
+    brief = build_research_brief(query, runtime_config.BriefConfig(
+        planner_model=planner_model, planner_provider=planner_provider), model_call=model_call)
+    kwargs = {"requirements": brief.to_run_requirements(), "brief_context": render_brief_context(brief),
+              "initial_route": [item.model_dump(mode="json") for item in brief.route]}
+    record = {"planner": f"{planner_model}@{planner_provider}", "seconds": round(time.monotonic() - started, 1),
+              "objective": brief.objective, "route": [item.text for item in brief.route],
+              "assumptions": list(brief.assumptions)}
+    return kwargs, record
+
+
 def run_one(question: dict, out: Path, *, corpus: Corpus | None = None, model_call=None,
-            config: simple_research.SimpleConfig | None = None) -> dict:
+            config: simple_research.SimpleConfig | None = None, plan: tuple[str, str] | None = None,
+            plan_call=None) -> dict:
+    """plan＝(规划模型, 服务商) 时先生成计划再研究；plan_call 只用于离线测试替换规划调用。"""
     corpus = corpus or Corpus()
     config = config or eval_config()
     block = FetchBlock()
     run_id = f"bcp-{question['query_id']}-{datetime.now():%Y%m%d-%H%M%S}"
+    query = QUERY_TEMPLATE.format(Question=question["query"])
+    plan_kwargs, plan_record = make_plan(query, *plan, model_call=plan_call) if plan else ({}, None)
     original_fetch = simple_research.fetch_url_content
     simple_research.fetch_url_content = block
     started = time.monotonic()
     try:
         result = research.run_minimal_research(
-            QUERY_TEMPLATE.format(Question=question["query"]), config=config, run_id=run_id,
-            checkpoint_dir=RUNS_DIR / run_id, search_fn=corpus.search, model_call=model_call)
+            query, config=config, run_id=run_id, checkpoint_dir=RUNS_DIR / run_id,
+            search_fn=corpus.search, model_call=model_call, **plan_kwargs)
     finally:
         simple_research.fetch_url_content = original_fetch
     read_docids = sorted({d for s in result.sources if s.snapshot_kind == "full" and (d := docid_of(s.url))},
@@ -191,7 +217,9 @@ def run_one(question: dict, out: Path, *, corpus: Corpus | None = None, model_ca
         # 官方评分脚本读的字段
         "query_id": question["query_id"],
         "tool_call_counts": {"search": corpus.searches, "get_document": len(read_docids)},
-        "status": "completed" if result.delivery_status == "delivered" and result.draft.strip() else result.delivery_status,
+        # 有正文就交评分（含 limited：如实说明没找到也是一个回答，官方框架的同类回答也照常评分）；
+        # 交付状态另记在 meta.delivery_status。
+        "status": "completed" if result.draft.strip() else result.delivery_status,
         "retrieved_docids": corpus.retrieved,
         "result": [{"type": "output_text", "output": cite_docids(result.draft, result.cards)}],
         # 我们自己的记录，官方脚本会忽略
@@ -200,6 +228,9 @@ def run_one(question: dict, out: Path, *, corpus: Corpus | None = None, model_ca
             "model": f"{config.adapter.model}@{config.adapter.provider}",
             "wall_timeout_s": config.wall_timeout_s,
             "subagents": config.delegation_enabled, "condense": config.condense_over_chars is not None,
+            "thinking": config.adapter.reasoning, "effort": config.adapter.effort,
+            "temperature": config.adapter.temperature,
+            "plan": plan_record,
             "wall_seconds": round(time.monotonic() - started, 1),
             "stop_reason": result.stop_reason, "delivery_status": result.delivery_status,
             "read_docids": read_docids, "cited_docids": cited_docids,
@@ -225,11 +256,13 @@ def summary_line(record: dict) -> dict:
             "blocked_url_reads": len(meta["blocked_url_reads"])}
 
 
-def _worker(question: dict, out: Path, model: str, provider: str, subagents: bool, condense: bool) -> dict:
+def _worker(question: dict, out: Path, model: str, provider: str, subagents: bool, condense: bool,
+            thinking: bool, temperature: float | None, plan: tuple[str, str] | None) -> dict:
     """子进程里跑一题。出错只记这一题、不写结果文件（下次同批次会重跑它），不拖垮整批。"""
     try:
-        config = eval_config(model, provider, subagents=subagents, condense=condense)
-        return summary_line(run_one(question, out, config=config))
+        config = eval_config(model, provider, subagents=subagents, condense=condense, thinking=thinking,
+                             temperature=temperature)
+        return summary_line(run_one(question, out, config=config, plan=plan))
     except Exception as exc:  # noqa: BLE001  整批评测里单题失败要可见、可重跑
         return {"query_id": question["query_id"], "status": "error", "error": f"{type(exc).__name__}: {exc}"}
 
@@ -245,6 +278,11 @@ def main(argv=None) -> None:
     p.add_argument("--provider", default=PROVIDER, help="模型服务商，见网页设置里的连接")
     p.add_argument("--subagents", action="store_true", help="允许主 Agent 派子任务（默认关）")
     p.add_argument("--condense", action="store_true", help="开启长文压缩（默认关）")
+    p.add_argument("--no-thinking", action="store_true", help="关闭模型思考（默认沿用网页设置）")
+    p.add_argument("--plan", action="store_true", help="先生成研究计划再研究（同网页，跳过澄清）")
+    p.add_argument("--planner-model", help="规划模型（默认同研究模型；规划固定开思考）")
+    p.add_argument("--planner-provider", help="规划模型服务商（默认同研究模型）")
+    p.add_argument("--temperature", type=float, help="研究循环温度（默认按产品：开思考 0.6、不开 0.3；DeepSeek 接口默认 1.0）")
     p.add_argument("--run-live", action="store_true", help="真跑（调用研究模型）")
     args = p.parse_args(argv)
     questions = pick(load_questions(), args.sample, args.seed, args.ids)
@@ -257,16 +295,20 @@ def main(argv=None) -> None:
         requests.get(f"{SEARCH_URL}/search", params={"q": "test", "k": 1}, timeout=10).raise_for_status()
     except requests.RequestException as exc:
         raise SystemExit(f"检索服务没起来（{exc}）；先按 search_server.py 的说明启动") from exc
-    config = eval_config(args.model, args.provider, subagents=args.subagents, condense=args.condense)
+    config = eval_config(args.model, args.provider, subagents=args.subagents, condense=args.condense,
+                         thinking=not args.no_thinking, temperature=args.temperature)
+    plan = (args.planner_model or args.model, args.planner_provider or args.provider) if args.plan else None
     print(f"共 {len(questions)} 题，待跑 {len(todo)} 题；模型 {config.adapter.model}@{config.adapter.provider}，"
           f"时间上限 {config.wall_timeout_s:.0f} 秒，同时跑 {args.workers} 题；"
-          f"子任务{'开' if args.subagents else '关'}，长文压缩{'开' if args.condense else '关'}", file=sys.stderr)
+          f"子任务{'开' if args.subagents else '关'}，长文压缩{'开' if args.condense else '关'}，"
+          f"思考{'关' if args.no_thinking else '开'}，温度 {args.temperature if args.temperature is not None else '产品默认'}，"
+          f"计划 {'@'.join(plan) + '（开思考）' if plan else '不生成'}", file=sys.stderr)
     if not args.run_live:
         print("未加 --run-live，不运行。", file=sys.stderr)
         return
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
-        futures = [pool.submit(_worker, q, out, args.model, args.provider, args.subagents, args.condense)
-                   for q in todo]
+        futures = [pool.submit(_worker, q, out, args.model, args.provider, args.subagents, args.condense,
+                               not args.no_thinking, args.temperature, plan) for q in todo]
         for done, future in enumerate(as_completed(futures), 1):
             print(json.dumps({"done": f"{done}/{len(todo)}", **future.result()}, ensure_ascii=False), flush=True)
 

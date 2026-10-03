@@ -57,10 +57,43 @@ def test_daemon_mount_path_is_explicit_for_containerized_backend(tmp_path):
     session = ExecutionSession(tmp_path/'r', 'r', config)
     session.workspace.prepare()
     mounts = session.workspace.mounts()
-    assert len(mounts) == 2
-    assert {m['Target'] for m in mounts} == {'/workspace/work','/workspace/output'}
+    assert len(mounts) == 3
+    assert {m['Target'] for m in mounts} == {'/workspace/input','/workspace/work','/workspace/output'}
     assert all(m['Source'].startswith('/srv/dra/runs/.workspaces/') for m in mounts)
-    assert all(m['Type']=='bind' and m['ReadOnly'] is False for m in mounts)
+    assert all(m['Type']=='bind' and m['ReadOnly']==(m['Target']=='/workspace/input') for m in mounts)
+
+
+def test_large_input_import_keeps_complete_bytes_and_resets_only_inputs(tmp_path):
+    from dra.execution import MiB
+    session = ExecutionSession(tmp_path/'r', 'r', ExecutionConfig(enabled=True))
+    session.workspace.prepare()
+    session.state = 'ready'  # Import writes the mounted host directory; no Docker call.
+    raw = b'county,value\n' + b'Alpha,1\n' * (65 * MiB // 8)
+    path = session.import_file('large.csv', raw)
+    assert path == '/workspace/input/large.csv'
+    assert (session.workspace.path/'input'/'large.csv').read_bytes() == raw
+    assert session.import_file('large.csv', raw) == path
+    assert session.input_bytes == len(raw)
+    with pytest.raises(ExecutionError, match='file_conflict'):
+        session.import_file('large.csv', b'changed')
+    (session.workspace.path/'work'/'script.py').write_text('saved')
+    session.workspace.reset_input()
+    assert list((session.workspace.path/'input').iterdir()) == []
+    assert (session.workspace.path/'work'/'script.py').read_text() == 'saved'
+
+
+def test_input_disk_write_failure_remains_fatal(tmp_path, monkeypatch):
+    from dra import durable
+    from dra.llm import LLMPersistenceError
+    session = ExecutionSession(tmp_path/'r', 'r', ExecutionConfig(enabled=True))
+    session.workspace.prepare()
+    session.state = 'ready'
+    def failed(*args):
+        raise OSError('disk full')
+    monkeypatch.setattr(durable, 'atomic_bytes', failed)
+    with pytest.raises(LLMPersistenceError, match='导入材料'):
+        session.import_file('data.csv', b'a,b\n1,2\n')
+    assert session.inputs == {} and session.input_bytes == 0
 
 
 @pytest.mark.docker

@@ -26,6 +26,7 @@ class EvidenceQuote(BaseModel):
     source_ref: str
     source_url: str = ""
     source_title: str = ""
+    source_kind: str = "original"
     published_at: str | None = None
     location: str = ""
     deep_link: str = ""

@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path, PurePosixPath
+from typing import Literal
 import select
 import socket
 import struct
@@ -32,6 +33,7 @@ class ExecutionError(ValueError):
 class ExecutionConfig(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
     enabled: bool = False
+    network_mode: Literal['none', 'bridge'] = 'none'
     image: str = 'dra-sandbox:local'
     docker_host: str = Field(default='', exclude=True)
     host_workspace_root: str = Field(default='', exclude=True)
@@ -50,6 +52,7 @@ class ExecutionConfig(BaseModel):
         def value(name, default=''):
             return os.environ.get(name, local.get(name) or default)
         return cls(enabled=value('DRA_EXECUTION_ENABLED').lower() in ('1','true'),
+                   network_mode=value('DRA_EXECUTION_NETWORK_MODE','none'),
                    image=value('DRA_EXECUTION_IMAGE','dra-sandbox:local'),
                    docker_host=value('DRA_DOCKER_HOST'),
                    host_workspace_root=value('DRA_EXECUTION_HOST_WORKSPACE_ROOT'),
@@ -186,12 +189,11 @@ class ExecutionSession:
                 image=self.client.images.get(self.config.image)
                 if image.labels.get('dra.sandbox.protocol')!='2': raise ExecutionError('image_incompatible')
                 self.image_id=image.id
+                self.workspace.prepare()
+                self.workspace.reset_input()
                 if entry and entry.image_id==image.id:
                     self.reused=True; self.state='ready'
                     self._renew_lease(self.deadline-time.monotonic())
-                    receipt=self._exec(['python','-I','/opt/dra-tools/helper.py','--reset-input'],5,user='0:0',logs=False)
-                    if not receipt['ok'] or json.loads(receipt['stdout']).get('ok') is not True:
-                        raise ExecutionError('input_reset_failed')
                     self._persist()
                     return
                 if entry:
@@ -201,11 +203,8 @@ class ExecutionSession:
                 if host.get('OSType')!='linux' or not all(host.get(k) for k in ('MemoryLimit','CpuCfsQuota','PidsLimit')):
                     raise ExecutionError('limits_unavailable')
                 tmpfs={}
-                for path,size,uid,mode,inodes in [('input',32,0,'0755',4096)]:
-                    tmpfs['/workspace/'+path]=f'rw,noexec,nosuid,nodev,size={size}m,uid={uid},gid={uid},mode={mode},nr_inodes={inodes}'
                 tmpfs['/tmp']='rw,noexec,nosuid,nodev,size=128m,mode=1777,nr_inodes=8192'
                 tmpfs['/run/dra']='rw,noexec,nosuid,nodev,size=1m,uid=0,gid=0,mode=0755,nr_inodes=16'
-                self.workspace.prepare()
                 probe=uuid4().hex
                 probe_path=self.workspace.path/'work'/('.dra-probe-'+probe)
                 probe_path.write_text(probe)
@@ -214,7 +213,7 @@ class ExecutionSession:
                 self._persist()
                 self.container=self.client.containers.create(self.image_id,command=[str(max(1,math.ceil(self.deadline-time.monotonic())))],
                     name=self.container_name,user='65534:65534' if self.workspace.uid!=65534 else '65533:65533',working_dir='/',init=True,
-                    read_only=True,network_mode='none',ipc_mode='private',cap_drop=['ALL'],
+                    read_only=True,network_mode=self.config.network_mode,ipc_mode='private',cap_drop=['ALL'],
                     security_opt=['no-new-privileges:true'],tmpfs=tmpfs,mounts=self.workspace.mounts(),shm_size=32*MiB,
                     mem_limit=self.config.memory_mb*MiB,memswap_limit=self.config.memory_mb*MiB,
                     nano_cpus=1_000_000_000,pids_limit=self.config.pids,privileged=False,
@@ -288,6 +287,7 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
         execution_id='exec_'+uuid4().hex; started=time.monotonic()
         token=self.client.api.exec_create(self.container.id,argv,user=user or self.workspace.worker,workdir='/',tty=False,stdin=stdin is not None)['Id']
         stream=None; handles={}; saved=0; outputs={1:bytearray(),2:bytearray()}; total=0
+        stdout_total=0; stdout_saved=0
         try:
             if logs:
                 try:
@@ -323,12 +323,14 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
                         if channel not in (1,2) or remaining>16*MiB: raise ExecutionError('invalid_stream')
                     take=min(len(buffer),remaining); data=bytes(buffer[:take]); del buffer[:take]; remaining-=take
                     total+=len(data)
+                    if channel==1: stdout_total+=len(data)
                     room=max(0,capture//2-len(outputs[channel])); outputs[channel].extend(data[:room])
                     if logs:
                         keep=data[:max(0,min(MiB-saved,20*MiB-self.log_bytes))]
                         try: handles[channel].write(keep)
                         except OSError as exc: raise LLMPersistenceError('执行日志无法写入') from exc
                         saved+=len(keep); self.log_bytes+=len(keep)
+                        if channel==1: stdout_saved+=len(keep)
                     if remaining==0: channel=None
                     elif not buffer: break
             while True:
@@ -344,6 +346,7 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
             return {'ok':code==0,'error_code':None if code==0 else 'process_exit','exit_code':code,
                     'stdout':outputs[1].decode('utf-8','replace'),'stderr':outputs[2].decode('utf-8','replace'),
                     'truncated':total>sum(map(len,outputs.values())), 'log_truncated':logs and total>saved,
+                    'stdout_log_truncated':logs and stdout_total>stdout_saved,
                     'elapsed_ms':round(1000*(time.monotonic()-started)),'execution_id':execution_id,'workspace_available':True}
         except BaseException as exc:
             self.error=getattr(exc,'code','execution_uncertain'); self.close()
@@ -394,18 +397,15 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
             if filename in self.inputs:
                 if self.inputs[filename]!=digest: raise ExecutionError('file_conflict')
                 return '/workspace/input/'+filename
-            if self.input_bytes+len(data)>32*MiB: raise ExecutionError('quota_exceeded')
-            receipt=self._exec(['python','-I','/opt/dra-tools/helper.py','--import',filename],
-                               15,stdin=data,user='0:0',capture=16384,logs=False)
-            try: imported=json.loads(receipt['stdout'])
-            except ValueError as exc: raise ExecutionError('import_failed') from exc
-            if not receipt['ok'] or imported.get('sha256')!=digest:
-                raise ExecutionError('import_failed')
-            self.input_bytes+=len(data); self.inputs[filename]=digest
-            from dra.durable import atomic_json
+            from dra.durable import atomic_bytes, atomic_json
             from dra.llm import LLMPersistenceError
-            try: atomic_json(self.directory/'inputs.json',self.inputs)
-            except OSError as exc: raise LLMPersistenceError('导入材料清单无法落盘') from exc
+            try:
+                path=self.workspace.path/'input'/filename
+                atomic_bytes(path,data)
+                path.chmod(0o444)
+                self.input_bytes+=len(data); self.inputs[filename]=digest
+                atomic_json(self.directory/'inputs.json',self.inputs)
+            except OSError as exc: raise LLMPersistenceError('导入材料或清单无法落盘') from exc
             return '/workspace/input/'+filename
 
     def snapshot(self, paths: dict[str,int]):

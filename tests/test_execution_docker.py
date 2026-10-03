@@ -1,6 +1,8 @@
 """真实 Docker 边界验收；显式 --run-docker 时环境缺失必须失败。"""
 import threading
 import time
+import hashlib
+import json
 
 import pytest
 
@@ -33,6 +35,28 @@ def test_real_files_inputs_freeze_export_and_isolation(session,tmp_path):
     assert not r['ok']
     s.tool('bash',{'command':'ln -s /etc/passwd /workspace/output/link'})
     with pytest.raises(ExecutionError):s.snapshot({'/workspace/output/link':10000})
+
+
+def test_large_input_is_complete_readable_and_readonly(session):
+    raw = b'county,value\n' + b'Alpha,1\n' * (65 * MiB // 8)
+    path = session.import_file('large.csv', raw)
+    receipt = session.tool('bash', {'command': f'''python - <<'PY'
+import hashlib, json
+from pathlib import Path
+p = Path({path!r})
+with p.open('rb') as f:
+    digest = hashlib.file_digest(f, 'sha256').hexdigest()
+try:
+    p.write_bytes(b'changed')
+except OSError:
+    readonly = True
+else:
+    readonly = False
+print(json.dumps(dict(size=p.stat().st_size, sha256=digest, readonly=readonly)))
+PY'''})
+    assert receipt['ok'], receipt
+    actual = json.loads(receipt['stdout'])
+    assert actual == {'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest(), 'readonly': True}
 
 
 def test_no_output_timeout_stops_all_processes(session):

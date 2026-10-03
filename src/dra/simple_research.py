@@ -23,7 +23,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from dra import events, llm, timing
+from dra import events, llm, timing, research_prompts
 from dra import evidence_judge
 from dra.execution import ExecutionConfig
 from dra import execution_tools
@@ -112,6 +112,9 @@ class SimpleConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # 评测可显式选择；Web/现有调用不传时完整保留产品提示词。
+    prompt_profile: Literal["product", "concise_qa_v1", "concise_qa_v2"] = "product"
+
     # 复用现有适配层：模型、provider、检索源与 top_k 都从 worker 档取。
     adapter: SubAgentConfig = Field(default_factory=SubAgentConfig)
     evidence_judge: JudgeConfig = Field(default_factory=JudgeConfig)
@@ -167,18 +170,18 @@ class SimpleConfig(BaseModel):
     开头一段时可调大，与评测的官方设置对齐。
     """
 
-    storage_max_chars: int = 200_000
-    """单个正文快照的存储上限。
+    storage_max_chars: int | None = None
+    """单个正文快照的存储上限；None（默认）完整保存取得的正文。
 
-    保存范围与「每次展示窗口」分开：存的是这个上限内的正文，模型每次只看几千字。
-    超过上限才截断，并在快照上标记 truncated；引用与 find 都能到达已保存范围内的任意位置。
+    保存范围与「每次展示窗口」分开。显式设置正整数后，超过上限才截断，
+    并在快照上标记 truncated；引用与 find 都能到达已保存范围内的任意位置。
     """
 
     read_window_chars: int | None = None
     """read_source 单次回执能展示的原文上限（模型输入侧窗口）。
 
-    ``None``（当前默认）＝不设单次窗口：一次可读到整份**已保存**正文，真正的上限只剩
-    ``storage_max_chars``。对不带参数、``cursor``、``range`` 三条路径一视同仁。
+    ``None``（当前默认）＝不设单次窗口：一次可读到整份**已保存**正文。
+    对不带参数、``cursor``、``range`` 三条路径一视同仁。
     传整数则照常按该窗口分页，并给出准确的 ``next_cursor`` / ``has_more``。
 
     注意：关掉它意味着大页面可能被整份灌进上下文并被服务端以超窗拒绝——这是刻意
@@ -320,11 +323,10 @@ class SimpleConfig(BaseModel):
             return 0
         return self.tool_reserve_calls
 
-    def effective_read_window(self) -> int:
+    def effective_read_window(self) -> int | None:
         """单次回执真正能展示的字符数：请求窗口在这里被截断。
 
-        ``read_window_chars=None`` = 不设单次窗口，返回保存上限——调用方按它取整份
-        已保存正文；``storage_max_chars`` 因此是唯一的硬顶。
+        没有单次窗口时沿用显式保存上限；两者均关闭则返回 None，由调用方读到正文末尾。
         """
         if self.read_window_chars is None:
             return self.storage_max_chars
@@ -383,6 +385,8 @@ class SourceSnapshot(BaseModel):
     truncated: bool = False
     document: dict | None = None
     mcp: dict | None = None
+    download: dict | None = None
+    computation: dict | None = None
     origin: dict | None = None
     revalidated_at: float | None = None
     """取得范围未覆盖来源末尾时为 True；不得把「读到这里」说成全文结束。"""
@@ -404,6 +408,7 @@ class EvidenceCard(BaseModel):
     source_ref: str
     source_url: str
     source_title: str = ""
+    source_kind: str = "original"
     published_at: str | None = None
     location: str = ""
     """定位描述，如 ``chars=120-380``；属于该快照的已读范围。"""
@@ -509,7 +514,7 @@ class RunStore:
     occupancy_file = ".dra-run"
 
     def __init__(
-        self, directory: Path, *, run_id: str, query: str, storage_max_chars: int = 200_000
+        self, directory: Path, *, run_id: str, query: str, storage_max_chars: int | None = None
     ):
         self.dir = Path(directory)
         self.run_id = run_id
@@ -544,12 +549,12 @@ class RunStore:
     # -- 原文 ---------------------------------------------------------------
 
     def write_source(self, doc: RetrievedDoc, *, original_bytes: bytes | None = None,
-                     mcp: dict | None = None) -> tuple[SourceSnapshot, str]:
+                     mcp: dict | None = None, download: dict | None = None,
+                     computation: dict | None = None) -> tuple[SourceSnapshot, str]:
         """先落盘再登记。返回 (快照, 全文)。
 
-        保存范围与「每次展示窗口」是两件事：这里按 ``storage_max_chars`` 保存
-        （默认 20 万字符，足够容纳整页长文），模型每次精读仍只看几千字。
-        超过上限才截断，并在快照上标记 truncated，不把截断说成全文。
+        默认完整保存上游正文；显式配置 ``storage_max_chars`` 时才截断，
+        并在快照上标记 truncated。单次展示范围由阅读窗口另行控制。
         """
         self.check_open()
         # **零修改**（2026-09-17 用户决定）：上游给什么就存什么，一个字符都不改。
@@ -563,22 +568,22 @@ class RunStore:
         if not raw.strip():
             raise ValueError("来源没有可用正文，不能登记为可引用快照")
         keep = self.storage_max_chars
-        if doc.document and len(raw) > keep:
+        truncated = keep is not None and len(raw) > keep
+        if (doc.document or download) and truncated:
             raise ValueError("资料超过本次来源保存上限，不能截断后作为完整资料引用")
-        truncated = len(raw) > keep
+        original_meta = doc.document or download
+        if original_meta and (original_bytes is None or
+                hashlib.sha256(original_bytes).hexdigest() != original_meta["original_sha256"]):
+            raise ValueError("资料原件缺失或校验失败")
         raw = raw[:keep]
         with self._lock:
             ref = f"s{self._next_source}"
             self._next_source += 1
         path = self.sources_dir / f"{ref}.txt"
         _atomic_write(path, raw)
-        if doc.document:
-            if original_bytes is None or hashlib.sha256(original_bytes).hexdigest() != doc.document["original_sha256"]:
-                raise ValueError("资料原件缺失或校验失败")
-            original = self.sources_dir / f"{ref}.original"
-            temporary = original.with_suffix(".tmp")
-            temporary.write_bytes(original_bytes)
-            temporary.replace(original)
+        if original_meta:
+            from dra.durable import atomic_bytes
+            atomic_bytes(self.sources_dir / f"{ref}.original", original_bytes)
         snapshot = SourceSnapshot(
             ref=ref,
             url=doc.source_url or "",
@@ -591,6 +596,8 @@ class RunStore:
             truncated=truncated,
             document=doc.document,
             mcp=mcp,
+            download=download,
+            computation=computation,
         )
         with self._lock:
             self.state["sources"].append(snapshot.model_dump())
@@ -780,7 +787,7 @@ def open_run(
     run_id: str,
     query: str,
     resume: bool = False,
-    storage_max_chars: int = 200_000,
+    storage_max_chars: int | None = None,
 ) -> RunStore:
     """占用一个运行目录并开一次运行。
 
@@ -862,11 +869,10 @@ def _excerpt_table(text: str, *, max_chars: int = _EXCERPT_CHARS, limit: int | N
     start = 0
     total = len(text)
     while start < total and (limit is None or len(rows) < limit):
-        remaining = text[start:]
-        if len(remaining) <= max_chars:
-            rows.append((start, total, remaining))
+        if total - start <= max_chars:
+            rows.append((start, total, text[start:]))
             break
-        window = remaining[:max_chars]
+        window = text[start:start + max_chars]
         cut = max([window.rfind(mark) + len(mark) for mark in _STOP] or [0])
         if cut < max_chars // 3:
             cut = max_chars
@@ -1110,13 +1116,13 @@ class Reading:
                 hi = line_before_hi + 1
         return lo, hi, lo > desired_lo or hi < desired_hi or lo > para_start or hi < para_end
 
-    def window(self, start: int, limit: int) -> tuple[list[tuple[int, int, int, str]], int]:
+    def window(self, start: int, limit: int | None) -> tuple[list[tuple[int, int, int, str]], int]:
         """按请求返回一段连续原文，历史基础编号不再切断展示。
 
-        稳定编号与阅读授权均对应实际展示区间；下一页从真实末尾接读。
+        稳定编号与阅读授权均对应实际展示区间；下一页从真实末尾接读。None 读到正文末尾。
         """
         start = max(0, min(start, len(self.raw)))
-        end = min(len(self.raw), start + max(1, limit))
+        end = len(self.raw) if limit is None else min(len(self.raw), start + max(1, limit))
         if end <= start:
             return [], end
         no = self._entry_for(start, end)
@@ -1520,6 +1526,11 @@ LEAD_TOOL_SCHEMAS: list[dict] = [
     *(LEAD_FINISH_SCHEMA if s is FINISH_SCHEMA else s for s in TOOL_SCHEMAS),
     DELEGATE_SCHEMA, UPDATE_PLAN_SCHEMA, SEND_RESEARCH_SCHEMA, WAIT_RESEARCH_SCHEMA, CANCEL_RESEARCH_SCHEMA,
 ]
+def _temperature_kwargs(adapter) -> dict:
+    """配置了温度才传；不传时沿用 llm 默认，离线测试替身的签名也不受影响。"""
+    return {"temperature": adapter.temperature} if adapter.temperature is not None else {}
+
+
 DELEGATION_TOOL_NAMES = frozenset(s["function"]["name"] for s in (
     DELEGATE_SCHEMA, SEND_RESEARCH_SCHEMA, WAIT_RESEARCH_SCHEMA, CANCEL_RESEARCH_SCHEMA))
 _NO_DELEGATION_NOTE = "\n【本轮不派子任务】本轮没有 delegate_research 等协作工具，检索、阅读、存证都由你自己完成；上文关于分工与子任务的说明不适用。"
@@ -1913,7 +1924,7 @@ class ToolContext:
                     "snippet": clean_markdown(doc.snippet or "")[:self.config.search_snippet_chars],
                     "published_at": snapshot.published_at,
                     # 检索已带回正文时告诉模型全文多长，读之前就能决定整篇读还是 find/range。
-                    **({"total_chars": min(len(doc.raw_content), self.config.storage_max_chars)}
+                    **({"total_chars": len(doc.raw_content[:self.config.storage_max_chars])}
                        if not doc.document and (doc.raw_content or "").strip() else {}),
                     **({"document": {k: v for k, v in doc.document.items() if k != "matches"},
                         "matches": doc.document["matches"]} if doc.document else {}),
@@ -1944,6 +1955,14 @@ class ToolContext:
             if source and source.mcp:
                 payload["mcp"] = source.mcp
                 payload["source_note"] = "这是外部 MCP 工具返回的资料快照；仅证明引文来自该回执，不代表网页全文或事实已核实。"
+                result = json.dumps(payload, ensure_ascii=False)
+            if source and source.download:
+                payload["download"] = source.download
+                payload["source_note"] = "直连取得的原文件，仅按声明编码解码；未经过网页提取、换行重建或数值取整。"
+                result = json.dumps(payload, ensure_ascii=False)
+            if source and source.computation:
+                payload["source_kind"] = "computation"
+                payload["source_note"] = "这是容器实际执行的标准输出；引用定位于计算结果，输入资料及执行命令保存在来源的 computation 中。计算正确性仍需核对。"
                 result = json.dumps(payload, ensure_ascii=False)
             if payload.get("excerpts") and not payload.get("archived"):
                 ref = payload["source_ref"]
@@ -2045,7 +2064,7 @@ class ToolContext:
             document = entry.get("document")
             if document and document["version_id"] not in self.config.library_selection.get("version_ids", []):
                 return _ERR + "该文档版本不在本次选定资料内。", False
-            if not document and self.config.source_mode == "library":
+            if not document and not entry.get("computation") and self.config.source_mode == "library":
                 return _ERR + "本次仅研究所选资料，不允许读取网页。", False
             key = self.sessions.get(ref)
             reading = self.readings.get(key) if key else None
@@ -2172,6 +2191,8 @@ class ToolContext:
             return json.dumps(payload, ensure_ascii=False), True
 
         limit = self.config.effective_read_window()
+        if limit is None:
+            limit = len(reading.raw)
         requested: int | None = None
         if isinstance(cursor, int) and not isinstance(cursor, bool) and cursor >= 0:
             start = cursor
@@ -2198,8 +2219,7 @@ class ToolContext:
         else:
             start = 0
         start = max(0, min(start, len(reading.raw)))
-        # 所有 range/cursor 路径共用同一个硬窗口：放宽存储上限只让内容「可被找到」，
-        # 不允许一次把保存全文灌进上下文。
+        # range/cursor 共用显式配置的阅读窗口；关闭窗口时可读到完整保存正文的末尾。
         window = max(1, min(requested, limit) if requested is not None else limit)
         rows, next_cursor = reading.window(start, window)
         if rows:
@@ -2474,6 +2494,7 @@ class ToolContext:
         snap = reading.snapshot
         span = EvidenceQuote(quote=quote, submitted_quote=supplied, source_ref=snap.ref,
             source_url=snap.url, source_title=snap.title, published_at=snap.published_at,
+            source_kind="computation" if snap.computation else "original",
             location=location, deep_link=text_fragment_url(snap.url, quote) or "",
             summary_ref=ref if ref and ref != snap.ref else None)
         return span, excerpt_no, None, {target}
@@ -2868,7 +2889,11 @@ class ToolContext:
                 web = list(self.search_fn(query))
             else:
                 exclude = provider_exclude_domains(self.config.blocked_sites)
-                web = _retrieve(query, self.config.adapter, **({"exclude_domains": exclude} if exclude else {}))
+                from dra.search_observation import journal_observer
+                observer = journal_observer(self.store, agent_id=self.delegation_id or self.tool_role,
+                    tool_call_id=self.active_tool_call_id, model_call_id=self.model_call_id)
+                web = _retrieve(query, self.config.adapter, on_provider_event=observer,
+                                **({"exclude_domains": exclude} if exclude else {}))
         except Exception as exc:
             if scope == "web":
                 raise
@@ -3354,7 +3379,8 @@ class ToolContext:
             return json.dumps({**response, "ok": False, "error": "MCP 未返回可读取的文本或结构化资料",
                                "warnings": warnings}, ensure_ascii=False), False
         sources = []
-        remaining = min(_MCP_VISIBLE_CHARS, self.config.effective_read_window())
+        read_limit = self.config.effective_read_window()
+        remaining = _MCP_VISIBLE_CHARS if read_limit is None else min(_MCP_VISIBLE_CHARS, read_limit)
         for part in parts:
             title = f"MCP · {entry['server'].name} / {entry['tool']['name']} · 返回 {part['block'] + 1}"
             provenance = {**metadata, **{k: v for k, v in part.items() if k != "text"}}
@@ -3755,7 +3781,7 @@ def _display_payload(name: str, args: dict, receipt: str, cards_before: int) -> 
     if name in {"load_skill", "read_skill_reference"}:
         out = {k: data[k] for k in ("name", "title", "hash", "path", "changed", "error", "note") if k in data}
     elif name in execution_tools.NAMES:
-        for key in ("exit_code", "elapsed_ms", "execution_id", "workspace_available", "truncated", "log_truncated", "error_code", "size", "sha256"):
+        for key in ("exit_code", "elapsed_ms", "execution_id", "workspace_available", "truncated", "log_truncated", "error_code", "size", "sha256", "source_ref", "source_kind"):
             if key in data: out[key] = data[key]
         for key in ("stdout", "stderr", "message", "path"):
             if isinstance(data.get(key), str): out[key] = data[key][:2000]
@@ -4062,7 +4088,7 @@ def run_lead_loop(
         capability = execution_tools.prepare(context)
         if capability.get("available"):
             schemas = [EXECUTION_FINISH_SCHEMA if item["function"]["name"] == "finish_research" else item for item in schemas]
-            schemas.extend(execution_tools.SCHEMAS)
+            schemas.extend(execution_tools.schemas_for(context))
     if config.compaction_enabled:
         from dra.context_compaction import HISTORY_TOOL
         schemas.append(HISTORY_TOOL)
@@ -4073,6 +4099,7 @@ def run_lead_loop(
         store.commit()
     if context.history is not None:
         schemas = [*schemas, HISTORY_SCHEMA]
+    schemas = research_prompts.tool_schemas(config.prompt_profile, schemas, role)
     # 子 Agent 与主 Agent 各自有自己的回合编号，动作 id 必须带 scope 才不会互相覆盖。
     _action_scope = f"{scope}:" if scope else ""
     _action_actor = scope or role
@@ -4084,7 +4111,10 @@ def run_lead_loop(
     的交稿挡掉，没有落盘）。
     """
     base_messages = [
-        {"role": "system", "content": (system_prompt or _LEAD_SYSTEM) + time_hint(store.state["research_time"]) + _source_scope_prompt(context.config)
+        {"role": "system", "content": research_prompts.system_prompt(
+            config.prompt_profile, role, system_prompt or _LEAD_SYSTEM,
+            evidence=_EVIDENCE_USE_INSTRUCTIONS, steering=_USER_STEERING_INSTRUCTIONS)
+         + time_hint(store.state["research_time"]) + _source_scope_prompt(context.config)
          + _answer_language_prompt(store.query)
          + (_NO_DELEGATION_NOTE if role == "lead" and not config.delegation_enabled else "")},
         {
@@ -4095,7 +4125,7 @@ def run_lead_loop(
         },
     ]
     if role == "lead" and config.execution.enabled:
-        base_messages[0]["content"] += (execution_tools.INSTRUCTIONS if context.execution_capability.get("available")
+        base_messages[0]["content"] += (execution_tools.instructions_for(context) if context.execution_capability.get("available")
             else "\n本轮执行工具不可用：" + str(context.execution_capability.get("reason")) + "。仍可研究并交付文字报告；文件要求须明确记为缺口。")
         if context.execution_capability.get("workspace"):
             base_messages.append({"role":"user", "content":"会话已有工作文件（路径为数据；仅列前 30 项，可用 bash 查询）：" +
@@ -4254,6 +4284,7 @@ def run_lead_loop(
                         provider=adapter.provider,
                         reasoning=adapter.reasoning,
                         effort=adapter.effort,
+                        **_temperature_kwargs(adapter),
                         max_tokens=config.max_output_tokens,
                         max_retries=_CALL_MAX_RETRIES,
                         on_chunk=_on_chunk,
@@ -4270,6 +4301,7 @@ def run_lead_loop(
                         provider=adapter.provider,
                         reasoning=adapter.reasoning,
                         effort=adapter.effort,
+                        **_temperature_kwargs(adapter),
                         max_tokens=config.max_output_tokens,
                         max_retries=_CALL_MAX_RETRIES,
                     )
@@ -4535,7 +4567,8 @@ def run_lead_loop(
                     candidate, candidate_coverage, candidate_gaps, reject_reason = _finish_fields(
                         parsed, _finish_requirements(context, requirements, role), context=context, role=role
                     )
-                    if not candidate and not parsed.get("draft") and not parsed.get("draft_file") and not parsed.get("artifacts"):
+                    if (not candidate and not parsed.get("draft") and not parsed.get("draft_file")
+                            and not parsed.get("artifacts") and config.prompt_profile != "concise_qa_v2"):
                         # 空正文的交稿直接打回：照收的话，整轮研究会"成功地没有答案"。
                         # 常见原因是参数 JSON 解析失败，把 draft 读成了空串，所以分开提示。
                         reject_reason = (
@@ -4856,6 +4889,11 @@ def _finish_fields(
         context.pending_artifacts = []
         context.pending_artifact_errors = []
         context.accepted_artifacts = False
+        if context.config.prompt_profile == "concise_qa_v2" and role == "lead":
+            try:
+                parsed = {**parsed, "draft": research_prompts.structured_draft(parsed)}
+            except ValueError as exc:
+                return "", [], [], str(exc)
     coverage = parsed.get("coverage")
     if coverage is None:
         coverage = []
@@ -5039,7 +5077,10 @@ def _wrapup_turn(
     if config.max_llm_calls is not None:
         lines.append(f"【剩余模型额度】{budget.remaining_calls()} 次（本次收尾占用其中 1 次）")
     messages = [
-        {"role": "system", "content": _WRAPUP_SYSTEM + time_hint(store.state["research_time"]) + _source_scope_prompt(config)
+        {"role": "system", "content": research_prompts.system_prompt(
+            config.prompt_profile, role, _WRAPUP_SYSTEM, evidence=_EVIDENCE_USE_INSTRUCTIONS,
+            steering=_USER_STEERING_INSTRUCTIONS, wrapup=True)
+         + time_hint(store.state["research_time"]) + _source_scope_prompt(config)
          + _answer_language_prompt(store.query)},
         {"role": "user", "content": "\n".join(lines)},
     ]
@@ -5067,11 +5108,13 @@ def _wrapup_turn(
     try:
         turn = model_call(
             messages,
-            tools=[EXECUTION_FINISH_SCHEMA if role == "lead" and context.execution is not None else LEAD_FINISH_SCHEMA if role == "lead" else FINISH_SCHEMA],
+            tools=research_prompts.tool_schemas(config.prompt_profile,
+                [EXECUTION_FINISH_SCHEMA if role == "lead" and context.execution is not None else LEAD_FINISH_SCHEMA if role == "lead" else FINISH_SCHEMA], role),
             model=adapter.model,
             provider=adapter.provider,
             reasoning=adapter.reasoning,
             effort=adapter.effort,
+            **_temperature_kwargs(adapter),
             max_tokens=config.max_output_tokens,
             max_retries=_CALL_MAX_RETRIES,
         )
@@ -5130,6 +5173,8 @@ def _wrapup_turn(
         context.accepted_artifacts = False
         context.pending_artifacts = []
         context.pending_artifact_errors = []
+        if config.prompt_profile == "concise_qa_v2" and role == "lead":
+            return "", [], [], "收尾须用 finish_research 的 answers 字段提交结构化答案"
         # 兼容只返回正文的模型；没有收到的状态必须明确缺失，不能由正文猜测。
         body = (getattr(turn, "content", "") or "").strip()
         if not body or _pointer_draft_reason(body):

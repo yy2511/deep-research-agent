@@ -9,6 +9,8 @@
 - 服务地址与密钥：换成 .env 里的 OPENCODE_BASE_URL / OPENCODE_API_KEY，并按 opencode 要求带会话头；
 - 分词器：官方从 Hugging Face 取 Qwen/Qwen3-0.6B，这里用本地 data/qwen3-tokenizer/（同一份文件）；
 - 向量检索模块：只用 BM25，用空壳代替 faiss_searcher，免装 faiss/tevatron。
+--no-thinking 时请求另带 thinking=disabled：官方脚本每轮丢弃思考内容（reasoning_content），对 deepseek
+这类连续调用工具时依赖前文思考的模型影响很大，关掉思考则不存在这个问题。
 其余（BM25 索引、每次 5 条、摘要 512 token、题目模板、最多 100 轮）照官方默认；输出总预算按官方
 文档对“话多的模型”的建议调到 40000（默认 20000，思考内容也算在内）。
 
@@ -37,6 +39,8 @@ def main() -> None:
     p.add_argument("--model", default="deepseek-v4.1-flash")
     p.add_argument("--max-tokens", type=int, default=40000)
     p.add_argument("--threads", type=int, default=1, help="同时跑几题（官方脚本自带线程并行）")
+    p.add_argument("--no-thinking", action="store_true",
+                   help="关闭模型思考（opencode/deepseek 的 thinking=disabled）；官方脚本会丢弃思考内容，关掉后不受影响")
     args = p.parse_args()
 
     values = dotenv_values(ROOT / ".env")
@@ -81,7 +85,8 @@ def main() -> None:
 
         def create_with_session(**kwargs):
             session = f"bcp-official-{args.batch}-{threading.get_ident()}"
-            return create(**kwargs, extra_headers={"x-opencode-session": session})
+            extra = {"extra_body": {"thinking": {"type": "disabled"}}} if args.no_thinking else {}
+            return create(**kwargs, extra_headers={"x-opencode-session": session}, **extra)
 
         client.chat.completions.create = create_with_session
         return client

@@ -164,6 +164,36 @@ class RunStore:
             if action.get("action") == "tool_call" and (action.get("payload") or {}).get("ok")
         )
 
+    def tool_event_detail(self, run_id: str, event: dict) -> dict:
+        """按事件身份读取完整工具 I/O；旧记录无台账时仍返回原摘要。"""
+        if (event.get("type") != "subagent_tool_call" or event.get("phase") != "done"
+                or event.get("io_complete") or not event.get("model_call_id")
+                or not event.get("call_id")):
+            return event
+        identity = {
+            "run_id": run_id,
+            "agent_id": event.get("delegation_id") or "lead",
+            "model_call_id": event["model_call_id"],
+            "tool_call_id": event["call_id"],
+            "turn": event.get("turn"),
+            "tool": event.get("tool"),
+            "phase": "done",
+        }
+        try:
+            with (self._dir(run_id) / "tool_calls.jsonl").open(encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    if not isinstance(row, dict) or any(row.get(k) != v for k, v in identity.items()):
+                        continue
+                    if isinstance(row.get("arguments_raw"), str) and isinstance(row.get("result"), str):
+                        return {**event, "arguments_raw": row["arguments_raw"],
+                                "result_full": row["result"], "io_complete": True}
+        except FileNotFoundError:
+            pass
+        return event
+
     def read_source_text(self, run_id: str, ref: str) -> str | None:
         """读某个来源的**已登记**保存快照；未登记、非全文、或内容对不上哈希都拒绝。
 

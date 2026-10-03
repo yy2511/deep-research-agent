@@ -1461,13 +1461,17 @@ def api_run_original(run_id: str, ref: str):
         directory = STORE.root / run_id
         ledger = json.loads((directory / "run.json").read_text())
         source = next(s for s in ledger["sources"] if s["ref"] == ref and s["snapshot_kind"] == "full")
-        document = source["document"]
+        document = source.get("document") or source.get("download")
         path = directory / "sources" / f"{ref}.original"
         if path.resolve().parent != (directory / "sources").resolve():
             raise ValueError("非法来源路径")
         data = path.read_bytes()
         if hashlib.sha256(data).hexdigest() != document["original_sha256"]:
             raise ValueError("hash mismatch")
+        if source.get("download"):
+            return Response(data, media_type="application/octet-stream", headers={
+                "Content-Disposition": "attachment; filename*=UTF-8''" + quote(document["filename"]),
+                "X-Content-Type-Options": "nosniff"})
         return _original_response(data, document)
     except (OSError, ValueError, KeyError, TypeError, StopIteration) as exc:
         raise HTTPException(404, "该运行未保存资料原件或原件校验失败") from exc
@@ -1496,7 +1500,8 @@ def api_run_detail(run_id: str) -> dict:
 @app.get("/api/execution/status")
 def api_execution_status():
     from dra.execution import ExecutionConfig, availability
-    return availability(ExecutionConfig.from_env())
+    config = ExecutionConfig.from_env()
+    return {**availability(config), "network_mode": config.network_mode}
 
 
 @app.get("/api/runs/{run_id}/artifacts")
@@ -1664,7 +1669,8 @@ def _compact_event(event: dict) -> dict:
         "llm_call": ("input", "output", "tools"),
         "subagent_tool_call": ("arguments_raw", "result_full"),
     }.get(event.get("type"), ())
-    if not isinstance(event.get("seq"), int) or not any(k in event for k in fields):
+    if not isinstance(event.get("seq"), int) or (not any(k in event for k in fields)
+            and event.get("type") != "subagent_tool_call"):
         return event  # 无稳定 seq 的旧记录保持原格式。
     return {**{k: v for k, v in event.items() if k not in fields}, "detail_seq": event["seq"]}
 
@@ -1696,8 +1702,8 @@ def api_run_event_detail(run_id: str, seq: int) -> dict:
                 continue
             event = json.loads(line)
             if isinstance(event, dict) and event.get("seq") == seq:
-                return event
-    except ValueError as exc:
+                return STORE.tool_event_detail(run_id, event)
+    except (OSError, ValueError) as exc:
         raise HTTPException(503, "事件记录损坏，无法读取调用详情") from exc
     raise HTTPException(404, "这条调用记录不存在")
 

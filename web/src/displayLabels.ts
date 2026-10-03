@@ -22,6 +22,7 @@ export const TOOL_LABELS: Record<string, string> = {
   write_file: "写入文件",
   edit_file: "编辑文件",
   export_research_materials: "导出研究材料",
+  download_source: "下载原始资料",
   read_source: "精读原文",
   read_research_history: "读取研究历史",
   inspect_research: "查看研究状态",
