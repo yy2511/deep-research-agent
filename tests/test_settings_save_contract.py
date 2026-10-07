@@ -65,14 +65,22 @@ def test_browser_setting_roundtrip_and_old_client_preserves_it(tmp_path, monkeyp
     monkeypatch.setattr(rc, '_cache', None)
     with TestClient(web.app) as client:
         before = client.get('/api/config').json()
-        assert before['browser'] == {'enabled': True}
+        assert before['browser'] == {'enabled': True, 'mode': 'isolated', 'extension_browser': 'chrome', 'profile_dir_name': None}
         body = {k: before[k] for k in rc.RuntimeModelSettings.model_fields}
-        body['browser'] = {'enabled': False}
+        body['browser'] = {'enabled': True, 'mode': 'extension', 'extension_browser': 'msedge', 'profile_dir_name': 'Profile 2'}
         assert client.put('/api/config', json=body).status_code == 200
+        monkeypatch.setattr(rc, '_cache', None)
+        assert rc.to_simple_config(rc.current()).browser.model_dump() == body['browser']
+        # 仍在旧页面的客户端只有开关；不能丢掉新设置的扩展模式。
+        body['browser'] = {'enabled': False}
+        expected = {'enabled': False, 'mode': 'extension', 'extension_browser': 'msedge', 'profile_dir_name': 'Profile 2'}
+        assert client.put('/api/config', json=body).json()['browser'] == expected
         del body['browser']
-        assert client.put('/api/config', json=body).json()['browser'] == {'enabled': False}
+        assert client.put('/api/config', json=body).json()['browser'] == expected
         monkeypatch.setattr(rc, '_cache', None)
         assert not rc.to_simple_config(rc.current()).browser.enabled
+        body['browser'] = {'mode': 'isolated', 'profile_dir_name': None}
+        assert client.put('/api/config', json=body).json()['browser']['profile_dir_name'] is None
 
 
 @pytest.mark.parametrize("enabled", [False, True])

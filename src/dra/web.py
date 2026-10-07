@@ -553,6 +553,9 @@ def api_config_put(body: dict) -> dict:
     try:
         if 'browser' not in body:
             body = {**body, 'browser': runtime_config.current().browser.model_dump()}
+        elif isinstance(body['browser'], dict):
+            # 旧网页只提交 enabled，保存开关不应把已选浏览器模式/配置重置。
+            body = {**body, 'browser': {**runtime_config.current().browser.model_dump(), **body['browser']}}
         if 'vision' not in body:
             body = {**body, 'vision': runtime_config.current().vision.model_dump()}
         if 'execution_backend' not in body:

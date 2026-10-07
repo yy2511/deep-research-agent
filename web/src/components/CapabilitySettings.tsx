@@ -64,7 +64,7 @@ export function capabilityTiles(saved: ConfigPayload, execution: ExecutionProbe,
       value: execEnabled == null ? "未知" : execEnabled ? "开启" : "关闭",
       detail: exec.short, tone: exec.tone },
     { id: "cap-browser", icon: "globe", label: "浏览器",
-      value: saved.browser?.enabled ? "开启" : "关闭", detail: "动态网页与报告预览，按需启动",
+      value: saved.browser?.enabled ? "开启" : "关闭", detail: saved.browser?.mode === "extension" ? "官方扩展 · 复用登录状态" : "独立后台浏览器，按需启动",
       tone: saved.browser?.enabled ? "ok" : "off" },
     { id: "cap-judge", icon: "verify", label: "引文核验",
       value: judgeOn ? "开启" : "关闭", detail: keyMissing ? "密钥未配置" : judgeOn ? "保存证据时核验" : "不额外核验",
@@ -232,8 +232,30 @@ export function CapabilitySettings({ s, onManageSkills }: { s: RuntimeSettings; 
 
       <CapCard id="cap-browser" icon="globe" title="浏览器"
         summary="需要时打开动态网页、定位原图，或预览报告并检查图片、布局和交互。连续操作保留页面状态。"
-        control={<Switch label="浏览器" checked={!!config.browser?.enabled} onChange={enabled => setConfig({...config, browser: {enabled}})} />}>
-        <p className="field-hint">使用独立 Playwright 浏览器，不使用你的登录会话。截图沿用上面的看图设置；主、子 Agent 各自操作页面，共享文件。需要本机安装 Node、Playwright MCP 和 Chromium。</p>
+        control={<Switch label="浏览器" checked={!!config.browser?.enabled} onChange={enabled => setConfig({...config, browser: {...config.browser, enabled}})} />}>
+        <div className="field"><span className="field-label">连接方式</span>
+          <Select ariaLabel="浏览器连接方式" value={config.browser?.mode ?? "isolated"}
+            onChange={mode => setConfig({...config, browser: {enabled: false, ...config.browser, mode: mode as "isolated"|"extension"}})}
+            options={[{value:"isolated",label:"独立后台浏览器"},{value:"extension",label:"官方扩展 · 复用已登录浏览器"}]} />
+        </div>
+        {config.browser?.mode === "extension" ? <>
+          <div className="field"><span className="field-label">已登录的浏览器</span>
+            <Select ariaLabel="扩展浏览器" value={config.browser.extension_browser ?? "chrome"}
+              onChange={value => setConfig({...config, browser: {...config.browser!, extension_browser: value as "chrome"|"msedge"}})}
+              options={[{value:"chrome",label:"Google Chrome"},{value:"msedge",label:"Microsoft Edge"}]} />
+          </div>
+          <p className="field-hint">先在该浏览器安装 <a href="https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm" target="_blank" rel="noreferrer">Playwright 官方扩展</a>，并登录目标网站。研究首次操作浏览器时，扩展会打开授权页面，由你选择允许访问的标签页。</p>
+          <p className="field-hint">主、子 Agent 分别连接，各有标签组，可能需要分别授权。连接名称会标明 DRA、研究编号和 Agent。保存设置只影响下一次研究；选择此模式不代表已经连接成功。</p>
+          <details><summary>有多个浏览器个人资料</summary>
+            <label className="field"><span className="field-label">个人资料目录名（可选）</span>
+              <input className="input" aria-label="浏览器个人资料目录名" value={config.browser.profile_dir_name ?? ""} placeholder="例如 Profile 2"
+                onChange={e => setConfig({...config, browser: {...config.browser!, profile_dir_name: e.target.value || null}})} />
+              <small className="field-hint">留空连接最近使用且装有扩展的个人资料。填写 chrome://version 或 edge://version 中“个人资料路径”的最后一段，例如 Default 或 Profile 2。</small>
+            </label>
+          </details>
+          <p className="field-hint">DRA 服务与浏览器须运行在同一台桌面电脑；只在远程服务器或应用 Docker 容器中运行 DRA 时，不能直接复用你电脑的浏览器。网站额外的安全验证仍需你处理。</p>
+        </> : <p className="field-hint">按需启动独立 Playwright Chromium，不使用你的个人登录状态。需要本机安装 Node、Playwright MCP 和 Chromium；需要登录的网页可切换到官方扩展模式。</p>}
+        <p className="field-hint">截图沿用上面的看图设置；主、子 Agent 各自操作页面，共享文件。</p>
       </CapCard>
 
       <CapCard id="cap-judge" icon="verify" title="引文核验"

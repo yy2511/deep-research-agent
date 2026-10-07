@@ -8,12 +8,14 @@ import threading
 import time
 
 from mcp import Client, types
+from dra import __version__
 from dra.mcp_client import MCPError
 
 
 class MCPSession:
-    def __init__(self, transport, *, root, client_factory=Client):
+    def __init__(self, transport, *, root, client_factory=Client, client_name='DRA'):
         self.transport, self.root, self.client_factory = transport, root, client_factory
+        self.client_info = types.Implementation(name=client_name, version=__version__)
         self.requests = queue.Queue()
         self.stopping = threading.Event()
         self.error = None
@@ -48,7 +50,8 @@ class MCPSession:
     async def _serve(self):
         async def roots(*_):
             return types.ListRootsResult(roots=[types.Root(uri=self.root.as_uri(), name='研究工作区')])
-        async with self.client_factory(self.transport, list_roots_callback=roots, cache=None) as client:
+        async with self.client_factory(self.transport, list_roots_callback=roots,
+                                       client_info=self.client_info, cache=None) as client:
             while True:
                 request = await asyncio.to_thread(self.requests.get)
                 if request is None:

@@ -63,6 +63,19 @@ describe("Bash/Docker 状态文案", () => {
 });
 
 describe("研究能力页", () => {
+  it("浏览器扩展草稿显示安装授权说明，总览仍按已保存模式", () => {
+    const saved: ConfigPayload = {...config, browser: {enabled: true, mode: "isolated"}};
+    const draft: ConfigPayload = {...saved, browser: {...saved.browser!, mode: "extension", extension_browser: "msedge", profile_dir_name: "Profile 2"}};
+    const html = renderToStaticMarkup(<CapabilitySettings s={fakeSettings(draft, saved)} onManageSkills={() => {}} />);
+    expect(html).toContain('aria-label="浏览器连接方式"');
+    expect(html).toContain("Playwright 官方扩展");
+    expect(html).toContain("由你选择允许访问的标签页");
+    expect(html).toContain("Microsoft Edge");
+    expect(html).toContain('value="Profile 2"');
+    expect(html).toContain("选择此模式不代表已经连接成功");
+    expect(capabilityTiles(saved, probe(status()), {names: []}).find(t => t.id === "cap-browser")?.detail).toContain("独立后台");
+    expect(capabilityTiles(draft, probe(status()), {names: []}).find(t => t.id === "cap-browser")?.detail).toContain("复用登录状态");
+  });
   it("总览按已保存设置显示，并取服务端重试次数", () => {
     const tiles = capabilityTiles(config, probe(status()), { names: ["方案对比", "论文评审"] });
     const byId = Object.fromEntries(tiles.map(t => [t.id, t]));

@@ -110,7 +110,14 @@ docker build -t dra-sandbox:local sandbox_image
 ### 浏览器和图片检查
 
 “设置 → 研究能力 → 浏览器”控制按需启动的 Playwright 浏览器。Web 默认开启，Python API 需显式设置 `BrowserConfig(enabled=True)`。
-本机安装依赖（在项目根目录）：
+支持两种连接方式，默认仍为独立后台浏览器：
+
+- **独立后台浏览器**：自动启动无个人登录状态的 Chromium，适合公开网页和报告预览。
+- **官方扩展 · 复用已登录浏览器**：连接本机 Chrome/Edge 的已有登录状态。先在对应个人资料安装 [Playwright 官方扩展](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm)，登录目标网站，在设置中选择扩展模式及浏览器并保存。首次实际操作时，由官方扩展打开授权页，让你选择可访问的标签页；各 Agent 各有连接和标签组，名称包含研究编号及 Agent。没有配置跳过授权的 token，不导出或复制登录 cookie。多个个人资料可填写 `chrome://version` / `edge://version` 中个人资料路径的最后一段（如 `Profile 2`），留空由官方扩展选最近使用且已安装扩展的资料。
+
+扩展模式需要 DRA 服务与 Chrome/Edge 在同一台桌面电脑；远程服务器或应用 Docker 容器不能直接连接你电脑的浏览器。Bash 使用 Docker 不影响本机运行的浏览器连接。选择扩展模式不代表已完成连接，也不保证绕过网站额外的安全验证；保存只影响新研究。Python 可配置 `BrowserConfig(enabled=True, mode='extension', extension_browser='chrome', profile_dir_name=None)`。官方说明见 [Playwright 扩展文档](https://github.com/microsoft/playwright/tree/main/packages/extension#readme)。
+
+本机安装依赖（在项目根目录；扩展模式无需单独下载无头 Chromium）：
 
 ```bash
 npm ci --prefix web
@@ -120,7 +127,7 @@ node web/node_modules/playwright/cli.js install chromium
 主、子 Agent 各自保持连续的页面会话，共用工作区文件。可读取动态网页、定位原图，也可打开实际报告检查断图、排版和交互。
 截图通过与 `view_image` 相同的原生/辅助视觉通道传给模型；关闭看图时只保存图片，不声称已检查。
 官方 `api.deepseek.com` 的已确认 Flash 型号可原生读图；同名中转模型仍以该连接的 API 或人工声明为准，未知能力继续使用配置的备用视觉模型。
-自制报告、截图和工作文件只作交付检查，不能作为外部事实证据。浏览器使用本轮独立会话，不连接个人登录浏览器。
+自制报告、截图和工作文件只作交付检查，不能作为外部事实证据。运行记录保存实际浏览器模式；遇到登录墙时提示用户处理登录/授权。
 外部页面用 `browser_snapshot` 取得可引用的页面快照；脚本返回值、代码和操作日志不当网页原文。输入过内容或运行脚本后发生变化的页面只作检查，重新打开原网址或独立 `read_source` 后再取证；未改动页面的只读脚本仍可使用。仅用浏览器生成文件也可交付，无须先启动 Bash。BCP、DeepSearchQA、DRB2 评测入口关闭浏览器，以保持各自取证范围。
 应用 Dockerfile 已包含 Node、Playwright MCP 和 Chromium 安装步骤；Docker 部署更新时需重建应用镜像，执行沙箱镜像无需因浏览器功能另行修改。
 

@@ -4544,7 +4544,7 @@ def run_lead_loop(
         from dra.vision import INSTRUCTIONS
         base_messages[0]["content"] += INSTRUCTIONS
     if config.browser.enabled:
-        base_messages[0]["content"] += browser.INSTRUCTIONS
+        base_messages[0]["content"] += browser.instructions(config.browser)
     if config.execution.enabled:
         base_messages[0]["content"] += (execution_tools.instructions_for(context) if context.execution_capability.get("available")
             else "\n本轮执行工具不可用：" + str(context.execution_capability.get("reason")) + "。仍可研究并交付文字报告；文件要求须明确记为缺口。")

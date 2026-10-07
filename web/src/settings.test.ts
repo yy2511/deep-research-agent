@@ -16,6 +16,11 @@ describe("模型设置保存契约", () => {
     expect(settingsUpdate({...config, browser: {enabled: false}}).browser).toEqual({enabled: false});
     expect(settingsUpdate(config)).not.toHaveProperty('browser');
   });
+  it("扩展模式、浏览器和个人资料原样保存", () => {
+    const browser = {enabled: true, mode: "extension" as const, extension_browser: "msedge" as const, profile_dir_name: "Profile 2"};
+    expect(settingsUpdate({...config, browser}).browser).toEqual(browser);
+    expect(settingsUpdate({...config, browser: {...browser, enabled: false}}).browser).toEqual({...browser, enabled: false});
+  });
   it("次数限制开关显式保存，关闭不被漏掉", () => {
     expect(settingsUpdate(config).call_limits_enabled).toBe(false);
     expect(settingsUpdate({ ...config, call_limits_enabled: true }).call_limits_enabled).toBe(true);

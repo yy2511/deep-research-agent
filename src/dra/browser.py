@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import threading
+from typing import Literal
 from urllib.parse import quote, unquote, urlsplit
 from uuid import uuid4
 
@@ -27,6 +28,9 @@ from dra.site_filter import is_blocked, provider_exclude_domains
 class BrowserConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
     enabled: bool = False
+    mode: Literal['isolated', 'extension'] = 'isolated'
+    extension_browser: Literal['chrome', 'msedge'] = 'chrome'
+    profile_dir_name: str | None = None
 
 
 CLI = Path(__file__).resolve().parents[2] / 'web/node_modules/@playwright/mcp/cli.js'
@@ -56,7 +60,20 @@ browser_take_screenshot 不指定 filename 时直接返回图片；指定 filena
 
 def availability():
     return {'available': bool(shutil.which('node') and CLI.is_file()),
-            'note': '需要 Node、已安装的 Playwright MCP 和 Chromium；浏览器在首次操作时启动。'}
+            'note': '需要 Node 和 Playwright MCP；独立模式另需 Chromium，扩展模式另需 Chrome/Edge 及官方 Playwright 扩展。'}
+
+
+def connection_note(config: BrowserConfig):
+    if config.mode == 'extension':
+        return ('当前为 Playwright 官方扩展模式，连接用户已登录的 Chrome/Edge。首次操作需要用户在扩展页面授权连接；'
+                '每个 Agent 使用自己的连接和标签组，用户决定授权哪些页面。遇到登录、验证或授权未完成时，'
+                '说明需要用户处理哪一步，不要反复刷新代替授权，也不要把登录页当成目标内容。')
+    return ('当前为独立后台浏览器，没有用户的个人登录状态；遇到登录墙时说明原因，'
+            '可请用户在设置中选择官方扩展模式后重新研究，不要反复打开登录页。')
+
+
+def instructions(config: BrowserConfig):
+    return INSTRUCTIONS + '\n' + connection_note(config) + '\n'
 
 
 def _sections(text):
@@ -111,7 +128,7 @@ class BrowserSession:
     def start(self):
         if self.session is not None:return
         if not availability()['available']:
-            raise MCPError('浏览器依赖尚未安装：在 web 目录执行 npm ci 和 npx playwright install chromium')
+            raise MCPError('浏览器依赖尚未安装：在 web 目录执行 npm ci；独立模式另需 npx playwright install chromium，扩展模式需 Chrome/Edge 安装官方 Playwright 扩展')
         self.workspace.prepare()
         self.directory.mkdir(parents=True, exist_ok=True)
         workspace = self.workspace
@@ -136,9 +153,17 @@ class BrowserSession:
         self.preview_origin = f'http://127.0.0.1:{self.server.server_port}'
         output = self.workspace.path / 'work' / 'browser' / (self.ctx.delegation_id or 'lead')
         output.mkdir(parents=True, exist_ok=True)
-        config = {'browser': {'browserName': 'chromium', 'isolated': True, 'launchOptions': {'headless': True}},
-                  'outputDir': str(output), 'imageResponses': 'allow', 'filePaths': 'relative',
+        config = {'outputDir': str(output), 'imageResponses': 'allow', 'filePaths': 'relative',
                   'timeouts': {'idle': 0}}
+        browser_config = self.ctx.config.browser
+        args = [str(CLI), '--config', str((self.directory / 'config.json').resolve())]
+        if browser_config.mode == 'extension':
+            # 官方实现先判断 isolated，再判断 extension；扩展模式不能沿用独立启动配置。
+            args += ['--extension', '--browser', browser_config.extension_browser]
+            if browser_config.profile_dir_name:
+                args += ['--profile-dir-name', browser_config.profile_dir_name]
+        else:
+            config['browser'] = {'browserName': 'chromium', 'isolated': True, 'launchOptions': {'headless': True}}
         if self.ctx.config.source_mode == 'library':
             config['network'] = {'allowedOrigins': [self.preview_origin]}
         elif self.ctx.config.blocked_sites:
@@ -147,11 +172,12 @@ class BrowserSession:
                 for pattern in (host, '*.' + host)]}
         atomic_json(self.directory / 'config.json', config)
         transport = StdioServerParameters(command=shutil.which('node'),
-            args=[str(CLI), '--config', str((self.directory / 'config.json').resolve())],
+            args=args,
             env={key: os.environ[key] for key in ('PLAYWRIGHT_BROWSERS_PATH',) if key in os.environ},
             cwd=self.workspace.path)
         self.log = (self.directory / 'server.log').open('a')
-        self.session = MCPSession(stdio_client(transport, errlog=self.log), root=self.workspace.path)
+        self.session = MCPSession(stdio_client(transport, errlog=self.log), root=self.workspace.path,
+            client_name=f'DRA {self.ctx.store.run_id} / {self.ctx.delegation_id or "主 Agent"}')
 
     def _page_state(self, options):
         payload = self.session.request('browser_evaluate', {'function': _PAGE_STATE}, **options)
@@ -177,6 +203,7 @@ class BrowserSession:
             name, arguments = 'browser_navigate', {'url': self.preview_origin + quote(path.removeprefix('/workspace'), safe='/')}
         if not name:
             return {'ok': True, 'tools': list(self.tools.values()),
+                    'mode': self.ctx.config.browser.mode, 'connection': connection_note(self.ctx.config.browser),
                     'workspace': '/workspace', 'note': '同一Agent连续调用保留页面状态；文件名以工作区为根。页面JS用browser_evaluate；宿主Node代码工具未开放，文件处理使用选定的 Bash 执行环境。'}
         if name not in self.tools:raise MCPError('未提供该浏览器工具；请先用 browser() 查看目录')
         try:_valid_schema(self.tools[name]['inputSchema']).validate(arguments)
@@ -186,17 +213,21 @@ class BrowserSession:
         if name == 'browser_navigate' and is_blocked(arguments.get('url'), self.ctx.config.blocked_sites):
             raise MCPError('该地址在用户设置的网站黑名单里')
         if name == 'browser_evaluate':
-            if self._page_state(options):
-                self.session.request('browser_evaluate', {'function': _BEFORE_EVALUATE}, **options)
+            if not self._page_state(options):
+                raise MCPError('浏览器未取得可用页面；请先完成浏览器连接/授权，并用 browser_navigate 或 browser_snapshot 确认页面。')
+            self.session.request('browser_evaluate', {'function': _BEFORE_EVALUATE}, **options)
         payload = self.session.request(name, arguments, **options)
         ident = uuid4().hex
         metadata = {'server_id': 'playwright', 'server_name': 'Playwright', 'tool': name,
+                    'browser_mode': self.ctx.config.browser.mode,
                     'receipt_id': ident, 'actor': self.ctx.delegation_id or 'lead',
                     'tool_call_id': self.ctx.active_tool_call_id}
         atomic_json(self.ctx.store.dir / 'mcp_results' / (ident + '.json'),
                     {'mcp': metadata, 'arguments': arguments, 'result': payload})
         parts, warnings = source_parts(payload, bounded=False)
-        state = self._page_state(options)
+        # 失败回执直接交给模型；不要因补读页面身份而再次发起扩展授权连接。
+        closed = name == 'browser_close' or (name == 'browser_tabs' and arguments.get('action') == 'close')
+        state = None if payload.get('isError') or closed else self._page_state(options)
         self.current_url = state['url'] if state else ''
         if is_blocked(self.current_url, self.ctx.config.blocked_sites):
             raise MCPError('浏览器当前地址在用户设置的网站黑名单里，未展示或登记其内容')
@@ -243,6 +274,7 @@ class BrowserSession:
             response['images'] = mcp_images(self.ctx, payload, metadata, question=args.get('question'),
                                            inspection=not response['evidence_eligible'], page_url=self.current_url)
         self.ctx.store.record_action('browser_call', {'agent_id': metadata['actor'], 'tool': name,
+            'browser_mode': self.ctx.config.browser.mode,
             'receipt_id': ident, 'page_url': self.current_url, 'inspection': inspection,
             'evidence_eligible': response['evidence_eligible'], 'ok': response['ok']})
         self.ctx._commit_ledger()

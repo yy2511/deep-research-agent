@@ -1323,7 +1323,9 @@ Compose 覆盖配置中获得 socket 权限，权限等同管理该 Docker 主�
 
 ### 持久浏览器与图文交付检查（2026-10-07）
 
-Web 的 `browser.enabled` 默认开启，Python `BrowserConfig` 默认关闭。BCP、DeepSearchQA、DRB2 现役评测入口显式关闭浏览器，防止绕过各自固定语料/泄题过滤；历史冻结运行不变。首次 `browser()` 披露当前安装版本的真实工具 schema，实际需要时才启动 Playwright MCP 和 Chromium；每个 Agent 一条持久连接，页面状态跨调用保留，轮末关闭。浏览器使用独立会话，不接入个人登录状态。stdio 只额外转交部署配置的 `PLAYWRIGHT_BROWSERS_PATH`，不整包继承服务商环境。工具错误、原始 MCP 回执及运行日志保留；没有另加工具条目或正文字符截断。
+Web 的 `browser.enabled` 默认开启，Python `BrowserConfig` 默认关闭。BCP、DeepSearchQA、DRB2 现役评测入口显式关闭浏览器，防止绕过各自固定语料/泄题过滤；历史冻结运行不变。首次 `browser()` 披露当前安装版本的真实工具 schema，实际需要时才连接浏览器；每个 Agent 一条持久连接，页面状态跨调用保留，轮末关闭 MCP 连接。默认 `browser.mode='isolated'` 使用无个人登录状态的后台 Chromium；可选 `extension` 通过现有固定版本官方 MCP 的 `--extension --browser chrome|msedge` 连接已有登录浏览器，可用 `profile_dir_name` 对应官方 `--profile-dir-name` 选择个人资料。扩展模式不传 isolated/headless（官方先判断 isolated），沿用工作区、快照、图片和网络配置。主子 Agent 的客户端名称包含运行编号及 Agent，由扩展分别授权并分组；不配置免确认 token，也不导出 cookie。stdio 只额外转交部署配置的 `PLAYWRIGHT_BROWSERS_PATH`，不整包继承服务商环境。工具错误、原始 MCP 回执及运行日志保留，记录实际模式；失败、关闭浏览器/标签后不补发页面状态请求，避免再次连接或打开页面。没有另加工具条目或正文字符截断。
+
+模式只在新研究组装时生效，研究模型和首次工具目录都会收到当前连接方式与登录/验证需要用户处理的说明。旧设置客户端只提交 `enabled` 时保留模式、浏览器和个人资料。扩展安装及页面授权由浏览器处理，工具目录发现不等于已连接；授权等待仍计入研究时限并响应取消。扩展模式需在有 Chrome/Edge 的同一桌面环境运行 DRA；不提供跨机器/应用容器的扩展桥接。Bash 后端独立，使用 Docker 执行不改变浏览器连接方式。
 
 浏览器与执行工具共享 input/work/output。`browser(preview_path=...)` 通过只读取本轮工作区的 localhost 服务打开实际文件；可检查 DOM、窄屏、按钮、图片与控制台，再用截图检查呈现。不要求每份报告固定截图数量。命名截图可由 `view_image(path=...)` 回看；直接返回图片的 MCP 回执走同一视觉路由，保留原图和实际使用的模型。未知能力使用用户配置的备用视觉模型，视觉错误返回给研究模型，不声称已看见图片。
 

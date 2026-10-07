@@ -21,7 +21,7 @@ export interface SimpleBudget {
   storage_max_chars: number;
 }
 export interface ConfigPayload {
-  browser?: {enabled:boolean};
+  browser?: {enabled:boolean;mode?:"isolated"|"extension";extension_browser?:"chrome"|"msedge";profile_dir_name?:string|null};
   vision?: {enabled:boolean;mode:"auto"|"force_auxiliary";provider:string;model:string};
   schema_version?: number;
   call_limits_enabled?: boolean;
