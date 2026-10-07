@@ -54,6 +54,7 @@ packages = ["src/dra"]
 testpaths = ["tests"]
 markers = [
     "browser: 本机浏览器与离线测试页面，需要 --run-browser",
+    "native: 真实 macOS OS 沙箱验收，需要 --run-native",
     "docker: 真实本机容器验收，需要 --run-docker",
     "live: 需要联网 / 真实 API 调用的集成测试（默认跳过，加 --run-live 才跑）",
 ]

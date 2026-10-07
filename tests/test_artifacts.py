@@ -31,7 +31,7 @@ def test_file_finish_and_no_format_default(tmp_path):
     manifest=json.loads((tmp_path/'artifacts/manifest.json').read_text())
     assert len(records)==2 and manifest['artifacts']==records
     provenance=manifest['provenance']
-    assert provenance=={
+    assert provenance=={'backend':'docker',
         'draft_sha256':hashlib.sha256(body.encode()).hexdigest(),
         'image_id':'sha256:image','inputs':ctx.execution.inputs,
         'source_materials':ctx.execution_materials,'execution_files':list(ctx.execution_files.values()),

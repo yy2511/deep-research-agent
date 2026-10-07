@@ -104,7 +104,7 @@ class ExecutionPool:
 
     @staticmethod
     def _renew(entry, ttl):
-        receipt=entry.container.exec_run(['python','-I','/opt/dra-tools/helper.py','--lease',str(ttl)],user='0:0')
+        receipt=entry.container.exec_run(['/opt/runtime/.venv/bin/python','-I','/opt/dra-tools/helper.py','--lease',str(ttl)],user='0:0')
         if receipt.exit_code!=0 or json.loads(receipt.output).get('ok') is not True:
             raise ExecutionError('lease_failed')
 
@@ -134,6 +134,7 @@ _LOCK=threading.Lock()
 
 
 def get_pool(run_root, config):
+    if config.backend != 'docker': return None
     key=(str(Path(run_root).resolve()),config.docker_host)
     with _LOCK:
         pool=_POOLS.get(key)

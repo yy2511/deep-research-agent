@@ -33,6 +33,7 @@ class ExecutionError(ValueError):
 class ExecutionConfig(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
     enabled: bool = False
+    backend: Literal['docker', 'native'] = 'docker'
     network_mode: Literal['none', 'bridge'] = 'none'
     image: str = 'dra-sandbox:local'
     docker_host: str = Field(default='', exclude=True)
@@ -52,6 +53,7 @@ class ExecutionConfig(BaseModel):
         def value(name, default=''):
             return os.environ.get(name, local.get(name) or default)
         return cls(enabled=value('DRA_EXECUTION_ENABLED').lower() in ('1','true'),
+                   backend=value('DRA_EXECUTION_BACKEND','docker'),
                    network_mode=value('DRA_EXECUTION_NETWORK_MODE','none'),
                    image=value('DRA_EXECUTION_IMAGE','dra-sandbox:local'),
                    docker_host=value('DRA_DOCKER_HOST'),
@@ -101,6 +103,9 @@ def docker_client(config):
 
 def availability(config):
     if not config.enabled: return {'enabled':False,'available':False,'reason':'disabled'}
+    if config.backend == 'native':
+        from dra.execution_native import native_availability
+        return native_availability(config)
     if _PENDING: return {'enabled':True,'available':False,'reason':'cleanup_pending'}
     client=None
     try:
@@ -108,7 +113,9 @@ def availability(config):
         client.ping()
         image=client.images.get(config.image)
         if image.labels.get('dra.sandbox.protocol')!='3': raise ExecutionError('image_incompatible')
-        return {'enabled':True,'available':True,'image_id':image.id}
+        return {'enabled':True,'available':True,'image_id':image.id,
+                'session_dependencies':image.labels.get('dra.sandbox.dependencies')=='1',
+                'system_tools':image.labels.get('dra.sandbox.tools','')}
     except docker.errors.ImageNotFound: reason='image_missing'
     except ExecutionError as exc: reason=exc.code
     except (docker.errors.DockerException,OSError): reason='docker_unavailable'
@@ -123,7 +130,7 @@ def instance_id(run_root):
 
 def reap_orphans(run_root, config, active_run_ids=()):
     """仅清理由该运行根目录控制、且调用方确认没有活跃线程的容器。"""
-    if not config.enabled: return []
+    if not config.enabled or config.backend != 'docker': return []
     client=None; removed=[]
     marker=f'dra-exec-{instance_id(run_root)}-reaper'
     try:
@@ -155,6 +162,7 @@ class ExecutionSession:
         self.workspace=ConversationWorkspace(run_dir,run_id,config,conversation_id)
         self._last_quota_check=0.0
         self.pool=pool; self.reused=False; self.last_container_id=None
+        self.session_dependencies=False; self.dependency_manifest=None
 
     def _persist(self):
         from dra.durable import atomic_json
@@ -164,7 +172,7 @@ class ExecutionSession:
         except OSError as exc: raise LLMPersistenceError('执行会话状态无法落盘') from exc
 
     def summary(self):
-        return {'state':self.state,'image_id':self.image_id,'container_id':self.container.id if self.container else self.last_container_id,
+        return {'backend':self.config.backend, 'dependency_manifest':self.dependency_manifest, 'state':self.state,'image_id':self.image_id,'container_id':self.container.id if self.container else self.last_container_id,
                 'container_name':self.container_name,'commands':self.commands,'log_bytes':self.log_bytes,'error':self.error,
                 'conversation_id':self.workspace.conversation_id,'workspace_persistent':True,'reused_container':self.reused,'limits':self.config.model_dump()}
 
@@ -181,6 +189,7 @@ class ExecutionSession:
             if _PENDING: raise ExecutionError('cleanup_pending')
             self._check(); self.state='starting'; self._persist()
             try:
+                self.workspace.acquire()
                 entry=self.pool.acquire(self) if self.pool else None
                 if entry:
                     self.client=entry.client; self.container=entry.container
@@ -189,6 +198,7 @@ class ExecutionSession:
                 image=self.client.images.get(self.config.image)
                 if image.labels.get('dra.sandbox.protocol')!='3': raise ExecutionError('image_incompatible')
                 self.image_id=image.id
+                self.session_dependencies=image.labels.get('dra.sandbox.dependencies')=='1'
                 self.workspace.prepare()
                 self.workspace.reset_input()
                 if entry and entry.image_id==image.id:
@@ -217,7 +227,10 @@ class ExecutionSession:
                     security_opt=['no-new-privileges:true'],tmpfs=tmpfs,mounts=self.workspace.mounts(),shm_size=32*MiB,
                     mem_limit=self.config.memory_mb*MiB,memswap_limit=self.config.memory_mb*MiB,
                     nano_cpus=1_000_000_000,pids_limit=self.config.pids,privileged=False,
-                    environment={'HOME':'/tmp','LANG':'C.UTF-8','MPLCONFIGDIR':'/tmp/matplotlib','XDG_CACHE_HOME':'/tmp/cache'},
+                    environment={'HOME':'/tmp','LANG':'C.UTF-8','MPLCONFIGDIR':'/tmp/matplotlib','XDG_CACHE_HOME':'/tmp/cache',
+                                 'DRA_WORKSPACE':'/workspace','DRA_INPUT':'/workspace/input',
+                                 'DRA_WORK':'/workspace/work','DRA_OUTPUT':'/workspace/output',
+                                 'DRA_DEPENDENCY_KEY':'docker-'+image.id.removeprefix('sha256:')[:12]},
                     labels={'dra.managed':'1','dra.instance':instance_id(self.run_dir.parent),'dra.run':self.run_id,
                             'dra.conversation':self.workspace.key,
                             'dra.expires':str(time.time()+self.deadline-time.monotonic())},
@@ -230,7 +243,7 @@ class ExecutionSession:
 p=pathlib.Path('/sys/fs/cgroup')
 print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.max').read_text().strip(),'cpu':(p/'cpu.max').read_text().strip(),'input_writable':os.access('/workspace/input',os.W_OK),'root_readonly':bool(os.statvfs('/').f_flag & os.ST_RDONLY),'uid':os.getuid()}))"""
                 check+=f"\nassert pathlib.Path('/workspace/work/.dra-probe-{probe}').read_text()=={probe!r}\n"
-                receipt=self._exec(['python','-I','-c',check],5,capture=16384,logs=False)
+                receipt=self._exec(['/opt/runtime/.venv/bin/python','-I','-c',check],5,capture=16384,logs=False)
                 probe_path.unlink(missing_ok=True)
                 actual=json.loads(receipt['stdout'])
                 quota,period=actual['cpu'].split()
@@ -254,7 +267,7 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
                 raise ExecutionError(self.error) from exc
 
     def _renew_lease(self, ttl):
-        receipt=self._exec(['python','-I','/opt/dra-tools/helper.py','--lease',str(max(1,ttl))],5,user='0:0',logs=False)
+        receipt=self._exec(['/opt/runtime/.venv/bin/python','-I','/opt/dra-tools/helper.py','--lease',str(max(1,ttl))],5,user='0:0',logs=False)
         if not receipt['ok'] or json.loads(receipt['stdout']).get('ok') is not True:
             raise ExecutionError('lease_failed')
 
@@ -266,7 +279,7 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
                 self.close(); return
             try:
                 controller='65534:65534' if self.workspace.uid!=65534 else '65533:65533'
-                receipt=self._exec(['python','-I','/opt/dra-tools/helper.py','--idle-check',str(self.workspace.uid)],5,user=controller,logs=False)
+                receipt=self._exec(['/opt/runtime/.venv/bin/python','-I','/opt/dra-tools/helper.py','--idle-check',str(self.workspace.uid)],5,user=controller,logs=False)
                 data=json.loads(receipt['stdout'])
                 if not receipt['ok'] or data.get('ok') is not True or data.get('busy') is not False:
                     self.close(); return
@@ -276,21 +289,22 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
                 self.workspace.record()
                 if not self.pool.park(self): self.close(); return
                 self.last_container_id=self.container.id
-                self.container=None; self.client=None; self.state='released'; self._persist()
+                self.container=None; self.client=None; self.state='released'; self.workspace.release(); self._persist()
             except Exception as exc:
                 self.error=getattr(exc,'code','release_failed'); self.close()
                 from dra.llm import LLMPersistenceError
                 if isinstance(exc,LLMPersistenceError): raise
 
-    def _exec(self, argv, timeout, *, capture=8192, logs=True, stdin=None, user=None):
+    def _exec(self, argv, timeout, *, capture=8192, logs=True, stdin=None, user=None, managed=None):
         from dra.llm import LLMPersistenceError
         from dra.execution_process import RUN, STOP, CLEANUP
         self._check(); end=min(self.deadline,time.monotonic()+timeout)
         self._last_quota_check=time.monotonic()
         execution_id='exec_'+uuid4().hex; started=time.monotonic()
         control_path='/tmp/dra-'+execution_id
-        if logs:
-            argv=['python','-I','-c',RUN,control_path,*argv]
+        if managed is None:managed=logs
+        if managed:
+            argv=['/opt/runtime/.venv/bin/python','-I','-c',RUN,control_path,*argv]
         token=self.client.api.exec_create(self.container.id,argv,user=user or self.workspace.worker,workdir='/',tty=False,stdin=stdin is not None)['Id']
         stream=None; handles={}; saved=0; outputs={1:bytearray(),2:bytearray()}; total=0
         stdout_total=0; stdout_saved=0
@@ -345,8 +359,8 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
             code=info['ExitCode']
             if code==137:
                 raise ExecutionError('process_killed', '进程被强制终止（退出 137，可能达到内存限制）')
-            if logs:
-                cleaned=self.container.exec_run(['python','-I','-c',CLEANUP,control_path],
+            if managed:
+                cleaned=self.container.exec_run(['/opt/runtime/.venv/bin/python','-I','-c',CLEANUP,control_path],
                     user=user or self.workspace.worker,workdir='/')
                 if cleaned.exit_code!=0:raise ExecutionError('command_cleanup_failed')
             return {'ok':code==0,'error_code':None if code==0 else 'process_exit','exit_code':code,
@@ -356,11 +370,11 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
                     'elapsed_ms':round(1000*(time.monotonic()-started)),'execution_id':execution_id,'workspace_available':True}
         except BaseException as exc:
             self.error=getattr(exc,'code','execution_uncertain')
-            if logs and isinstance(exc,ExecutionError) and exc.code in ('cancelled','command_timeout','process_killed'):
+            if managed and isinstance(exc,ExecutionError) and exc.code in ('cancelled','command_timeout','process_killed'):
                 # 各 Agent 的命令串行使用同一实例；只停止当前命令组，不销毁共享环境。
                 # 控制调用不再次检查已触发的取消信号，也不消耗新的研究命令额度。
                 try:
-                    stopped=self.container.exec_run(['python','-I','-c',STOP,control_path],
+                    stopped=self.container.exec_run(['/opt/runtime/.venv/bin/python','-I','-c',STOP,control_path],
                         user=user or self.workspace.worker,workdir='/')
                     if stopped.exit_code!=0:raise ExecutionError('command_cancel_failed')
                 except Exception:
@@ -386,6 +400,9 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
         with self.lock:
             self.start()
             if name not in ('bash','read_file','write_file','edit_file'): raise ExecutionError('invalid_arguments')
+            args=dict(args)
+            key='cwd' if name=='bash' else 'path'
+            if key in args: args[key]=self.workspace.logical_path(args[key])
             request={**args,'op':name}
             workspace_path(args.get('cwd','/workspace/work') if name=='bash' else args.get('path'),write=name in ('bash','write_file','edit_file'))
             if name=='bash':
@@ -398,14 +415,39 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
             else: timeout=10
             encoded=base64.b64encode(json.dumps(request,ensure_ascii=False).encode()).decode()
             if len(encoded)>512*1024: raise ExecutionError('quota_exceeded')
-            argv=['python','-I','/opt/dra-tools/helper.py',*[encoded[i:i+8192] for i in range(0,len(encoded),8192)]]
+            argv=self._helper_argv(encoded)
             receipt=self._exec(argv,timeout,capture=8192 if name=='bash' else 256*1024)
             self._persist()
-            if name=='bash': return receipt
+            if name=='bash':
+                if self.session_dependencies and time.monotonic()<self.deadline and not self.cancelled():
+                    self._record_dependencies(receipt)
+                    self._persist()
+                elif self.session_dependencies:
+                    receipt['dependency_inventory_error']='研究已取消或截止，未采集本次依赖清单'
+                return receipt
             if not receipt['ok']: return receipt
             try: data=json.loads(receipt['stdout'])
             except ValueError as exc: raise ExecutionError('invalid_file_receipt') from exc
             return {**data,'execution_id':receipt['execution_id'],'workspace_available':True}
+
+    def _helper_argv(self, encoded):
+        return ['/opt/runtime/.venv/bin/python','-I','/opt/dra-tools/helper.py',*[encoded[i:i+8192] for i in range(0,len(encoded),8192)]]
+
+    def _record_dependencies(self, receipt):
+        from dra.durable import atomic_json
+        path='/workspace/work/.deps/.inventory.json'
+        encoded=base64.b64encode(json.dumps({'op':'dependencies','path':path}).encode()).decode()
+        try:
+            result=self._exec(self._helper_argv(encoded),10,logs=False,managed=True)
+            if not result['ok'] or result['truncated'] or not json.loads(result['stdout']).get('ok'):
+                raise ExecutionError('inventory_unavailable')
+            inventory=json.loads(self.snapshot({path:None})[path])
+            name='dependencies-'+receipt['execution_id']+'.json'
+            atomic_json(self.directory/name, inventory)
+            self.dependency_manifest='execution/'+name
+            receipt['dependency_manifest']=self.dependency_manifest
+        except (ExecutionError,ValueError,OSError) as exc:
+            receipt['dependency_inventory_error']=str(exc)
 
     def import_file(self, filename, data):
         with self.lock:
@@ -451,5 +493,7 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
             finally:
                 if self.pool: self.pool.forget(self)
                 if self.client: self.client.close()
-                self.workspace.record()
+                try:
+                    if self.workspace._lease is not None:self.workspace.record()
+                finally:self.workspace.release()
                 self._persist()

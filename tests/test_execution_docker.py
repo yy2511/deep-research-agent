@@ -3,17 +3,19 @@ import threading
 import time
 import hashlib
 import json
+import os
 
 import pytest
 
 from dra.execution import ExecutionSession,ExecutionConfig,ExecutionError,MiB
 
 pytestmark=pytest.mark.docker
+TEST_IMAGE=os.environ.get('DRA_EXECUTION_TEST_IMAGE','dra-sandbox:local')
 
 
 @pytest.fixture
 def session(tmp_path):
-    s=ExecutionSession(tmp_path/'run','run',ExecutionConfig(enabled=True))
+    s=ExecutionSession(tmp_path/'run','run',ExecutionConfig(enabled=True,image=TEST_IMAGE))
     try: s.start(); yield s
     finally: s.close()
 
@@ -61,6 +63,8 @@ PY'''})
 
 def test_no_output_timeout_stops_command_group_and_keeps_session(session):
     s=session; container=s.container
+    # First Bash call initializes the conversation's dependency environment.
+    assert s.tool('bash',{'command':'true'})['ok']
     started=time.monotonic()
     with pytest.raises(ExecutionError,match='command_timeout'):
         s.tool('bash',{'command':'sleep 100 & echo $! >/workspace/work/child.pid; wait','timeout_s':.4})
@@ -82,12 +86,13 @@ def test_cancel_stops_silent_command(session):
     assert session.tool('bash',{'command':'echo resumed'})['ok']
 
 
-def test_output_and_tmpfs_are_bounded(session):
+def test_log_is_bounded_but_workspace_has_no_removed_64mib_cap(session):
     r=session.tool('bash',{'command':"python -c 'import sys; sys.stdout.write(\"x\"*2000000)'"})
     assert r['ok'] and r['truncated'] and r['log_truncated']
     assert len(r['stdout'].encode())<=4096 and session.log_bytes<=MiB
     r=session.tool('bash',{'command':'dd if=/dev/zero of=/workspace/output/full bs=1M count=65 2>/dev/null'})
-    assert not r['ok']
+    assert r['ok'],r
+    assert (session.workspace.path/'output/full').stat().st_size==65*MiB
     assert session.tool('bash',{'command':'rm /workspace/output/full'})['ok']
 
 
@@ -97,7 +102,7 @@ def test_process_limit_stops_spawning_without_killing_controller(session):
 
 
 def test_oom_command_keeps_healthy_controller(tmp_path):
-    s=ExecutionSession(tmp_path/'oom','oom',ExecutionConfig(enabled=True,memory_mb=128))
+    s=ExecutionSession(tmp_path/'oom','oom',ExecutionConfig(enabled=True,image=TEST_IMAGE,memory_mb=128))
     try:
         s.start()
         with pytest.raises(ExecutionError):
@@ -109,7 +114,7 @@ def test_oom_command_keeps_healthy_controller(tmp_path):
 
 def test_reaper_respects_instance_and_active_run(tmp_path):
     from dra.execution import reap_orphans
-    cfg=ExecutionConfig(enabled=True)
+    cfg=ExecutionConfig(enabled=True,image=TEST_IMAGE)
     a=ExecutionSession(tmp_path/'one'/'a','a',cfg)
     b=ExecutionSession(tmp_path/'two'/'b','b',cfg)
     try:
@@ -121,7 +126,7 @@ def test_reaper_respects_instance_and_active_run(tmp_path):
 
 
 def test_container_self_expires_without_controller_cleanup(tmp_path):
-    s=ExecutionSession(tmp_path/'ttl','ttl',ExecutionConfig(enabled=True),deadline=time.monotonic()+2)
+    s=ExecutionSession(tmp_path/'ttl','ttl',ExecutionConfig(enabled=True,image=TEST_IMAGE),deadline=time.monotonic()+2)
     try:
         s.start()
         assert s.container.wait(timeout=5)['StatusCode']==0

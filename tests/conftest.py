@@ -80,6 +80,7 @@ def _block_real_exa(monkeypatch, request):
 
 def pytest_addoption(parser):
     parser.addoption('--run-browser', action='store_true', default=False, help='真实本机浏览器，测试页面仅在本机，不调用模型或外部网站')
+    parser.addoption("--run-native", action="store_true", default=False, help="运行真实 macOS OS 沙箱验收（无模型、无外网调用）")
     parser.addoption("--run-docker", action="store_true", default=False, help="运行真实本机 Docker 验收（不调用 LLM）")
     parser.addoption(
         "--run-live",
@@ -101,6 +102,10 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if 'browser' in item.keywords:item.add_marker(pytest.mark.skip(reason='需要 --run-browser 才跑'))
     """没传 --run-live 时，给所有 live 测试动态加 skip 标记。"""
+    if not config.getoption("--run-native"):
+        for item in items:
+            if "native" in item.keywords:item.add_marker(pytest.mark.skip(reason="需要 --run-native 才跑"))
+
     if not config.getoption("--run-docker"):
         for item in items:
             if "docker" in item.keywords:

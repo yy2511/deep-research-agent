@@ -133,7 +133,7 @@ describe("执行状态：权限按已保存设置，旧检查结果不冒充现�
     const rechecking = probe(status({ enabled: false, available: false, reason: "disabled" }), { loading: true, checkedAt: 1 });
     expect(tile(savedOn, rechecking)).toMatchObject({ value: "开启", detail: "检查中…", tone: "busy" });
     const html = renderToStaticMarkup(<ExecutionStatusPanel probe={rechecking} savedEnabled draftEnabled />);
-    expect(html).toContain("已开启，正在检查 Docker…");
+    expect(html).toContain("已开启，正在检查执行环境…");
     expect(html).toContain("上次检查");
     expect(html).toContain("不代表现在的状态");
     expect(html).toContain("环境详情（上次检查）");
@@ -184,5 +184,24 @@ describe("模型页与能力页共用一份草稿", () => {
     // 一次保存同时带上两页的修改。
     const body = settingsUpdate(s.config!);
     expect(body).toMatchObject({ compaction_enabled: false, subagent: { model: "gpt-6-sol-mini" } });
+  });
+});
+
+describe('执行后端切换', () => {
+  it('保存请求保留 native，旧客户端不生成新字段', () => {
+    expect(settingsUpdate({...config,execution_backend:'native'}).execution_backend).toBe('native');
+    expect('execution_backend' in settingsUpdate(config)).toBe(false);
+  });
+  it('后端改变后不能沿用旧 Docker 检查结果', () => {
+    expect(executionNowView(true,probe(status({backend:'docker'})),'native').stale).toBe(true);
+  });
+  it('native 显示实际隔离能力，不把 Docker 镜像/资源配额说成已生效', () => {
+    const html=renderToStaticMarkup(<ExecutionStatusPanel savedEnabled={true} draftEnabled={true}
+      savedBackend="native" draftBackend="docker"
+      probe={probe(status({backend:'native',image:null,image_id:undefined,isolation:'macOS Seatbelt / SRT',session_dependencies:true}))} />);
+    expect(html).toContain('本机系统沙箱');
+    expect(html).toContain('没有 Docker 的 CPU');
+    expect(html).toContain('尚未保存');
+    expect(html).not.toContain('<dt>镜像 ID</dt>');
   });
 });

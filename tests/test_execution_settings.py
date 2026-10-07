@@ -70,7 +70,7 @@ def test_config_reports_readonly_summaries_and_rejects_them_on_save(env_executio
     body = client.get("/api/config").json()
     assert body["execution_enabled"] is None
     assert body["execution_effective"] == {"enabled": True, "network_mode": "bridge",
-                                           "source": "environment", "default_enabled": True}
+                                           "source": "environment", "default_enabled": True, "backend":"docker", "default_backend":"docker", "backend_source":"environment"}
     assert body["retry_policy"]["research"] == {"max_retries": sr._CALL_MAX_RETRIES,
                                                 "max_attempts": sr._CALL_MAX_RETRIES + 1}
     assert body["retry_policy"]["summary"]["max_retries"] == body["summary_max_retries"]
@@ -102,7 +102,7 @@ def test_status_uses_same_resolution_as_research_start(env_execution, no_docker,
     client = TestClient(web.app)
     status = client.get("/api/execution/status").json()
     assert status == {"enabled": True, "available": False, "reason": "image_missing", "network_mode": "bridge",
-                      "source": "environment", "default_enabled": True, "image": "fixture-image:1"}
+                      "source": "environment", "default_enabled": True, "backend":"docker", "default_backend":"docker", "backend_source":"environment", "image": "fixture-image:1"}
 
     monkeypatch.setattr(rc, "_cache", rc.current().model_copy(update={"execution_enabled": False}))
     status = client.get("/api/execution/status").json()
@@ -224,3 +224,23 @@ def test_lifespan_keeps_environment_cleanup_when_default_enabled(tmp_path, env_e
     with TestClient(web.app):
         assert reaped == [True] and len(execution_pool._POOLS) == 1
     assert reaped == [True, True] and closed == [True]
+
+
+def test_backend_saved_selection_old_client_and_start_share_resolution(env_execution,no_docker,monkeypatch):
+    env_execution(True)
+    client=TestClient(web.app)
+    body={k:v for k,v in client.get('/api/config').json().items() if k in rc.RuntimeModelSettings.model_fields}
+    response=client.put('/api/config',json={**body,'execution_backend':'native'})
+    assert response.status_code==200
+    assert response.json()['execution_effective']['backend']=='native'
+    old={k:v for k,v in body.items() if k!='execution_backend'}
+    response=client.put('/api/config',json=old)
+    assert response.json()['execution_backend']=='native'
+    status=client.get('/api/execution/status').json()
+    assert status['backend']=='native' and status['image'] is None
+    seen=[]
+    monkeypatch.setattr(web.REGISTRY,'start_simple_research',lambda query,**kwargs:seen.append(kwargs['config']) or 'native-run')
+    assert client.post('/api/research',json={'query':'q','mode':'simple'}).status_code==200
+    assert seen[0].execution==no_docker[-1]
+    response=client.put('/api/config',json={**body,'execution_backend':None})
+    assert response.json()['execution_effective']['backend']=='docker'

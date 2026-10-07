@@ -70,6 +70,7 @@ class RuntimeModelSettings(BaseModel):
     summary_max_output_tokens: int | None = Field(default=None, ge=512)
     wrapup_max_output_tokens: int | None = Field(default=None, ge=512)
     execution_enabled: bool | None = None
+    execution_backend: Literal["docker", "native"] | None = None
     """网页研究是否提供 Bash/Docker 执行；None 沿用 ``ExecutionConfig.from_env()``，旧配置不改变执行权限。"""
 
     @model_validator(mode="after")
@@ -150,13 +151,14 @@ def to_subagent_config(settings: RuntimeModelSettings) -> SubAgentConfig:
 def execution_config(settings: RuntimeModelSettings):
     """网页研究与执行状态共用的有效执行配置。
 
-    只覆盖开关；镜像、网络、时限与资源边界始终来自 ``ExecutionConfig.from_env()``。
+    覆盖开关和后端；镜像、网络、时限与资源边界来自 ``ExecutionConfig.from_env()``。
     """
     from dra.execution import ExecutionConfig
     base = ExecutionConfig.from_env()
-    if settings.execution_enabled is None:
-        return base
-    return base.model_copy(update={"enabled": settings.execution_enabled})
+    overrides={}
+    if settings.execution_enabled is not None: overrides["enabled"]=settings.execution_enabled
+    if settings.execution_backend is not None: overrides["backend"]=settings.execution_backend
+    return base.model_copy(update=overrides)
 
 
 def research_retry_policy(settings: RuntimeModelSettings) -> dict:

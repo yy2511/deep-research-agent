@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { getJSON } from "../api";
-import { executionNowView, executionStatusView, minutesText, networkModeText, type ExecutionProbe, type ExecutionStatus, type Tone } from "../capabilities";
+import { backendText, type ExecutionBackend, executionNowView, executionStatusView, minutesText, networkModeText, type ExecutionProbe, type ExecutionStatus, type Tone } from "../capabilities";
 import { Icon, type IconName } from "./Icon";
 import { ModelField } from "./ModelField";
 import { Select } from "./Select";
@@ -51,7 +51,7 @@ export function capabilityTiles(saved: ConfigPayload, execution: ExecutionProbe,
   const vision = saved.vision;
   // 权限按已保存设置；旧服务没有这项摘要时，才用状态接口读到的最后已知值。
   const execEnabled = saved.execution_effective?.enabled ?? execution.status?.enabled;
-  const exec = executionNowView(execEnabled, execution);
+  const exec = executionNowView(execEnabled, execution, saved.execution_effective?.backend);
   const judgeOn = !!saved.evidence_judge?.enabled;
   const keyMissing = judgeOn && saved.evidence_judge_status?.key_configured === false;
   const retries = saved.retry_policy?.research.max_retries;
@@ -117,11 +117,11 @@ function CapCard({ id, icon, title, summary, control, children }: {
 }
 
 /** Bash/Docker 的实际状态面板。权限按已保存设置；草稿与之不同时提示“保存后才生效”；复查中或过期的检查结果标为“上次检查”。 */
-export function ExecutionStatusPanel({ probe, savedEnabled, draftEnabled, onRefresh }: {
-  probe: ExecutionProbe; savedEnabled: boolean | null; draftEnabled: boolean | null; onRefresh?: () => void;
+export function ExecutionStatusPanel({ probe, savedEnabled, draftEnabled, savedBackend, draftBackend, onRefresh }: {
+  probe: ExecutionProbe; savedEnabled: boolean | null; draftEnabled: boolean | null; savedBackend?: ExecutionBackend; draftBackend?: ExecutionBackend; onRefresh?: () => void;
 }) {
   const { status } = probe;
-  const view = executionNowView(savedEnabled, probe);
+  const view = executionNowView(savedEnabled, probe, savedBackend);
   const previous = status && savedEnabled !== false && (probe.loading || view.stale) ? executionStatusView(status) : null;
   const pending = draftEnabled != null && savedEnabled != null && draftEnabled !== savedEnabled;
   const checkedAt = probe.checkedAt ? new Date(probe.checkedAt).toLocaleTimeString() : null;
@@ -136,14 +136,19 @@ export function ExecutionStatusPanel({ probe, savedEnabled, draftEnabled, onRefr
     {view.detail && <p>{view.detail}</p>}
     {previous && <p className="field-hint">上次检查{checkedAt ? `（${checkedAt}）` : ""}：{previous.title}。仅供参考，不代表现在的状态。</p>}
     {savedEnabled !== false && status?.enabled && <p>{networkModeText(status.network_mode)}{status.network_mode === "bridge" ? "（只用本地资料的研究始终不联网）" : ""}</p>}
-    {pending && <p className="cap-pending"><Icon name="info" size={13} />还没保存：保存后新研究才会{draftEnabled ? "开启" : "关闭"}运行代码{draftEnabled ? "，到时会重新检查 Docker" : ""}。现在开始的研究仍按「{savedEnabled ? "开启" : "关闭"}」处理。</p>}
+    {pending && <p className="cap-pending"><Icon name="info" size={13} />还没保存：保存后新研究才会{draftEnabled ? "开启" : "关闭"}运行代码{draftEnabled ? "，到时会重新检查执行环境" : ""}。现在开始的研究仍按「{savedEnabled ? "开启" : "关闭"}」处理。</p>}
+    {draftBackend && savedBackend && draftBackend !== savedBackend && <p className="cap-pending">尚未保存：后续新研究将改用{backendText(draftBackend)}；当前仍使用{backendText(savedBackend)}。</p>}
+    {savedBackend === "native" && <p className="field-hint">使用本机已有命令和独立 Python 环境。OS 沙箱限制文件与网络访问；没有 Docker 的 CPU、内存、进程数配额。取消会结束命令进程组，不保证回收自行脱离的守护进程。联网通过代理访问外网，本机服务和 Unix socket 不开放。浏览器和下载工具各自运行，不属于 Bash 沙箱。</p>}
     {status && <details className="disclosure disclosure-inline cap-env">
       <summary>环境详情{previous ? "（上次检查）" : ""}</summary>
       <dl className="cap-env-list">
         <div><dt>开关来源</dt><dd>{status.source === "settings" ? "在此页面设置" : "跟随本机默认"}{status.default_enabled != null ? `（本机默认：${status.default_enabled ? "开启" : "关闭"}）` : ""}</dd></div>
         <div><dt>网络模式</dt><dd className="mono">{status.network_mode}</dd></div>
-        <div><dt>执行镜像</dt><dd className="mono">{status.image ?? "—"}</dd></div>
-        <div><dt>镜像 ID</dt><dd className="mono">{status.image_id ?? "—"}</dd></div>
+        <div><dt>执行后端</dt><dd>{backendText(status.backend)}</dd></div>
+        {status.backend === "native" ? <div><dt>系统沙箱</dt><dd>{status.isolation ?? "—"} · {status.runtime_version ?? "—"}</dd></div> : <>
+          <div><dt>执行镜像</dt><dd className="mono">{status.image ?? "—"}</dd></div>
+          <div><dt>镜像 ID</dt><dd className="mono">{status.image_id ?? "—"}</dd></div></>}
+        <div><dt>会话依赖安装</dt><dd>{status.session_dependencies ? "可用，依赖跟随会话保存" : "当前环境未提供"}</dd></div>
         <div><dt>状态代码</dt><dd className="mono">{status.available ? "available" : status.reason ?? "—"}</dd></div>
         {checkedAt && <div><dt>检查时间</dt><dd>{checkedAt}</dd></div>}
       </dl>
@@ -216,7 +221,13 @@ export function CapabilitySettings({ s, onManageSkills }: { s: RuntimeSettings; 
             : <>已在这里设为{config.execution_enabled ? "开启" : "关闭"}。<button type="button" className="link-btn"
                 onClick={() => setConfig({ ...config, execution_enabled: null })}>改回跟随本机默认{defaultText}</button></>}
         </p>
-        <ExecutionStatusPanel probe={probe} savedEnabled={savedExecution} draftEnabled={executionSupported ? executionDraft : null} onRefresh={refresh} />
+        {"execution_backend" in config && <div className="field"><span className="field-label">执行环境</span>
+          <Select ariaLabel="执行环境" value={config.execution_backend ?? "default"}
+            onChange={value => setConfig({...config, execution_backend: value === "default" ? null : value as ExecutionBackend})}
+            options={[{value:"default",label:`跟随本机默认（${backendText(config.execution_effective?.default_backend)}）`},{value:"docker",label:"Docker 容器"},{value:"native",label:"本机系统沙箱（macOS）"}]} />
+          <small className="field-hint">依赖按会话保存；环境不可用时会明确提示，不会自动切换成无隔离执行。</small>
+        </div>}
+        <ExecutionStatusPanel probe={probe} savedBackend={saved.execution_effective?.backend} draftBackend={config.execution_backend ?? config.execution_effective?.default_backend} savedEnabled={savedExecution} draftEnabled={executionSupported ? executionDraft : null} onRefresh={refresh} />
       </CapCard>
 
       <CapCard id="cap-browser" icon="globe" title="浏览器"

@@ -1,6 +1,7 @@
 """会话专用的持久工作目录；模型不能选择宿主路径或会话身份。"""
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -29,6 +30,33 @@ class ConversationWorkspace:
         self.gid = os.getgid() if os.getuid() else 1000
         self.worker = f'{self.uid}:{self.gid}'
         self.config = config
+        self._lease = None
+
+    def acquire(self):
+        """Docker/native 共用同一轮租用；不允许另一个研究改写本会话文件。"""
+        from dra.execution import ExecutionError
+        if self._lease is not None: return
+        self.prepare()
+        locks=self.root/'.locks';locks.mkdir(mode=0o700,exist_ok=True)
+        handle=(locks/self.key).open('a')
+        try: fcntl.flock(handle, fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            handle.close()
+            raise ExecutionError('workspace_busy') from exc
+        self._lease=handle
+
+    def release(self):
+        if self._lease is not None:
+            self._lease.close(); self._lease=None
+
+    def logical_path(self, value):
+        """仅把本会话真实路径转为工具协议路径，不替换命令或跟随符号链接。"""
+        if isinstance(value,str) and value.startswith(str(self.path)+'/'):
+            return '/workspace/'+value[len(str(self.path))+1:]
+        return value
+
+    def execution_path(self, value):
+        return str(self.path)+value[len('/workspace'):] if self.config.backend=='native' else value
 
     def _validate(self, *, create=False):
         from dra.execution import ExecutionError
@@ -127,8 +155,9 @@ class ConversationWorkspace:
         self._validate()
         result = {}
         for path, maximum in paths.items():
-            workspace_path(path)
-            parts = PurePosixPath(path).parts[2:]
+            logical=self.logical_path(path)
+            workspace_path(logical)
+            parts = PurePosixPath(logical).parts[2:]
             fd = os.open(self.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 for part in parts[:-1]:

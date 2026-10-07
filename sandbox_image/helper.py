@@ -1,9 +1,13 @@
-"""只在执行容器里调用的文件 helper；CLI 不接受工作区根目录覆盖。"""
+"""在 Docker 或本机 OS 沙箱里调用的文件 helper；CLI 不接受工作区根目录覆盖。"""
 import base64
 import hashlib
 import json
+import sysconfig
+import platform
+import venv
+import importlib.metadata
 import os
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 import stat
 import sys
 import time
@@ -58,13 +62,69 @@ def read_regular(fd, name, limit):
     finally: os.close(handle)
 
 
+def dependency_paths(root):
+    key=os.environ.get('DRA_DEPENDENCY_KEY','docker')+'-'+platform.machine()+f'-py{sys.version_info.major}{sys.version_info.minor}'
+    base=Path(root)/'work'/'.deps'/key
+    return base, base/'python', sysconfig.get_path('purelib')
+
+
+def command_environment(root):
+    """只影响沙箱内的用户命令；控制端 helper 始终使用只读基础解释器。"""
+    base, python, packages=dependency_paths(root)
+    site=python/'lib'/f'python{sys.version_info.major}.{sys.version_info.minor}'/'site-packages'
+    if not (site/'dra-base.pth').exists():
+        venv.EnvBuilder(with_pip=True,symlinks=True).create(python)
+        (site/'dra-base.pth').write_text(packages+'\n')
+    for name in ('home','tmp','cache','node'):
+        (base/name).mkdir(parents=True,exist_ok=True)
+    os.environ.update(DRA_WORKSPACE=str(root), DRA_INPUT=str(Path(root)/'input'),
+        DRA_WORK=str(Path(root)/'work'), DRA_OUTPUT=str(Path(root)/'output'),
+        DRA_PYTHON_ENV=str(python), DRA_NODE_ENV=str(base/'node'),
+        HOME=str(base/'home'), TMPDIR=str(base/'tmp'), TMP=str(base/'tmp'), TEMP=str(base/'tmp'),
+        XDG_CACHE_HOME=str(base/'cache'), PIP_CACHE_DIR=str(base/'cache'/'pip'),
+        MPLCONFIGDIR=str(base/'cache'/'matplotlib'), npm_config_cache=str(base/'cache'/'npm'),
+        npm_config_prefix=str(base/'node'), NODE_PATH=str(base/'node'/'node_modules'),
+        PATH=str(python/'bin')+':'+str(base/'node'/'node_modules'/'.bin')+':'+str(base/'node'/'bin')+':'+os.environ['PATH'])
+
+
+def dependency_inventory(root):
+    base, python, packages=dependency_paths(root)
+    site=python/'lib'/f'python{sys.version_info.major}.{sys.version_info.minor}'/'site-packages'
+    versions={}
+    for directory in (packages,str(site)):
+        for item in importlib.metadata.distributions(path=[directory]):
+            versions[item.metadata['Name']]=item.version
+    node=base/'node'/'package-lock.json'
+    return {'python':sys.version, 'environment':str(python), 'base_packages':packages,
+            'packages':versions, 'node_lock':json.loads(node.read_text()) if node.exists() else None}
+
+
 def operate(request, root='/workspace'):
     op = request['op']
+    if op=='dependencies':
+        # The full lockfile may be larger than command previews. Transfer a file,
+        # never the inventory through the bounded stdout receipt.
+        path=request['path'];segments=parts(path,write=True)
+        fd=directory(root,segments[:-1],create=True)
+        temp='.inventory-'+uuid.uuid4().hex
+        try:
+            target=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=fd)
+            with os.fdopen(target,'w') as handle:
+                json.dump(dependency_inventory(root),handle,ensure_ascii=False)
+                handle.flush();os.fsync(handle.fileno())
+            os.replace(temp,segments[-1],src_dir_fd=fd,dst_dir_fd=fd);temp=None
+        finally:
+            if temp:
+                try:os.unlink(temp,dir_fd=fd)
+                except FileNotFoundError:pass
+            os.close(fd)
+        return {'path':path}
     path = request.get('path', request.get('cwd', '/workspace/work'))
     segments = parts(path, write=op in ('write_file', 'edit_file', 'bash'))
     if op == 'bash':
         fd = directory(root, segments)
         os.fchdir(fd); os.close(fd)
+        command_environment(root)
         os.execv('/bin/bash', ['bash', '--noprofile', '--norc', '-c', request['command']])
     if len(segments) < 2: raise FileError('path_denied', '需要文件路径')
     fd = directory(root, segments[:-1], create=op == 'write_file')

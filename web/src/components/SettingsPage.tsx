@@ -44,6 +44,7 @@ export interface ConfigPayload {
   simple_model?: { model: string; provider: string; reasoning?: boolean };
   /** 可写：null 表示跟随本机默认（不改变已有执行权限）。 */
   execution_enabled?: boolean | null;
+  execution_backend?: "docker" | "native" | null;
   /** 只读：开关的实际取值与来源。 */
   execution_effective?: ExecutionEffective;
   /** 只读：服务端实际使用的重试次数。 */
@@ -63,7 +64,7 @@ export function settingsUpdate(config: ConfigPayload) {
   const { vision, schema_version, planner, subagent, call_limits_enabled, compaction_enabled, context_window_tokens, context_window_mode, max_output_tokens, summary_max_output_tokens, wrapup_max_output_tokens, evidence_judge, wall_timeout_s, wrapup_reserve_s, summary_timeout_s, summary_max_retries } = config;
   // 旧服务端没有这个字段时不提交，由服务端沿用当前值。
   const execution = "execution_enabled" in config ? { execution_enabled: config.execution_enabled ?? null } : {};
-  return { ...("browser" in config ? {browser: config.browser} : {}), vision, schema_version, planner, subagent, call_limits_enabled, compaction_enabled, context_window_tokens, context_window_mode, max_output_tokens, summary_max_output_tokens, wrapup_max_output_tokens, evidence_judge, wall_timeout_s, wrapup_reserve_s, summary_timeout_s, summary_max_retries, ...execution };
+  return { ...("browser" in config ? {browser: config.browser} : {}), vision, schema_version, planner, subagent, call_limits_enabled, compaction_enabled, context_window_tokens, context_window_mode, max_output_tokens, summary_max_output_tokens, wrapup_max_output_tokens, evidence_judge, wall_timeout_s, wrapup_reserve_s, summary_timeout_s, summary_max_retries, ...execution, ...("execution_backend" in config ? {execution_backend: config.execution_backend ?? null} : {}) };
 }
 
 /** 本机偏好：只存在浏览器里，不影响后端配置。 */

@@ -45,7 +45,7 @@ INSTRUCTIONS = '''
 browser(preview_path="/workspace/output/report.html") 打开实际文件，随后可截图、核对窄屏布局、图片加载、引用链接、控制台错误和按钮交互。按内容选择检查，不要求截图数量。
 截图通过本轮看图通道返回；只收到截图路径不等于已经看过。可用 view_image(path) 回看保存在工作区的截图。
 browser_take_screenshot 不指定 filename 时直接返回图片；指定 filename 时只保存文件，随后用 view_image(path) 实际查看。
-浏览器文件名使用工作区相对路径（如 work/check.png），与 Bash 的 /workspace/work/check.png 是同一文件。
+浏览器文件名使用工作区相对路径（如 work/check.png），与 Bash 的 "$DRA_WORK/check.png" 是同一文件；通用文件工具也可使用 /workspace/work/check.png。
 浏览器会话在本轮连续调用间保留；主、子 Agent 各自管理页面，文件共用。不要重复派人检查相同图片，复用子任务的检查记录。
 外部页面用 browser_snapshot 取得可引用的浏览器页面快照；脚本返回值、控制台和操作回执只作工作参考，不是网页原文。
 输入过内容、或运行脚本后发生变化的页面只作操作/交付检查；需要取证时重新打开原网址读取未改写页面，或用 read_source 获取独立原文。未改动页面的只读脚本仍可继续取证。
@@ -169,15 +169,15 @@ class BrowserSession:
         options = {'deadline': self.ctx.budget_deadline, 'cancelled': llm.cancellation_requested}
         if not self.tools:
             rows = self.session.request(**options)
-            # 沿用代码执行仅在 Docker 内进行的边界；浏览器页面 JS 使用 browser_evaluate。
+            # 沿用代码执行仅在选定的执行沙箱内进行的边界；浏览器页面 JS 使用 browser_evaluate。
             self.tools = {row['name']: row for row in rows if row['name'] != 'browser_run_code_unsafe'}
         name, arguments = args.get('tool'), args.get('arguments') or {}
         if args.get('preview_path'):
-            path = workspace_path(args['preview_path'])
+            path = workspace_path(self.workspace.logical_path(args['preview_path']))
             name, arguments = 'browser_navigate', {'url': self.preview_origin + quote(path.removeprefix('/workspace'), safe='/')}
         if not name:
             return {'ok': True, 'tools': list(self.tools.values()),
-                    'workspace': '/workspace', 'note': '同一Agent连续调用保留页面状态；文件名以工作区为根。页面JS用browser_evaluate；宿主Node代码工具未开放，文件处理仍用Docker Bash。'}
+                    'workspace': '/workspace', 'note': '同一Agent连续调用保留页面状态；文件名以工作区为根。页面JS用browser_evaluate；宿主Node代码工具未开放，文件处理使用选定的 Bash 执行环境。'}
         if name not in self.tools:raise MCPError('未提供该浏览器工具；请先用 browser() 查看目录')
         try:_valid_schema(self.tools[name]['inputSchema']).validate(arguments)
         except Exception as exc:raise MCPError('浏览器参数不符合工具目录，请按 schema 修正') from exc

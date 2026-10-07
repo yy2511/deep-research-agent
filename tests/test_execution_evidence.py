@@ -116,6 +116,20 @@ def test_long_stdout_reading_grants_only_observed_result(tmp_path):
     assert cite(ctx, ref, 'second row = 987654321')[1]
 
 
+def test_failed_session_inventory_never_claims_only_base_packages(tmp_path):
+    ctx=context(tmp_path)
+    ctx.execution.session_dependencies=True
+    original=ctx.execution.tool
+    def tool(name,args):
+        return {**original(name,args),'dependency_inventory_error':'fixture collection failed'}
+    ctx.execution.tool=tool
+    payload,ok=bash(ctx,"print('value=1729')",source_refs=[input_ref(ctx)])
+    assert ok
+    provenance=ctx.store.source(payload['source_ref']).computation
+    assert provenance['dependency_manifest'] is None
+    assert provenance['dependency_inventory_error']=='fixture collection failed'
+
+
 def test_utf8_preview_boundary_and_library_computation(tmp_path):
     ctx = context(tmp_path, source_mode='library')
     ctx.execution.preview = 5  # 截在第二个汉字内部。

@@ -96,7 +96,10 @@ def prepare_finish(ctx,args,requirements=None):
         ctx.history.data['conversation_id'] if ctx.history else None)
     available=(ctx.tool_role=='lead' and (ctx.config.execution.enabled or ctx.config.browser.enabled)
                and (ctx.execution is not None or workspace.path.is_dir()))
+    logical_workspace=getattr(workspace,'workspace',workspace)
+    logical_path=logical_workspace.logical_path if ctx.config.execution.backend=='native' else lambda p:p
     if draft_file:
+        draft_file=logical_path(draft_file)
         if not available:raise ExecutionError('workspace_unavailable')
         workspace_path(draft_file,write=True,direct=True)
         if not draft_file.startswith('/workspace/work/') or not draft_file.endswith('.md'):raise ExecutionError('path_denied')
@@ -116,7 +119,7 @@ def prepare_finish(ctx,args,requirements=None):
         path=item.get('path') if isinstance(item,dict) else None
         try:
             request=ArtifactRequest.model_validate(item)
-            request.path=output_path(request.path)
+            request.path=output_path(logical_path(request.path))
             if request.path in paths:raise ExecutionError('duplicate_artifact')
             if not set(request.requirement_ids)<=allowed:raise ExecutionError('unknown_requirement')
             paths.add(request.path)
@@ -174,7 +177,7 @@ def publish(ctx,draft):
                 try: ident=json.loads(receipt['payload']).get('execution_id')
                 except (ValueError,TypeError,KeyError):continue
                 if ident:execution_ids.append(ident)
-            provenance=dict(draft_sha256=hashlib.sha256(draft.encode()).hexdigest(),
+            provenance=dict(backend=ctx.config.execution.backend, draft_sha256=hashlib.sha256(draft.encode()).hexdigest(),
                 image_id=ctx.execution.image_id if ctx.execution else None,
                 inputs=dict(ctx.execution.inputs) if ctx.execution else {},
                 source_materials=ctx.execution_materials,execution_files=list(ctx.execution_files.values()),

@@ -35,9 +35,13 @@ def register_result(ctx, args: dict, payload: dict, declared: list) -> None:
             'cwd': args.get('cwd', '/workspace/work'), 'exit_code': payload['exit_code'],
             'source_mode': ctx.config.source_mode,
             'network_mode': ctx.execution.config.network_mode if hasattr(ctx.execution, 'config') else ctx.config.execution.network_mode,
-            'image': ctx.config.execution.image,
+            'backend': ctx.config.execution.backend,
+            'image': ctx.config.execution.image if ctx.config.execution.backend=='docker' else None,
             'image_id': getattr(ctx.execution, 'image_id', None),
-            'dependency_manifest': '/opt/dra-tools/python-packages.txt',
+            'dependency_manifest': payload.get('dependency_manifest') or (
+                '/opt/dra-tools/python-packages.txt' if ctx.config.execution.backend=='docker'
+                and not getattr(ctx.execution,'session_dependencies',False) else None),
+            'dependency_inventory_error': payload.get('dependency_inventory_error'),
             'library_version_ids': ctx.config.library_selection.get('version_ids', []),
             'declared_source_refs': args.get('source_refs', []), 'inputs': inputs,
             'stdout_truncated': output_truncated,

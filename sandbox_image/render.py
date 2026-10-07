@@ -1,15 +1,20 @@
 #!/opt/runtime/.venv/bin/python
 """确定性文件生成 helper，运行于受限容器；模型负责材料选择与内容。"""
 import argparse
+import importlib.util
 import html
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-sys.path.insert(0,'/opt/dra-tools')
-from helper import parts
+helper_path=Path(__file__).with_name('helper.py')
+if not helper_path.is_file():helper_path=Path('/opt/dra-tools/helper.py')
+spec=importlib.util.spec_from_file_location('dra_helper',helper_path)
+helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper)
+parts=helper.parts
 
 CSS='''@page { size: A4; margin: 19mm 17mm; @bottom-center { content: counter(page); font-size: 9pt; color: #777; } }
 body { font-family: "Noto Sans CJK SC", sans-serif; color: #292c32; line-height: 1.7; font-size: 10pt; max-width: 960px; margin: 0 auto; padding: 24px; }
@@ -23,9 +28,11 @@ img { max-width: 100%; } a { color: #25676a; overflow-wrap: anywhere; } blockquo
 
 
 def path(value,write=False):
-    parts(value,write=write)
-    p=Path(value)
-    if not str(p.resolve()).startswith('/workspace/'):raise ValueError('工作区路径越界')
+    root=Path(os.environ.get('DRA_WORKSPACE','/workspace'))
+    logical='/workspace/'+value[len(str(root))+1:] if value.startswith(str(root)+'/') else value
+    segments=parts(logical,write=write)
+    p=root.joinpath(*segments)
+    if not p.resolve().is_relative_to(root.resolve()):raise ValueError('工作区路径越界')
     return p
 
 

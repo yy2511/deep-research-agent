@@ -75,6 +75,58 @@ def test_edit_conflict_and_exact_replacement(files):
     assert result['sha256']!=first['sha256']
 
 
+def test_dependency_inventory_transfers_full_file_and_reports_save_failure(files,monkeypatch):
+    import base64,json
+    from dra.execution import ExecutionConfig,ExecutionSession
+    helper,root=files
+    inventory={'packages':{'requests':'fixture'},'node_lock':{'packages':{
+        f'node_modules/fixture-{i}':{'version':'1.0','integrity':'x'*100} for i in range(3000)}}}
+    monkeypatch.setattr(helper,'dependency_inventory',lambda root:inventory)
+    session=ExecutionSession(root/'run','run',ExecutionConfig(enabled=True))
+    session.workspace.prepare()
+    def execute(argv,timeout,**kwargs):
+        assert kwargs['managed'] and not kwargs['logs']
+        request=json.loads(base64.b64decode(''.join(argv[3:])))
+        result=helper.operate(request,root=session.workspace.path)
+        return {'ok':True,'stdout':json.dumps({'ok':True,**result}),'truncated':False}
+    session._exec=execute
+    receipt={'ok':True,'execution_id':'large'}
+    session._record_dependencies(receipt)
+    saved=session.run_dir/receipt['dependency_manifest']
+    assert saved.stat().st_size>128*1024
+    assert json.loads(saved.read_text())==inventory
+    def fail(*args,**kwargs):raise OSError('fixture disk full')
+    monkeypatch.setattr('dra.durable.atomic_json',fail)
+    receipt={'ok':True,'execution_id':'save-failed'}
+    session._record_dependencies(receipt)
+    assert receipt['ok'] and 'dependency_manifest' not in receipt
+    assert receipt['dependency_inventory_error']=='fixture disk full'
+
+
+def test_inventory_timeout_only_stops_its_process_group(tmp_path,monkeypatch):
+    from types import SimpleNamespace as N
+    from dra.execution import ExecutionConfig,ExecutionSession,ExecutionError
+    from dra.execution_process import RUN,STOP
+    session=ExecutionSession(tmp_path,'run',ExecutionConfig(enabled=True))
+    session.state='ready'; calls=[]; starts=[]
+    session.container=N(id='fixture',exec_run=lambda argv,**kw:(calls.append(argv) or N(exit_code=0)))
+    stream=N(setblocking=lambda value:None,close=lambda:None)
+    session.client=N(api=N(exec_create=lambda _,argv,**kw:(starts.append(argv) or {'Id':'fixture'}),
+                          exec_start=lambda *a,**kw:stream))
+    checks=0
+    def check(*args):
+        nonlocal checks
+        checks+=1
+        if checks>1:raise ExecutionError('command_timeout')
+    monkeypatch.setattr(session,'_check',check)
+    monkeypatch.setattr(session,'_persist',lambda:None)
+    monkeypatch.setattr(session,'close',lambda:pytest.fail('must retain shared container'))
+    with pytest.raises(ExecutionError,match='command_timeout'):
+        session._exec(['inventory'],10,logs=False,managed=True)
+    assert RUN in starts[0] and STOP in calls[0]
+    assert session.state=='ready'
+
+
 def test_files_refuse_symlink_parent_hardlink_and_fifo(files):
     import os
     helper,root=files

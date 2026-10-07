@@ -45,6 +45,22 @@ Web 后端默认监听 `http://127.0.0.1:8765`，Vite 开发服务器默认监�
 
 默认 Web 检索会并发尝试 Tavily 与 Exa，建议同时配置两者；两者都失败时会尝试无密钥的 DuckDuckGo 兜底。完整环境变量见 [.env.example](.env.example)。
 
+### 执行环境：Docker 或本机系统沙箱
+
+在“设置 → 研究能力 → 运行代码 → 执行环境”选择 Docker、本机系统沙箱或跟随默认。默认仍是 Docker；保存只影响随后开始的研究。环境不可用时明确报错，不会自动改成无隔离的本机执行。
+
+Docker 首次准备：`docker build -t dra-sandbox:local sandbox_image`。镜像预装 Python 文件处理库、curl/wget、file、git、压缩工具、jq/rg、Node/npm、PDF/图像命令及 C/C++ 编译工具。
+
+本机系统沙箱目前支持 macOS，使用 SRT 0.0.78 / Seatbelt。先在 `web` 目录运行 `npm ci`，在 `sandbox_image` 目录运行 `uv sync --locked --no-dev --no-install-project`，并安装 Node 22、ripgrep。Python 基础包按该目录的锁文件安装；其他系统命令使用本机已有版本。
+
+两种后端都为每个研究会话提供独立的 Python/Node 依赖目录。联网允许时，Agent 可以自行 `python -m pip install ...` 或 `npm install --prefix "$DRA_NODE_ENV" ...`；离线时可安装已取得的本地包。依赖和 work/output 跟随会话保存，控制端使用的 Python 不会被这些安装替换。
+
+Bash 使用 `DRA_INPUT`、`DRA_WORK`、`DRA_OUTPUT`；材料回执的 `exec_path` 可直接用于脚本，`path` 是通用工具路径。证据仍由 `source_refs` 声明输入并登记计算结果，附件仍保存独立副本。
+
+本机沙箱只开放当前会话和所需的只读运行时；外网通过 HTTP(S)/SOCKS 代理，本机服务、私有地址与 Unix socket 不开放。它没有 Docker 的 CPU/内存/进程数配额，取消清理命令进程组，服务崩溃或命令截止也由可信执行器终止该组；不能保证回收自行脱离的守护进程。浏览器、下载工具有各自执行路径，不属于 Bash 沙箱。仅资料模式始终关闭执行联网。
+
+真实环境验收分别使用 `pytest --run-native`、`pytest --run-docker`；Docker 测试可用 `DRA_EXECUTION_TEST_IMAGE` 指定待验收镜像，默认使用 `dra-sandbox:local`。默认测试不启动这些环境。研究模型、搜索和看图质量仍需单独的真实题目评测。
+
 ### API 连接与模型设置
 
 点左下角“设置 → API 连接”，添加、编辑或删除自定义 OpenAI Chat Completions 兼容来源，填写 API 根地址和 Key。
@@ -67,7 +83,7 @@ Web 后端默认监听 `http://127.0.0.1:8765`，Vite 开发服务器默认监�
 
 ### 计算与文件交付
 
-需要 Agent 执行计算、制作图表或生成文件时，先启动本机 Docker，再构建执行镜像：
+需要 Agent 执行计算、制作图表或生成文件时，按上面的说明准备执行环境。使用 Docker 时启动 Docker，再构建执行镜像：
 
 ```bash
 docker build -t dra-sandbox:local sandbox_image
@@ -75,13 +91,12 @@ docker build -t dra-sandbox:local sandbox_image
 
 在后端 `.env` 中设置 `DRA_EXECUTION_ENABLED=true`，然后重启后端。
 也可以在网页「设置 → 研究能力 → 运行代码」里开关并保存：网页上的选择会覆盖 `.env` 的开关，只影响之后开始的研究；
-没选过时跟随 `.env`。镜像、网络模式、时限和资源上限仍只按 `.env` 配置。同一页面会显示 Docker 实际是否可用。
+没选过时跟随 `.env`。执行后端也可在此选择；镜像、网络模式、时限和 Docker 资源上限仍按环境配置。同一页面显示所选环境实际是否可用。
 需要下载公开数据时，再设置 `DRA_EXECUTION_NETWORK_MODE=bridge`。主 Agent 可用 `download_source`
-直接下载 CSV/TSV/JSON/文本原文件，保留 URL、原始字节、编码和 SHA-256，导入只读 input 后用 Python 处理。
+直接下载文本、表格、图片、PDF 等原件，保留 URL、原始字节、类型和 SHA-256，导入只读 input 后用工具处理。
 下载与 input 导入不设文件大小上限；input 从磁盘只读挂载，不再使用原有的 32 MiB 输入区。
-下载目前仍有 45 秒总时限（且不超过研究剩余时间）、10 秒单次 socket 等待和最多 4 次重定向；仅接收公开文本数据，二进制 PDF/XLSX 不由此工具读取。
-原文件须完整下载并按声明编码或 BOM 解码；CSV 链接返回 HTML、压缩传输未遵守 identity 请求或解码失败时会明确报错。
-用户显式配置的 `storage_max_chars` 仍生效，默认不限制；work/output 的写入与附件交付配额独立于原件下载。
+下载沿用 45 秒总时限（且不超过研究剩余时间）、10 秒单次 socket 等待和最多 4 次重定向。原件保存与文字解码分开，二进制和未知格式不会只因格式拒收；CSV 链接返回 HTML 错误页仍需核对。
+用户显式配置的 `storage_max_chars` 只影响文字快照；原件下载、work/output 文件和附件交付不设固定字节上限。
 表格可直接交给 `bash` 中的 Python 按行列提取和计算；用 `source_refs` 声明输入来源（须是本轮已登记的来源编号，填错会在执行前退回）时，成功命令的非空 stdout 返回独立的计算结果 `source_ref`（标题写明输入文件），已展示部分可直接 `save_evidence`，不用重读原 CSV 的字符片段。未声明输入的输出（查看目录、调试打印等）只作工作参考，不登记为来源、不能存证。未展示输出按结果编号 `read_source` 续读；引用原文件原话时仍须实际读取原文件。
 计算证据与原始资料分开标注，详情保留输入文件哈希、命令、工作目录及本轮脚本写入/修改记录；提示词要求输出行标识、字段、单位和计算方法。它提供过程追溯，不自动验证计算逻辑或建立单元格级血缘。执行预览和日志仍使用已有上限，日志不完整时有标记。
 将网络配置改回 `none` 并重启即可恢复禁网模式；纯资料研究始终禁用 Web 下载和容器联网。

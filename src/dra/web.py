@@ -499,7 +499,9 @@ def _execution_effective(settings, config) -> dict:
     from dra.execution import ExecutionConfig
     return {"enabled": config.enabled, "network_mode": config.network_mode,
             "source": "environment" if settings.execution_enabled is None else "settings",
-            "default_enabled": ExecutionConfig.from_env().enabled}
+            "default_enabled": ExecutionConfig.from_env().enabled,
+            "backend": config.backend, "default_backend": ExecutionConfig.from_env().backend,
+            "backend_source": "environment" if settings.execution_backend is None else "settings"}
 
 
 @app.get("/api/mcp/config")
@@ -553,6 +555,8 @@ def api_config_put(body: dict) -> dict:
             body = {**body, 'browser': runtime_config.current().browser.model_dump()}
         if 'vision' not in body:
             body = {**body, 'vision': runtime_config.current().vision.model_dump()}
+        if 'execution_backend' not in body:
+            body = {**body, 'execution_backend': runtime_config.current().execution_backend}
         if 'execution_enabled' not in body:
             # 不认识此字段的旧客户端保存别的设置时，不改变当前执行权限。
             body = {**body, 'execution_enabled': runtime_config.current().execution_enabled}
@@ -1261,9 +1265,8 @@ async def _lifespan(_app: FastAPI):
     try:
         yield
     finally:
-        if execution_config.enabled:
-            for handle in REGISTRY.runs.values():
-                if handle.cancel_event is not None: handle.cancel_event.set()
+        for handle in REGISTRY.runs.values():
+            if handle.cancel_event is not None: handle.cancel_event.set()
         try:
             # 设置页可在运行期间开关执行，池可能在启动后才创建；按实际存在的池清理，没有池时不访问 Docker。
             await asyncio.to_thread(shutdown_pools, STORE.root)
@@ -1548,7 +1551,7 @@ def api_execution_status():
     from dra.execution import availability
     settings = runtime_config.current()
     config = runtime_config.execution_config(settings)
-    return {**availability(config), **_execution_effective(settings, config), "image": config.image}
+    return {**availability(config), **_execution_effective(settings, config), "image": config.image if config.backend == "docker" else None}
 
 
 @app.get("/api/runs/{run_id}/artifacts")
