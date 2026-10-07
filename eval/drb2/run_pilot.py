@@ -24,12 +24,12 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from dra import research, runtime_config, simple_research, subagent, file_sources
+from dra import research, runtime_config, simple_research, skills, subagent, file_sources
 from dra.execution import ExecutionConfig, ExecutionError
 from dra.evidence_judge import JudgeConfig
 from dra.vision import VisionConfig
 from dra.browser import BrowserConfig
-from dra.paths import RUNS_DIR
+from dra.paths import DATA_DIR, RUNS_DIR
 from dra.site_filter import normalize_blocked_sites, provider_exclude_domains
 from dra.tools import UrlFetchError
 
@@ -93,9 +93,15 @@ class TitleGuard:
             return fetched
         return guarded
 
-    def block_original(self, url, **kwargs):
-        self.hits.append({'where': 'original_download', 'url': url, 'reason': 'not_enabled_in_evaluation'})
-        raise ExecutionError('benchmark_download_disabled', '本评测仅使用受原文标题过滤保护的文字阅读；原件下载未启用。')
+    def wrap_download(self, original):
+        """原件下载同样按原文标题拦截：命中时不登记来源。"""
+        def download(url, **kwargs):
+            data, text, metadata = original(url, **kwargs)
+            if self.matches(metadata.get('filename'), text):
+                self.hits.append({'where': 'original_download', 'url': url, 'title': metadata.get('filename')})
+                raise ExecutionError('benchmark_page_excluded', '该文件是本题禁止使用的原始文章，未采用')
+            return data, text, metadata
+        return download
 
 
 def report_for_judge(result: simple_research.SimpleResult) -> str:
@@ -111,13 +117,14 @@ def run_one(task: dict, out: Path) -> dict:
     sites, skipped = blocked_sites_for(task)
     config = runtime_config.to_simple_config(runtime_config.current(), blocked_sites=sites,
         execution=ExecutionConfig(enabled=False), vision=VisionConfig(enabled=False),
-        browser=BrowserConfig(enabled=False), evidence_judge=JudgeConfig(enabled=False))
+        browser=BrowserConfig(enabled=False), evidence_judge=JudgeConfig(enabled=False), compaction_enabled=False,
+        skill_bundle=skills.SkillRepository(DATA_DIR).prepare([]))
     guard = TitleGuard(task["content"]["blocked"].get("title", ""))
     run_id = f"drb2-idx{task['idx']}-{datetime.now():%Y%m%d-%H%M%S}"
     original_fetch = simple_research.fetch_url_content
     original_download = file_sources.fetch_original
     simple_research.fetch_url_content = guard.wrap_fetch(original_fetch)
-    file_sources.fetch_original = guard.block_original
+    file_sources.fetch_original = guard.wrap_download(original_download)
     started = time.monotonic()
     try:
         result = research.run_minimal_research(

@@ -15,11 +15,10 @@ import subprocess
 import threading
 import time
 
-from dra import llm, research, runtime_config, simple_research, subagent, file_sources
+from dra import llm, research, research_brief, runtime_config, simple_research, subagent, file_sources
 from dra.durable import atomic_json
-from dra.execution import ExecutionConfig, ExecutionError
+from dra.execution import ExecutionError
 from dra.evidence_judge import JudgeConfig
-from dra.vision import VisionConfig
 from dra.browser import BrowserConfig
 from dra.paths import RUNS_DIR
 from dra.site_filter import provider_exclude_domains
@@ -52,11 +51,19 @@ def pick(rows, sample=5, seed=20261002, *, ids=None):
     return random.Random(seed).sample([r for r in rows if r["id"] not in EXPOSED_IDS], sample)
 
 
+def skill_bundle():
+    """与网页“自动”模式相同：提供全部已启用技能的目录，不预选，由研究 Agent 决定是否加载。"""
+    from dra import skills
+    from dra.paths import DATA_DIR
+    return skills.SkillRepository(DATA_DIR).prepare([])
+
+
 def research_config(settings, seconds):
+    # 运行代码与网页一致（执行后端、联网方式取自网页有效配置）；Bash 的联网访问由 bash_leak_audit 事后检查。
     return runtime_config.to_simple_config(
-        settings, wall_timeout_s=seconds, execution=ExecutionConfig(enabled=False), vision=VisionConfig(enabled=False),
+        settings, wall_timeout_s=seconds, execution=runtime_config.execution_config(settings),
         evidence_judge=JudgeConfig(enabled=False),
-        browser=BrowserConfig(enabled=False),
+        browser=BrowserConfig(enabled=False), compaction_enabled=False, skill_bundle=skill_bundle(),
         blocked_sites=BLOCKED_SITES, source_mode="web", mcp_servers=[])
 
 
@@ -92,21 +99,83 @@ class WebSearch:
             return result
         return fetch
 
-    def block_original(self, url, **kwargs):
+    def wrap_download(self, original):
+        """原件下载与网页阅读同样过滤基准答案页：下载前查网址，下载后查最终地址、文件名与文字。"""
+        def download(url, **kwargs):
+            if self.leaked(url, url):
+                self._note_original(url)
+                raise ExecutionError('benchmark_page_excluded', 'Benchmark answer page excluded from evaluation')
+            data, text, metadata = original(url, **kwargs)
+            final = metadata.get('final_url') or url
+            if self.leaked(final, final, metadata.get('filename'), text):
+                self._note_original(url)
+                raise ExecutionError('benchmark_page_excluded', 'Benchmark answer page excluded from evaluation')
+            return data, text, metadata
+        return download
+
+    def _note_original(self, url):
         with self.lock:
             self.blocked_originals.append(url)
-        raise ExecutionError('benchmark_download_disabled', '本评测仅使用受泄题过滤保护的文字阅读；原件下载未启用。')
+
+
+PLANNING = "plan_without_clarification"
+"""与网页一致先生成计划；跳过澄清问题判断，计划的“需要确认”标记不拦截，按未经用户确认的目标交给研究。"""
+NO_PLANNING = "none; research agent receives original question"
+
+
+def prepare_plan(problem, brief_config, *, plan_fn=None):
+    """只调用网页规划的第二步（生成计划）。失败如实抛出，不退回无计划研究。
+
+    返回 (交给研究入口的参数, 落盘记录)。计划模型只收到题目，没有搜索能力。
+    """
+    brief = (plan_fn or research_brief.build_research_brief)(
+        problem, runtime_config.BriefConfig(**brief_config))
+    # 评测没有人确认计划：交给研究的说明必须写成“未经用户确认”。
+    unconfirmed = brief.model_copy(update={"needs_confirmation": False})
+    kwargs = {"requirements": brief.to_run_requirements(),
+              "brief_context": research_brief.render_brief_context(unconfirmed),
+              "initial_route": [item.model_dump(mode="json") for item in brief.route]}
+    record = {"protocol": PLANNING, "planner": brief_config,
+              "clarification": "skipped: gap assessment not called",
+              "planner_needs_confirmation": brief.needs_confirmation,
+              "brief": brief.model_dump(mode="json"), "brief_context": kwargs["brief_context"]}
+    return kwargs, record
+
+
+def bash_leak_audit(run_dir):
+    """Bash 可直接联网，绕过搜索/阅读/下载的泄题过滤；研究结束后扫描命令与输出，命中只标记不改答案。"""
+    hits = []
+    run_dir = Path(run_dir)
+    journal = run_dir / "tool_calls.jsonl"
+    if journal.exists():
+        for line in journal.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                call = json.loads(line)
+            except ValueError:
+                continue
+            if call.get("tool") == "bash":
+                text = " ".join(str(call.get(k) or "") for k in ("arguments_raw", "arguments", "result"))
+                if LEAKAGE_MARKER.search(text):
+                    hits.append({"where": "bash_call", "tool_call_id": call.get("tool_call_id"), "phase": call.get("phase")})
+    logs = run_dir / "execution" / "logs"
+    for path in sorted(logs.glob("*")) if logs.is_dir() else []:
+        if LEAKAGE_MARKER.search(path.read_text(encoding="utf-8", errors="replace")):
+            hits.append({"where": "bash_output", "file": path.name})
+    return hits
 
 
 def delivered_answer(result):
     return "" if result.draft_rejected else result.draft.strip()
 
 
-def run_one(question, out, config, *, run_fn=None):
-    """question 只含 id/problem/category，标准答案与答案类型不进入研究进程。"""
+def run_one(question, out, config, *, run_fn=None, brief_config=None, plan_fn=None):
+    """question 只含 id/problem/category，标准答案与答案类型不进入研究进程。
+
+    给出 ``brief_config`` 时先按网页方式生成计划（不问澄清问题）再研究；不给时沿用无计划协议。
+    """
     run_fn = run_fn or research.run_minimal_research
-    config = config.model_copy(update={'vision': config.vision.model_copy(update={'enabled': False}),
-                                      'browser': BrowserConfig(enabled=False)})
+    # 看图跟随传入配置（新批次沿用网页设置）；浏览器在评测中始终关闭，泄题过滤不覆盖浏览器访问。
+    config = config.model_copy(update={'browser': BrowserConfig(enabled=False)})
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     run_id = f"dsqa-{question['id']}-{datetime.now():%Y%m%d-%H%M%S-%f}"
@@ -114,15 +183,24 @@ def run_one(question, out, config, *, run_fn=None):
     old_fetch = simple_research.fetch_url_content
     old_download = file_sources.fetch_original
     simple_research.fetch_url_content = guard.wrap_fetch(old_fetch)
-    file_sources.fetch_original = guard.block_original
+    file_sources.fetch_original = guard.wrap_download(old_download)
     trace_token = llm.set_trace_full_io(True)
     started = time.monotonic()
     record = {**question, "run_id": run_id, "response": "", "status": "error",
               "prompt_profile": config.prompt_profile}
+    record["preflight_planning"] = PLANNING if brief_config is not None else NO_PLANNING
     atomic_json(out / "progress.json", {**record, "status": "running"})
     try:
+        plan_kwargs = {}
+        if brief_config is not None:
+            try:
+                plan_kwargs, plan_record = prepare_plan(question["problem"], brief_config, plan_fn=plan_fn)
+            except Exception as exc:
+                record["planning_error"] = f"{type(exc).__name__}: {exc}"
+                raise
+            atomic_json(out / "plan.json", plan_record)
         result = run_fn(question["problem"], config=config, run_id=run_id,
-                        checkpoint_dir=RUNS_DIR / run_id, search_fn=guard.search)
+                        checkpoint_dir=RUNS_DIR / run_id, search_fn=guard.search, **plan_kwargs)
         answer = delivered_answer(result)
         record.update(response=answer, status="completed" if answer else "no_answer",
                       delivery_status=result.delivery_status, stop_reason=result.stop_reason,
@@ -139,6 +217,7 @@ def run_one(question, out, config, *, run_fn=None):
         simple_research.fetch_url_content = old_fetch
         file_sources.fetch_original = old_download
         llm.reset_trace_full_io(trace_token)
+    record["bash_leak_hits"] = bash_leak_audit(RUNS_DIR / run_id)
     record.update(wall_seconds=round(time.monotonic() - started, 2), searches=guard.searches,
                   blocked_benchmark_pages=guard.blocked, blocked_original_downloads=guard.blocked_originals)
     atomic_json(out / "result.json", record)
@@ -146,8 +225,8 @@ def run_one(question, out, config, *, run_fn=None):
     return record
 
 
-def _worker(question, out, config_data):
-    return run_one(question, out, simple_research.SimpleConfig.model_validate(config_data))
+def _worker(question, out, config_data, brief_config=None):
+    return run_one(question, out, simple_research.SimpleConfig.model_validate(config_data), brief_config=brief_config)
 
 
 def main(argv=None):
@@ -157,9 +236,10 @@ def main(argv=None):
     parser.add_argument("--ids", type=int, nargs="+", help="显式指定零起始题号，用新批次做定向复跑")
     parser.add_argument("--batch", default="pilot-20261002")
     parser.add_argument("--workers", type=int, default=2)
-    parser.add_argument("--seconds", type=float, default=600)
+    parser.add_argument("--seconds", type=float, default=1200, help="每题研究总时限，默认与第 68 题复测相同的 1200 秒")
     parser.add_argument("--model", help="仅覆盖本批研究模型，不修改网页设置")
     parser.add_argument("--provider", help="仅覆盖本批连接，不修改网页设置")
+    parser.add_argument("--no-plan", action="store_true", help="不生成计划，研究只收到原题（旧口径对照）")
     parser.add_argument("--run-live", action="store_true")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"[A-Za-z0-9_-]+", args.batch) or args.workers < 1:
@@ -176,15 +256,20 @@ def main(argv=None):
         settings = settings.model_copy(update={"subagent": settings.subagent.model_copy(update=node_overrides)})
     config = research_config(settings, args.seconds)
     config_data = config.model_dump(mode="json")
+    # 计划模型跟随网页设置；只记录模型身份，不含凭据。
+    brief_config = None if args.no_plan else runtime_config.to_brief_config(settings).model_dump(mode="json")
     protocol = {"seed": args.seed, "excluded_ids": sorted(EXPOSED_IDS),
                 "questions": questions, "config": config_data,
                 "provenance": json.loads((HERE / "data/provenance.json").read_text()),
-                "preflight_planning": "none; research agent receives original question"}
+                "preflight_planning": NO_PLANNING if args.no_plan else PLANNING}
+    if brief_config is not None:
+        protocol["planner"] = brief_config
     if args.ids is not None:
         protocol["selection"] = {"method": "explicit_ids", "ids": args.ids}
     print(json.dumps({"ids": [r["id"] for r in questions], "model": settings.subagent.model,
                       "provider": settings.subagent.provider, "reasoning": settings.subagent.reasoning,
                       "effort": settings.subagent.effort, "seconds": args.seconds,
+                      "planning": protocol["preflight_planning"], "planner": brief_config,
                       "workers": args.workers, "run_live": args.run_live}), flush=True)
     if not args.run_live:
         return
@@ -201,7 +286,7 @@ def main(argv=None):
                                "git_head": head, "tracked_diff_sha256": hashlib.sha256(diff).hexdigest()})
     todo = [q for q in questions if not (batch / str(q["id"]) / "result.json").exists()]
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
-        futures = {pool.submit(_worker, q, batch / str(q["id"]), config_data): q for q in todo}
+        futures = {pool.submit(_worker, q, batch / str(q["id"]), config_data, brief_config): q for q in todo}
         for future in as_completed(futures):
             record = future.result()
             print(json.dumps({k: record.get(k) for k in ("id", "status", "delivery_status", "stop_reason",

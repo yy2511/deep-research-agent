@@ -39,14 +39,14 @@ from pathlib import Path
 
 import requests
 
-from dra import research, runtime_config, simple_research, file_sources
+from dra import research, runtime_config, simple_research, skills, file_sources
 from dra.research_brief import build_research_brief, render_brief_context
 from dra.execution import ExecutionConfig, ExecutionError
 from dra.evidence_judge import JudgeConfig
 from dra.vision import VisionConfig
 from dra.browser import BrowserConfig
 from dra.models import RetrievedDoc
-from dra.paths import RUNS_DIR
+from dra.paths import DATA_DIR, RUNS_DIR
 from dra.tools import UrlFetchError
 
 HERE = Path(__file__).resolve().parent
@@ -177,7 +177,8 @@ def eval_config(model: str = MODEL, provider: str = PROVIDER, *, subagents: bool
         settings, execution=ExecutionConfig(enabled=False), vision=VisionConfig(enabled=False),
         browser=BrowserConfig(enabled=False), wall_timeout_s=WALL_TIMEOUT_S,
         search_snippet_chars=SNIPPET_CHARS, delegation_enabled=subagents,
-        **({} if condense else {"condense_over_chars": None}), **overrides)
+        **({} if condense else {"condense_over_chars": None}),
+        **{"compaction_enabled": False, "skill_bundle": skills.SkillRepository(DATA_DIR).prepare([]), **overrides})
     if adapter_overrides:
         config = config.model_copy(update={"adapter": config.adapter.model_copy(update=adapter_overrides)})
     if config.mcp_servers or config.source_mode != "web" or config.execution.enabled or config.browser.enabled:

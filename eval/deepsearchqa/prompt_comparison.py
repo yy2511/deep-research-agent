@@ -135,6 +135,7 @@ def prepare(target, source, *, size, seed, provider, model, workers):
     config["adapter"].update(model=model, provider=provider, reasoning=True, effort="low")
     config["prompt_profile"] = "product"
     config["evidence_judge"] = {**config.get("evidence_judge", {}), "enabled": False}
+    config["compaction_enabled"] = False
     runtime = target / "runtime"
     shutil.copytree(paths.PROJECT_ROOT / "src/dra", runtime / "src/dra",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))

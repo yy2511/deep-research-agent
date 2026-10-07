@@ -275,6 +275,20 @@ def _official_images(base_url, model):
             and model in ('deepseek-flash', 'deepseek-v4-flash-vision-exp') else {})
 
 
+def _builtin_base_url(provider):
+    """内置连接的地址：先看进程环境，再只读 .env 中该连接的地址项，不写回环境、不读取密钥。
+
+    脚本入口未必已加载 .env；网页启动时已加载。两边须识别出同一端点，否则官方看图能力会被误判为未知。
+    """
+    from dra import llm
+    found = llm._resolve_base_url(provider)
+    if found is None and llm._ENV_PATH.is_file():
+        from dotenv import dotenv_values
+        saved = dotenv_values(llm._ENV_PATH)
+        found = next((saved[name] for name in llm._base_url_env_names(provider) if saved.get(name)), None)
+    return found
+
+
 def capacity_snapshot(provider, model):
     """Read cached route declarations only. A public catalog is not relay evidence.
 
@@ -291,7 +305,7 @@ def capacity_snapshot(provider, model):
               'protocol': 'chat_completions', 'reasoning_format': connection.get('reasoning_format', 'auto'),
               'sources': {}, 'declarations': {}}
     from dra import llm
-    base_url = connection.get('base_url') or (llm._resolve_base_url(provider) if provider in llm._PROVIDERS else '')
+    base_url = connection.get('base_url') or (_builtin_base_url(provider) if provider in llm._PROVIDERS else '')
     # 官方接口的明确能力不推广到同名中转模型；手动禁用和实际 API 声明优先。
     # https://api-docs.deepseek.com/guides/vision/
     official = _official_images(base_url, model)
