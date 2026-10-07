@@ -15,18 +15,19 @@ const provider: ProviderStatus = {
 };
 
 describe("模型能力与切换", () => {
-  it("切换研究模型采用新容量，清空旧档位", () => {
+  it("切换研究模型保留用户工作目标，清空模型档位", () => {
     const next = selectModel(config, "subagent", provider, "known");
     expect(next.subagent).toEqual({ provider: "custom_test", model: "known", reasoning: true, effort: null });
-    expect(next.context_window_tokens).toBe(96000);
+    expect(next.context_window_tokens).toBe(200000);
     expect(next.compaction_enabled).toBe(true);
     expect(config.context_window_tokens).toBe(200000);
   });
-  it("未知模型清掉旧容量并关闭自动整理，不沿用上一模型的假设", () => {
+  it("未知路由不抹掉已批准工作窗口或关闭整理；自动模式也不静默切换", () => {
     const next = selectModel(config, "subagent", provider, "unknown");
-    expect(next.context_window_tokens).toBeNull();
-    expect(next.compaction_enabled).toBe(false);
+    expect(next.context_window_tokens).toBe(200000);
+    expect(next.compaction_enabled).toBe(true);
     expect(next.subagent.effort).toBeNull();
+    expect(selectModel({ ...config, context_window_mode: "auto" }, "subagent", provider, "unknown").context_window_mode).toBe("auto");
   });
   it("切换规划模型不改研究容量，获取已知容量不擅自开启自动整理", () => {
     expect(selectModel(config, "planner", provider, "known").context_window_tokens).toBe(200000);

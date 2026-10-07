@@ -16,6 +16,18 @@ it('previews interactive HTML without blocking its scripts or resources',()=>{
  expect(html).not.toContain('sandbox=');expect(html).not.toContain('srcDoc');
 });
 
+it.each(['jpeg','webp','gif'])('previews %s as an image',format=>{
+ const html=renderToStaticMarkup(<ArtifactPreview runId='r1' artifact={{...file,format}}/>);
+ expect(html).toContain('<img');expect(html).not.toContain('<iframe');
+});
+
+it('offers PDF preview and download, but unknown formats only download',()=>{
+ const pdf=renderToStaticMarkup(<ArtifactFiles runId='r1' artifacts={[{...file,format:'pdf'}]} errors={[]}/>);
+ expect(pdf).toContain('预览');expect(pdf).toContain('/download');
+ const binary=renderToStaticMarkup(<ArtifactFiles runId='r1' artifacts={[{...file,format:'bin'}]} errors={[]}/>);
+ expect(binary).not.toContain('预览');expect(binary).toContain('/download');
+});
+
 it('renders files in the active conversation workspace',async()=>{
  const {ConversationWorkspace}=await import('./components/ConversationWorkspace');
  const view=mergeSimpleResult(initialView(),{draft:'正文',artifacts:[file]},null);

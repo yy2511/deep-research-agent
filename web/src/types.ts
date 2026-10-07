@@ -104,7 +104,8 @@ export interface SimpleRunView {
   query?: string;
   usage?: Record<string, { input?: number; output?: number; responses?: number; missing_usage?: number }>;
 }
-export interface SimpleSource { origin?: {run_id:string;turn_index:number;source_ref?:string}; revalidated_at?:number|null; fetched_at?:number;
+export interface ImageObservation { image_ref:string; original_source_ref:string; image_sha256:string; image_file:string; page?:number|null; region?:number[]|null; route:string; model?:string; provider?:string; question?:string; }
+export interface SimpleSource { observation?:ImageObservation|null; origin?: {run_id:string;turn_index:number;source_ref?:string}; revalidated_at?:number|null; fetched_at?:number;
   computation?: {run_id:string;execution_id:string;tool_call_id:string;command:string;cwd:string;exit_code:number;
     declared_source_refs:string[];stdout_truncated:boolean;stderr:string;
     inputs:Array<{run_id:string;source_ref:string;title:string;url:string;path:string;sha256:string;size:number;download?:unknown;document?:unknown;computation?:boolean}>;
@@ -112,7 +113,7 @@ export interface SimpleSource { origin?: {run_id:string;turn_index:number;source
   mcp?: {server_id:string;server_name:string;tool:string;receipt_id:string;run_id?:string;format?:string;uri?:string;tool_call_id?:string}|null;
   ref: string; url: string; title: string; published_at?: string | null;
   snapshot_kind: string; raw_chars: number; truncated?: boolean; content_sha256?: string;
-  download?: { filename:string; encoding:string; original_sha256:string; size:number; final_url:string } | null;
+  download?: { filename:string; encoding:string|null; original_sha256:string; size:number; final_url:string } | null;
   document?: { document_id: string; version_id: string; file_name: string; suffix: string;
     pages: Array<{page:number;start:number;end:number}>; warnings?: string[] } | null;
 }
@@ -127,6 +128,7 @@ export interface EvidenceJudgmentData {
   attempted?: boolean; usage?: {input_tokens:number;output_tokens:number} | null; usage_unknown?: boolean;
 }
 export interface EvidenceQuote {
+  observation?: ImageObservation|null;
   source_kind?: string;
   quote: string; source_ref: string; source_url?: string;
   source_title?: string | null; location?: string; published_at?: string | null;

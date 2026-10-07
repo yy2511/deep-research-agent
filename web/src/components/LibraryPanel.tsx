@@ -14,7 +14,7 @@ export interface SourceSelection {
   blocked_sites?: string[];
 }
 interface Version {
-  version_id: string; file_name: string; status: string; error?: string;
+  version_id: string; file_name: string; status: string; error?: string; note?: string;
   raw_chars?: number; chunks?: number; warnings?: string[];
 }
 interface Document {
@@ -22,7 +22,7 @@ interface Document {
 }
 interface LibraryData { documents: Document[] }
 interface SearchHit { title: string; document: {version_id: string; matches: {start:number;end:number;text:string}[]} }
-const status: Record<string,string> = {queued:'排队中',parsing:'正在解析',indexing:'正在建立索引',ready:'可用',failed:'导入失败'};
+const status: Record<string,string> = {queued:'排队中',parsing:'正在解析',indexing:'正在建立索引',ready:'可用',original:'原件已保存（工具读取）',failed:'导入失败'};
 
 const MODES = [
   ['web', '仅网页', '只在网上检索和阅读'],
@@ -90,7 +90,7 @@ export function LibraryButton({ value, onChange, disabled = false }: {
       <Icon name="book" size={15} />我的资料{count ? <span className="chip-count">{count}</span> : null}
     </button>
     {open && <Modal title="我的资料" onClose={() => setOpen(false)}
-      description="文件保存在本机；研究时，读到的片段会发给研究模型。支持 TXT、Markdown 和文字版 PDF，单个最大 10 MB。"
+      description="文件保存在本机；研究时，读到的片段会发给研究模型。文字可检索；表格、图片和其他原件可交给工具读取。单个最大 10 MB。"
       footer={<>
         <span className="modal-foot-note">{count
           ? `已选 ${count} 份，${value.source_mode === 'library' ? '本次只查这些资料' : '本次会同时查网页和这些资料'}`
@@ -163,7 +163,7 @@ export function LibraryManager({value,onChange,disabled=false}: {
   }
   return <section className="library" aria-label="我的资料">
     <div className="library-actions">
-      <label className="btn btn-sm library-upload"><Icon name="upload" size={14} />上传文件<input aria-label="上传资料" type="file" accept=".txt,.md,.pdf" multiple disabled={busy||disabled} onChange={e=>{void upload(e.target.files);e.target.value='';}}/></label>
+      <label className="btn btn-sm library-upload"><Icon name="upload" size={14} />上传文件<input aria-label="上传资料" type="file" multiple disabled={busy||disabled} onChange={e=>{void upload(e.target.files);e.target.value='';}}/></label>
       <button type="button" className="btn btn-sm btn-ghost" disabled={busy||disabled} onClick={()=>void demo()}>导入示例资料</button>
     </div>
     {error && <p className="field-hint is-bad" role="alert">{error}</p>}
@@ -178,16 +178,17 @@ export function LibraryManager({value,onChange,disabled=false}: {
           <span className="library-document-name">
             <strong>{latest.file_name}</strong>
             <small>{current
-              ? `${current.raw_chars?.toLocaleString()} 字${latest.version_id!==current.version_id?' · 新版本处理中，暂用上一版':''}`
+              ? `${current.status==='original'?'尚无文字索引':`${current.raw_chars?.toLocaleString()} 字`}${latest.version_id!==current.version_id?' · 新版本处理中，暂用上一版':''}`
               : processing ? '处理完成后才能选' : ''}</small>
           </span>
           <span className={`status-text is-${latest.status}`}>{processing&&<Icon name="loading" className="icon-spin" size={13}/>}{status[latest.status]??latest.status}</span>
         </label>
+        {latest.note&&<p className="field-hint">{latest.note}</p>}
         {latest.error && <p className="field-hint is-bad">{latest.error}</p>}
         {(current?.warnings??[]).map(w=><p className="field-hint" key={w}>{w}</p>)}
         <div className="library-document-actions">
-          {current && <><a href={`/api/library/versions/${current.version_id}/text`} target="_blank" rel="noreferrer">预览解析文本</a><a href={`/api/library/versions/${current.version_id}/original`} target="_blank" rel="noreferrer">打开原件</a></>}
-          <label className="library-replace">{latest.status==='failed'?'重新导入':'更新版本'}<input aria-label={`更新 ${latest.file_name}`} type="file" accept=".txt,.md,.pdf" disabled={busy||disabled||processing} onChange={e=>{void upload(e.target.files,doc.document_id);e.target.value='';}}/></label>
+          {current && <>{current.status!=="original"&&<a href={`/api/library/versions/${current.version_id}/text`} target="_blank" rel="noreferrer">预览解析文本</a>}<a href={`/api/library/versions/${current.version_id}/original`} target="_blank" rel="noreferrer">打开原件</a></>}
+          <label className="library-replace">{latest.status==='failed'?'重新导入':'更新版本'}<input aria-label={`更新 ${latest.file_name}`} type="file" disabled={busy||disabled||processing} onChange={e=>{void upload(e.target.files,doc.document_id);e.target.value='';}}/></label>
           <button type="button" className="link-btn" disabled={busy||disabled} onClick={()=>void remove(doc.document_id)}>移出</button>
         </div>
       </li>;

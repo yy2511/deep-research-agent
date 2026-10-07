@@ -117,7 +117,7 @@ export function ProcessList({rows,view,expanded,toggle,onCall,onAgent}:{rows:Pro
  return <div className='cw-process-rows'>{rows.map(row=>{
   if(row.kind==='compaction') {const d=row.data; const recordKey=modelRecordKey(view,String(d.call_id));
    return <Fold key={row.key} id={`row:${row.key}`} expanded={expanded} toggle={toggle}
-    label={<><span className='cw-row-icon'><Info size={15}/></span><span className='cw-row-type'>整理研究上下文</span><span className='cw-row-excerpt'>{d.status==='started'?'正在整理':d.status==='completed'?'整理完成':'没有整理成功，保留原来的上下文'}</span></>}>
+    label={<><span className='cw-row-icon'><Info size={15}/></span><span className='cw-row-type'>整理研究上下文</span><span className='cw-row-excerpt'>{d.status==='started'?'正在整理':d.status==='retrying'?'整理请求暂时失败，正在重试':d.status==='completed'?'整理完成':'没有整理成功，保留原来的上下文'}</span></>}>
     <p>估算输入 {numberText(d.before_tokens_estimate)} → {numberText(d.after_tokens_estimate)} token · 保留最近 {numberText(d.retained_rounds)} 轮</p>
     <p>整理本身用了输入 {numberText(d.input_tokens)} / 输出 {numberText(d.output_tokens)} token · {numberText(d.elapsed_ms)} 毫秒</p>
     <p className='cw-muted'>回读编号：<code>{String(d.checkpoint_id)}</code></p>
@@ -152,15 +152,25 @@ export function ProcessList({rows,view,expanded,toggle,onCall,onAgent}:{rows:Pro
  })}</div>;
 }
 
+function ImageDetails({runId,quote}:{runId:string;quote:EvidenceQuote}) {
+ const image=quote.observation;
+ if(!image)return null;
+ return <div><p className='cw-muted'>视觉观察，未经机器核验{image.page?` · PDF第${image.page}页`:''}{image.region?` · 裁剪 ${image.region.join(', ')}`:''}{image.model?` · ${image.model}`:''}</p>
+  <img src={`/api/runs/${runId}/images/${image.image_sha256}`} alt='证据所依据的页图或裁剪' style={{maxWidth:'100%'}}/>
+  <a className='cw-link' href={`/api/runs/${runId}/sources/${image.original_source_ref}/original`} target='_blank' rel='noreferrer'>查看原件</a>
+ </div>;
+}
+
 function SourceText({runId,card,wide=false}:{runId:string;card:EvidenceQuote;wide?:boolean}) {
- const contentName=card.source_kind==='computation'?'计算输出':'原文';
+ const contentName=card.source_kind==='computation'?'计算输出':card.source_kind==='observation'?'视觉模型输出':'原文';
  const [text,setText]=useState<string|null>(null),[error,setError]=useState('');
  const mark=useRef<HTMLElement>(null);
- useEffect(()=>{let alive=true;setText(null);setError('');const abort=new AbortController();
+ useEffect(()=>{if(card.location?.startsWith('image='))return;let alive=true;setText(null);setError('');const abort=new AbortController();
   fetch(`/api/runs/${runId}/sources/${card.source_ref}`,{signal:abort.signal}).then(async res=>{if(!res.ok)throw new Error(`保存的${contentName}不可用，或校验没有通过`);return res.text()}).then(t=>{if(alive)setText(t)}).catch(e=>{if(alive)setError(e.message)});
   return ()=>{alive=false;abort.abort()};
- },[runId,card.source_ref,contentName]);
+ },[runId,card.source_ref,card.location,contentName]);
  useEffect(()=>{if(wide&&text!==null)mark.current?.scrollIntoView({block:'center'})},[text,wide]);
+ if(card.location?.startsWith('image=')&&card.observation)return <ImageDetails runId={runId} quote={card}/>;
  if(error)return <p role='alert' className='cw-warning'>{error}</p>;
  if(text===null)return <p className='cw-empty'>正在读取保存的{contentName}…</p>;
  const chars=Array.from(text),match=/^chars=(\d+)-(\d+)$/.exec(card.location??'');
@@ -174,7 +184,7 @@ function SourceText({runId,card,wide=false}:{runId:string;card:EvidenceQuote;wid
 function QuoteDetail({quote,source,runId,index,total,onSource}:{quote:EvidenceQuote;source?:SimpleSource;runId:string;index:number;total:number;onSource:()=>void}) {
  const [expanded,setExpanded]=useState(false);
  const url=quote.deep_link||quote.source_url||source?.url;
- const contentName=source?.computation||quote.source_kind==='computation'?'计算输出':'原文';
+ const contentName=source?.computation||quote.source_kind==='computation'?'计算输出':quote.source_kind==='observation'?'视觉观察':'原文';
  return <section className='cw-quote-section' aria-label={`依据 ${index+1}`}>
   <div className='cw-source-row'>
    <span className='cw-source-badge'>{(hostOf(source?.url??quote.source_url)||source?.document?.file_name||'资料').slice(0,2).toUpperCase()}</span>
@@ -187,11 +197,12 @@ function QuoteDetail({quote,source,runId,index,total,onSource}:{quote:EvidenceQu
   {source?.document&&<p className='cw-muted'>使用的是固定版本 <code title={source.document.version_id}>{source.document.version_id.slice(0,12)}</code>，之后更新资料库不会改动它。</p>}
   {source?.mcp&&<McpSourceDetails source={source} runId={runId}/>}
   {source?.computation&&<ComputationSourceDetails source={source}/>}
+  {quote.observation&&<ImageDetails runId={runId} quote={quote}/>}
   {source?.truncated&&<p className='cw-warning'>来源太长，只保存了前面一部分。</p>}
   <div className='cw-detail-actions'>
    <button onClick={()=>setExpanded(!expanded)}>{expanded?'收起上下文':'看前后文'}</button>
-   <button onClick={onSource}><BookOpen size={14}/>{source?.computation?'读保存的计算输出':'读保存的全文'}</button>
-   {source?.document?<DocumentLink runId={runId} source={source} location={quote.location}/>:!source?.mcp&&url&&<a className='cw-link' href={url} target='_blank' rel='noreferrer'>打开原网页 <ArrowUpRight size={13}/></a>}
+   <button onClick={onSource}><BookOpen size={14}/>{quote.observation?quote.location?.startsWith('image=')?'回看图片':'读视觉观察记录':source?.computation?'读保存的计算输出':'读保存的全文'}</button>
+   {source?.document?<DocumentLink runId={runId} source={source} location={quote.location}/>:!source?.mcp&&!quote.observation&&url&&<a className='cw-link' href={url} target='_blank' rel='noreferrer'>打开原网页 <ArrowUpRight size={13}/></a>}
    {source?.download&&<DocumentLink runId={runId} source={source}/>}
   </div>
   {expanded&&<SourceText runId={runId} card={quote}/>}

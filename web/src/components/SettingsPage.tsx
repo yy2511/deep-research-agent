@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { getJSON, postJSON, putJSON } from "../api";
+import type { ExecutionEffective, RetryPolicy } from "../capabilities";
 import { effortOptions, modelSettingsError, selectModel, type ProviderStatus } from "../providerSettings";
+import { CapabilitySettings } from "./CapabilitySettings";
 import { Icon } from "./Icon";
 import { McpManager } from "./McpPanel";
 import { ModelCapabilities } from "./ModelCapabilities";
+import { ModelField } from "./ModelField";
 import { ProviderConnections } from "./ProviderConnections";
 import { Select } from "./Select";
 import { SkillsPanel } from "./SkillsPanel";
@@ -18,17 +21,33 @@ export interface SimpleBudget {
   storage_max_chars: number;
 }
 export interface ConfigPayload {
+  browser?: {enabled:boolean};
+  vision?: {enabled:boolean;mode:"auto"|"force_auxiliary";provider:string;model:string};
   schema_version?: number;
   call_limits_enabled?: boolean;
   evidence_judge?: {enabled:boolean};
   evidence_judge_status?: {key_configured:boolean;model:string;concurrency:number;batch_timeout_s:number};
+  wall_timeout_s?: number | null;
+  wrapup_reserve_s?: number;
+  summary_timeout_s?: number;
+  summary_max_retries?: number;
   compaction_enabled?: boolean;
   context_window_tokens?: number | null;
+  context_window_mode?: "manual" | "auto";
+  max_output_tokens?: number;
+  summary_max_output_tokens?: number | null;
+  wrapup_max_output_tokens?: number | null;
   planner: { model: string; provider: string; effort: string | null };
   subagent: NodeConfig;
   /** 最小闭环的真实预算摘要（服务端 SimpleConfig），启动前确认投入范围用。 */
   simple_budget?: SimpleBudget;
   simple_model?: { model: string; provider: string; reasoning?: boolean };
+  /** 可写：null 表示跟随本机默认（不改变已有执行权限）。 */
+  execution_enabled?: boolean | null;
+  /** 只读：开关的实际取值与来源。 */
+  execution_effective?: ExecutionEffective;
+  /** 只读：服务端实际使用的重试次数。 */
+  retry_policy?: RetryPolicy;
 }
 
 type NodeKey = "planner" | "subagent";
@@ -41,80 +60,85 @@ export const SETTINGS_NODES: Array<{ key: NodeKey; label: string; hint: string; 
 
 export function settingsUpdate(config: ConfigPayload) {
   // GET 包含只读运行摘要；只提交 RuntimeModelSettings 可写字段，避免响应扩展破坏保存。
-  const { schema_version, planner, subagent, call_limits_enabled, compaction_enabled, context_window_tokens, evidence_judge } = config;
-  return { schema_version, planner, subagent, call_limits_enabled, compaction_enabled, context_window_tokens, evidence_judge };
+  const { vision, schema_version, planner, subagent, call_limits_enabled, compaction_enabled, context_window_tokens, context_window_mode, max_output_tokens, summary_max_output_tokens, wrapup_max_output_tokens, evidence_judge, wall_timeout_s, wrapup_reserve_s, summary_timeout_s, summary_max_retries } = config;
+  // 旧服务端没有这个字段时不提交，由服务端沿用当前值。
+  const execution = "execution_enabled" in config ? { execution_enabled: config.execution_enabled ?? null } : {};
+  return { ...("browser" in config ? {browser: config.browser} : {}), vision, schema_version, planner, subagent, call_limits_enabled, compaction_enabled, context_window_tokens, context_window_mode, max_output_tokens, summary_max_output_tokens, wrapup_max_output_tokens, evidence_judge, wall_timeout_s, wrapup_reserve_s, summary_timeout_s, summary_max_retries, ...execution };
 }
 
 /** 本机偏好：只存在浏览器里，不影响后端配置。 */
 export interface LocalPrefs { showRecords: boolean; showReplay: boolean; traceFull: boolean }
 
-export type SettingsTab = "models" | "connections" | "skills" | "mcp" | "general";
+export type SettingsTab = "models" | "capabilities" | "connections" | "skills" | "mcp" | "general";
 const TABS: Array<[SettingsTab, string]> = [
-  ["models", "模型"], ["connections", "API 连接"], ["skills", "技能"], ["mcp", "外部资料（MCP）"], ["general", "通用"],
+  ["models", "模型"], ["capabilities", "研究能力"], ["connections", "API 连接"], ["skills", "技能"], ["mcp", "外部资料（MCP）"], ["general", "通用"],
 ];
 
-// 模型可搜下拉：展开完整列表、输入即过滤、点击选中、仍允许自定义模型名。
-function ModelField({ value, models, onChange, label }: {
-  value: string; models: string[]; onChange: (v: string) => void; label: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const q = value.trim().toLowerCase();
-  const matches = models.filter((m) => m.toLowerCase().includes(q));
-  // 空输入、已等于某个完整模型名、或零匹配（刚切了连接）时展示全部。
-  const showAll = q === "" || matches.length === 0 || models.some((m) => m.toLowerCase() === q);
-  const filtered = (showAll ? models : matches).slice(0, 60);
-  return (
-    <div className="model-field">
-      <input
-        className="input"
-        aria-label={label} role="combobox" aria-expanded={open} aria-autocomplete="list"
-        value={value}
-        placeholder="选择或输入模型名"
-        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-      />
-      {models.length > 0 && (
-        <button type="button" className="model-caret" tabIndex={-1} aria-label="展开模型列表"
-          onMouseDown={(e) => { e.preventDefault(); setOpen((o) => !o); }}>
-          <Icon name="chevron-down" size={14} />
-        </button>
-      )}
-      {open && filtered.length > 0 && (
-        <ul className="menu-list" role="listbox" aria-label={`${label}列表`}>
-          <li className="menu-list-head">{showAll ? `${models.length} 个模型` : `${filtered.length}/${models.length} 匹配`}</li>
-          {filtered.map((m) => (
-            // onMouseDown 而非 onClick：抢在 input 的 onBlur 关闭列表之前触发选中
-            <li key={m} role="option" aria-selected={m === value} className={`menu-item mono${m === value ? " is-on" : ""}`}
-              onMouseDown={() => { onChange(m); setOpen(false); }}>{m}</li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function ModelSettings({ onSaved }: { onSaved?: (c: ConfigPayload) => void }) {
+/** 模型页与能力页共用的一份草稿与保存状态，由 SettingsPage 持有；两页之间切换不丢未保存的修改。 */
+export function useRuntimeSettings(onSaved?: (c: ConfigPayload) => void) {
   const [config, setConfig] = useState<ConfigPayload | null>(null);
   const [savedJson, setSavedJson] = useState("");
+  const [saved, setSaved] = useState<ConfigPayload | null>(null);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [testState, setTestState] = useState<Record<string, { state: TestState; error?: string }>>({});
-  const [refreshing, setRefreshing] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  const [revision, setRevision] = useState(0);
 
   function load() {
     Promise.all([getJSON<ConfigPayload>("/api/config"), getJSON<ProviderStatus[]>("/api/providers")])
       .then(([settings, connections]) => {
-        setConfig(settings); setSavedJson(JSON.stringify(settingsUpdate(settings))); setProviders(connections); setError(null);
+        setConfig(settings); setSaved(settings); setSavedJson(JSON.stringify(settingsUpdate(settings))); setProviders(connections); setError(null);
       })
       .catch(e => setError(e instanceof Error ? e.message : "读取设置失败"));
   }
   useEffect(load, []);
+  /** 只刷新连接列表（「API 连接」页可能改过），不动草稿。 */
+  function reloadProviders() {
+    getJSON<ProviderStatus[]>("/api/providers").then(setProviders).catch(e => setError(e instanceof Error ? e.message : "读取连接失败"));
+  }
+  const dirty = !!config && JSON.stringify(settingsUpdate(config)) !== savedJson;
 
-  if (!config) return <div className="settings-section"><p className={error ? "field-hint is-bad" : "field-hint"}>{error || "正在读取设置…"}</p></div>;
-  const dirty = JSON.stringify(settingsUpdate(config)) !== savedJson;
+  async function save() {
+    if (!config) return;
+    const invalid = modelSettingsError(config, providers);
+    if (invalid) { setError(invalid); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      const next = await putJSON<ConfigPayload>("/api/config", settingsUpdate(config));
+      setConfig(next); setSaved(next); setSavedJson(JSON.stringify(settingsUpdate(next)));
+      setNotice("已保存。之后开始的研究使用新设置，进行中的研究保持开始时的设置。");
+      setRevision(r => r + 1);
+      onSaved?.(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+  return { config, setConfig, saved, providers, setProviders, reloadProviders, saving, error, setError, notice, setNotice, dirty, load, save, revision };
+}
+export type RuntimeSettings = ReturnType<typeof useRuntimeSettings>;
+
+function SettingsFooter({ s }: { s: RuntimeSettings }) {
+  return <footer className="settings-footer">
+    <span className={`field-hint${s.dirty ? " is-warn" : ""}`}>{s.dirty ? "有未保存的修改" : ""}</span>
+    <button className="btn btn-ghost" disabled={!s.dirty || s.saving} onClick={s.load}>放弃修改</button>
+    <button className="btn btn-primary" onClick={() => void s.save()} disabled={s.saving || !s.dirty}>{s.saving ? "保存中…" : "保存"}</button>
+  </footer>;
+}
+
+function SettingsLoading({ error }: { error: string | null }) {
+  return <div className="settings-section"><p className={error ? "field-hint is-bad" : "field-hint"}>{error || "正在读取设置…"}</p></div>;
+}
+
+function ModelSettings({ s }: { s: RuntimeSettings }) {
+  const { config, setConfig, providers, setProviders, error, setNotice, notice } = s;
+  const [testState, setTestState] = useState<Record<string, { state: TestState; error?: string }>>({});
+  const [refreshing, setRefreshing] = useState<string | null>(null);
+
+  if (!config) return <SettingsLoading error={error} />;
 
   function updateNode(node: NodeKey, patch: Partial<NodeConfig>) {
     setConfig((c) => (c ? ({ ...c, [node]: { ...c[node], ...patch } } as ConfigPayload) : c));
@@ -152,29 +176,12 @@ function ModelSettings({ onSaved }: { onSaved?: (c: ConfigPayload) => void }) {
       setRefreshing(null);
     }
   }
-  async function save() {
-    if (!config) return;
-    const invalid = modelSettingsError(config, providers);
-    if (invalid) { setError(invalid); return; }
-    setSaving(true);
-    setError(null);
-    try {
-      const saved = await putJSON<ConfigPayload>("/api/config", settingsUpdate(config));
-      setConfig(saved); setSavedJson(JSON.stringify(settingsUpdate(saved)));
-      setNotice("已保存，之后开始的研究会使用新设置。");
-      onSaved?.(saved);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(false);
-    }
-  }
   // 校验错误原文带字段前缀（如 "subagent.effort=..."），只看前半句人类可读部分来定位出错的卡片。
   const primaryMessage = error?.split("[type=")[0].toLowerCase() ?? "";
 
   return <>
     <div className="settings-section">
-      <div className="section-head"><div><h2>模型</h2><p>给两个环节分别选模型。修改只影响之后开始的研究。</p></div></div>
+      <div className="section-head"><div><h2>模型</h2><p>给两个环节分别选模型。看图、运行代码、长对话整理等在「研究能力」里设置。修改只影响之后开始的研究。</p></div></div>
       {notice && <p className="notice" role="status">{notice}</p>}
       {SETTINGS_NODES.map(({ key, label, hint, hasReasoning }) => {
         const node = config[key];
@@ -213,7 +220,7 @@ function ModelSettings({ onSaved }: { onSaved?: (c: ConfigPayload) => void }) {
               {provider && node.model.trim()
                 ? <ModelCapabilities key={`${key}:${provider.name}:${node.model}`} provider={provider} model={node.model} info={info}
                     onChange={p => setProviders(items => items.map(item => item.name === p.name ? p : item))}
-                    onUseContext={key === "subagent" ? tokens => setConfig(c => c ? { ...c, context_window_tokens: tokens } : c) : undefined} />
+                    onUseContext={key === "subagent" ? tokens => setConfig(c => c ? { ...c, context_window_mode: "manual", context_window_tokens: tokens } : c) : undefined} />
                 : <span />}
               <div className="card-foot-actions">
                 {ts?.state === "ok" && <span className="status-text is-ready"><Icon name="check" size={13} />可用 · {ts.error}</span>}
@@ -229,33 +236,23 @@ function ModelSettings({ onSaved }: { onSaved?: (c: ConfigPayload) => void }) {
           </section>
         );
       })}
-      <div className="setting-group">
-        <h3>研究选项</h3>
-        <SettingRow title="自动整理长上下文" description="对话太长时，把较早的过程压缩成摘要，保留最近几轮。证据和原始记录不受影响；整理本身会调用研究模型。">
-          <Switch label="自动整理长上下文" checked={!!config.compaction_enabled} onChange={v => setConfig({ ...config, compaction_enabled: v })} />
-        </SettingRow>
-        {config.compaction_enabled && <label className="field field-indent"><span className="field-label">模型上下文容量（token）</span>
-          <input className="input input-num" type="number" min={12001} step={1} value={config.context_window_tokens ?? ""}
-            placeholder="填服务商实际支持的容量" aria-label="模型上下文容量"
-            onChange={e => setConfig({ ...config, context_window_tokens: e.target.value ? Number(e.target.value) : null })} />
-          <small className="field-hint">会预留 12,000 token；用到 85% 时开始整理。不知道容量时请关掉这个选项。</small></label>}
-        <SettingRow title="保存证据时核验引文"
-          description={<>把结论和引文发给核验模型（Jev），判断引文是否撑得起结论，结果显示在证据卡上，也会反馈给 Agent 修正。不会强行拦下引用；超时显示“未核验”。
-            <br />{config.evidence_judge_status?.key_configured ? "密钥已配置" : "密钥未配置"} · {config.evidence_judge_status?.model ?? "Jev"}</>}>
-          <Switch label="保存证据时核验引文" checked={!!config.evidence_judge?.enabled} onChange={v => setConfig({ ...config, evidence_judge: { enabled: v } })} />
-        </SettingRow>
-        <SettingRow title="限制调用次数" description="开启后，主 Agent 和子任务的模型、工具调用次数都有上限，并留出收尾的次数。不论开关，研究总时限都有效。">
-          <Switch label="限制调用次数" checked={!!config.call_limits_enabled} onChange={v => setConfig({ ...config, call_limits_enabled: v })} />
-        </SettingRow>
-      </div>
       {error && !SETTINGS_NODES.some(n => primaryMessage.includes(n.key)) && <p className="field-hint is-bad">{error}</p>}
     </div>
-    <footer className="settings-footer">
-      <span className={`field-hint${dirty ? " is-warn" : ""}`}>{dirty ? "有未保存的修改" : ""}</span>
-      <button className="btn btn-ghost" disabled={!dirty || saving} onClick={load}>放弃修改</button>
-      <button className="btn btn-primary" onClick={() => void save()} disabled={saving || !dirty}>{saving ? "保存中…" : "保存"}</button>
-    </footer>
+    <SettingsFooter s={s} />
   </>;
+}
+
+function CapabilityTab({ s, onTab }: { s: RuntimeSettings; onTab: (tab: SettingsTab) => void }) {
+  if (!s.config) return <SettingsLoading error={s.error} />;
+  return <>
+    <CapabilitySettings s={s} onManageSkills={() => onTab("skills")} />
+    <SettingsFooter s={s} />
+  </>;
+}
+
+/** 模型 / 研究能力两页都读写 SettingsPage 持有的同一份草稿。 */
+export function RuntimeTab({ tab, s, onTab }: { tab: "models" | "capabilities"; s: RuntimeSettings; onTab: (tab: SettingsTab) => void }) {
+  return tab === "models" ? <ModelSettings s={s} /> : <CapabilityTab s={s} onTab={onTab} />;
 }
 
 function ConnectionSettings() {
@@ -308,15 +305,23 @@ export function SettingsPage({ tab, onTab, prefs, onPrefs, onDemo, onSaved }: {
   prefs: LocalPrefs; onPrefs: (p: LocalPrefs) => void; onDemo: () => void;
   onSaved?: (c: ConfigPayload) => void;
 }) {
+  const runtime = useRuntimeSettings(onSaved);
+  const { config, reloadProviders } = runtime;
+  const isRuntimeTab = (id: SettingsTab) => id === "models" || id === "capabilities";
+  // 从其他页回到模型 / 能力页时只刷新连接列表；草稿保持不变。
+  function selectTab(id: SettingsTab) {
+    if (isRuntimeTab(id) && !isRuntimeTab(tab) && config) reloadProviders();
+    onTab(id);
+  }
   return <div className="settings-page">
     <nav className="settings-nav" aria-label="设置分类">
       <h1>设置</h1>
       {TABS.map(([id, label]) => <button key={id} type="button" aria-current={tab === id ? "page" : undefined}
-        className={`settings-nav-item${tab === id ? " is-active" : ""}`} onClick={() => onTab(id)}>{label}</button>)}
+        className={`settings-nav-item${tab === id ? " is-active" : ""}`} onClick={() => selectTab(id)}>{label}</button>)}
     </nav>
     <div className="settings-main">
       <div className="settings-scroll">
-        {tab === "models" ? <ModelSettings onSaved={onSaved} />
+        {tab === "models" || tab === "capabilities" ? <RuntimeTab tab={tab} s={runtime} onTab={onTab} />
           : tab === "connections" ? <div className="settings-section-wrap"><ConnectionSettings /></div>
           : tab === "skills" ? <SkillsPanel />
           : tab === "mcp" ? <McpManager />

@@ -720,6 +720,70 @@ select:focus { outline: none; border-color: var(--accent); }
 .mcp-tool.is-disabled code { color: var(--placeholder); }
 .mcp-tool > .field-hint { padding-left: 24px; }
 
+/* 设置 → 研究能力：顶部总览 + 分组能力卡 */
+.cap-overview { display: flex; flex-direction: column; gap: 10px; padding: 16px; background: var(--sidebar); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); }
+.cap-overview-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.cap-overview-head strong { font-size: 14px; font-weight: 600; }
+.cap-overview-head small { font-size: 12px; color: var(--faint); }
+.cap-overview-head small.is-warn { color: var(--amber); }
+.cap-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.cap-tile { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); text-align: left; transition: border-color .12s; }
+.cap-tile:hover { border-color: var(--accent-line); }
+.cap-tile-label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--faint); }
+.cap-tile-value { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; color: var(--ink); }
+.cap-tile small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--faint); }
+.cap-lamp { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--line-strong); }
+.cap-lamp.is-ok { background: var(--green); }
+.cap-lamp.is-warn { background: var(--amber); }
+.cap-lamp.is-bad { background: var(--red); }
+.cap-lamp.is-off { background: transparent; border: 1.5px solid var(--placeholder); }
+.cap-lamp.is-busy { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.cap-group { display: flex; flex-direction: column; gap: 12px; }
+.cap-group > h3 { margin: 8px 0 0; font-size: 14px; font-weight: 600; color: var(--muted); }
+.cap-card { gap: 12px; scroll-margin-top: 16px; }
+.cap-card-head { display: flex; align-items: flex-start; gap: 12px; }
+.cap-icon { width: 32px; height: 32px; flex: none; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent); }
+.cap-card-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cap-card-title strong { font-size: 16px; font-weight: 600; }
+.cap-card-title small { font-size: 12px; line-height: 1.6; color: var(--faint); }
+.cap-card-head > .switch { margin-top: 4px; }
+.cap-card-head > .btn { flex: none; }
+.cap-card-body { display: flex; flex-direction: column; gap: 12px; padding-left: 44px; min-width: 0; }
+.cap-card > .setting-row { padding: 0; border-top: 0; }
+.cap-source { margin: 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.cap-source .link-btn { margin-left: 8px; font-size: 12px; }
+.is-warn-text { color: var(--amber); }
+.is-bad-text { color: var(--red); }
+.field-hint .is-warn-text { margin-left: 4px; }
+.cap-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.cap-tags .tag { margin: 0; }
+.cap-status { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid var(--line-soft); border-left: 3px solid var(--line-strong); border-radius: var(--radius); background: var(--bg); }
+.cap-status.is-ok { border-left-color: var(--green); }
+.cap-status.is-warn { border-left-color: var(--amber); }
+.cap-status.is-bad { border-left-color: var(--red); }
+.cap-status-head { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.cap-status-title { flex: 1; min-width: 0; font-size: 14px; color: var(--muted); }
+.cap-status-title strong { font-weight: 600; color: var(--ink); }
+.cap-status > p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+.cap-status.is-bad > p:first-of-type { color: var(--red); }
+.cap-status > p.cap-pending { display: flex; align-items: flex-start; gap: 6px; margin-top: 4px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--amber-soft); color: var(--amber-ink); }
+.cap-pending > svg { margin-top: 3px; }
+.cap-env { margin-top: 4px; }
+.cap-env-list { margin: 0; }
+.cap-env-list > div { display: flex; gap: 16px; padding: 4px 0; border-top: 1px solid var(--line-soft); font-size: 12px; }
+.cap-env-list dt { width: 72px; flex: none; color: var(--faint); }
+.cap-env-list dd { flex: 1; min-width: 0; margin: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.cap-readonly { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: var(--radius); background: var(--sidebar); }
+.cap-readonly strong, .cap-subsection > strong { font-size: 14px; font-weight: 500; }
+.cap-readonly p { margin: 0; font-size: 14px; line-height: 1.7; color: var(--ink-2); }
+.cap-readonly b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.cap-readonly small { font-size: 12px; color: var(--faint); }
+.cap-subsection { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.cap-callout { margin: 0; padding: 10px 12px; border-radius: var(--radius); background: var(--amber-soft); color: var(--amber-ink); font-size: 12px; line-height: 1.7; }
+.run-skills-state { color: var(--faint); }
+.run-skills-state.is-ok { color: var(--green); }
+.run-skills-state.is-bad { color: var(--red); }
+
 /* ---------------- 响应式 ---------------- */
 @media (max-width: 1100px) {
   .sidebar { width: 220px; }
@@ -780,6 +844,10 @@ select:focus { outline: none; border-color: var(--accent); }
   .list-row { flex-wrap: wrap; padding: 12px 16px; }
   .list-row-main { flex-basis: calc(100% - 60px); }
   .mcp-header-row { grid-template-columns: 1fr; }
+  .cap-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cap-card { padding: 16px; }
+  .cap-card-body { padding-left: 0; }
+  .cap-icon { display: none; }
   .modal-backdrop { align-items: flex-end; padding: 8px; }
   .modal { max-height: 92dvh; border-radius: 16px 16px 10px 10px; }
   .modal-head, .modal-foot { padding-left: 16px; padding-right: 16px; }

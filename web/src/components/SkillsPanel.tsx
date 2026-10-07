@@ -107,18 +107,62 @@ export function SkillsPanel() {
   </section>;
 }
 
+interface RunSkillsResponse { catalog?: {skills?: Record<string, {title?: string}>; selected?: string[]}; catalog_recorded?: boolean; loaded: LoadedSkill[] }
+export type RunSkillsState =
+  | {kind: 'loading'}
+  | {kind: 'error'; message: string}
+  | {kind: 'none'; available: string[]; selected: string[]; recorded: boolean | null}
+  | {kind: 'loaded'; loaded: LoadedSkill[]; available: string[]; selected: string[]};
+
+/** 只按运行账本里的加载记录判断“已加载”；目录里有、或用户手选，都不等于加载成功。 */
+export function runSkillsState(response: RunSkillsResponse): RunSkillsState {
+  const catalog = response.catalog?.skills ?? {};
+  const available = Object.entries(catalog).map(([name, s]) => s?.title || name);
+  const selected = (response.catalog?.selected ?? []).map(name => catalog[name]?.title || name);
+  if (response.loaded.length) return {kind: 'loaded', loaded: response.loaded, available, selected};
+  return {kind: 'none', available, selected, recorded: response.catalog_recorded ?? null};
+}
+
+/** 能否确认“当时提供了技能目录、但没有加载”：有目录记录才算；旧接口没有 catalog_recorded 时，只有目录非空才能确认。 */
+function catalogConfirmed(state: Extract<RunSkillsState, {kind: 'none'}>) {
+  return state.recorded ?? state.available.length > 0;
+}
+
+const agentLabel = (id: string) => id === 'lead' ? '主 Agent' : `子任务 ${id}`;
+
 export function SkillSnapshot({loaded}:{loaded:LoadedSkill[]}) {
   return <div className="skill-snapshot">{loaded.length===0?<p className="field-hint">这一轮没有加载技能。</p>:loaded.map((item,i)=><details key={`${item.agent_id}:${item.name}:${item.path??''}:${i}`}>
-    <summary>{item.title||item.name}{item.path?` / ${item.path}`:''} · {item.agent_id==='lead'?'主 Agent':item.agent_id} · 已加载</summary>
+    <summary>{item.title||item.name}{item.path?` / 参考文件 ${item.path}`:''} · {agentLabel(item.agent_id)} · 已加载</summary>
     <small className="field-hint">{item.source==='manual'?'手动选择':'自动加载'} · 版本 {item.hash.slice(0,12)} · 这里记录的是 Agent 收到的内容，不代表执行得好不好</small><pre>{item.content}</pre>
   </details>)}</div>;
 }
 
+export function RunSkillsView({state,onRetry}:{state:RunSkillsState;onRetry?:()=>void}) {
+  const skillCount = state.kind === 'loaded' ? new Set(state.loaded.map(i => i.name)).size : 0;
+  const refCount = state.kind === 'loaded' ? state.loaded.filter(i => i.path).length : 0;
+  const confirmed = state.kind === 'none' && catalogConfirmed(state);
+  const label = state.kind === 'loading' ? '读取中…' : state.kind === 'error' ? '读取失败'
+    : state.kind === 'none' ? (confirmed ? '未加载' : '无记录') : `已加载 ${skillCount} 个${refCount ? `，参考文件 ${refCount} 份` : ''}`;
+  const tone = state.kind === 'error' ? ' is-bad' : state.kind === 'loaded' ? ' is-ok' : '';
+  return <details className="disclosure run-skills" open={state.kind === 'error' || undefined}>
+    <summary>本轮技能 · <span className={`run-skills-state${tone}`}>{label}</span></summary>
+    {state.kind === 'loading' ? <p className="field-hint">正在读取这一轮的技能记录…</p>
+      : state.kind === 'error' ? <p role="alert" className="field-hint is-bad">技能记录读取失败：{state.message}{onRetry && <> <button type="button" className="link-btn" onClick={onRetry}>重新读取</button></>}</p>
+      : <>
+        {state.kind === 'none' && <p className="field-hint">{state.recorded === false
+          ? '这一轮没有技能记录：开始时没有启用技能，或这是加入技能功能之前的研究。'
+          : !confirmed ? '没有找到这一轮的技能记录，无法确认当时是否提供过技能。'
+          : `这一轮 Agent 没有加载任何技能${state.available.length ? `（当时可用 ${state.available.length} 个：${state.available.join('、')}）` : ''}。`}</p>}
+        {state.selected.length > 0 && <p className="field-hint">你手动指定了：{state.selected.join('、')}{state.kind === 'none' ? '，但没有加载记录。' : '。'}</p>}
+        {state.kind === 'loaded' && <SkillSnapshot loaded={state.loaded}/>}
+      </>}
+  </details>;
+}
+
 export function RunSkills({runId,view}:{runId:string;view:RunView}) {
-  const [loaded,setLoaded]=useState<LoadedSkill[]>([]);
-  const [error,setError]=useState('');
+  const [state,setState]=useState<RunSkillsState>({kind:'loading'});
+  const [attempt,setAttempt]=useState(0);
   const count=view.timeline.filter(i=>i.t==='note'&&i.card.kind==='skill_loaded').length;
-  useEffect(()=>{let alive=true;setError('');getJSON<{loaded:LoadedSkill[]}>(`/api/runs/${runId}/skills`).then(r=>{if(alive)setLoaded(r.loaded)}).catch(e=>{if(alive)setError(message(e))});return()=>{alive=false}},[runId,count,view.endedAtMs]);
-  if(!error&&!loaded.length)return null;
-  return <details className="disclosure run-skills"><summary>本轮用到的技能{loaded.length?` · ${loaded.length} 个`:''}</summary>{error?<p role="alert" className="field-hint is-bad">{error}</p>:<SkillSnapshot loaded={loaded}/>}</details>;
+  useEffect(()=>{let alive=true;setState(s=>s.kind==='loaded'?s:{kind:'loading'});getJSON<RunSkillsResponse>(`/api/runs/${runId}/skills`).then(r=>{if(alive)setState(runSkillsState(r))}).catch(e=>{if(alive)setState({kind:'error',message:message(e)})});return()=>{alive=false}},[runId,count,view.endedAtMs,attempt]);
+  return <RunSkillsView state={state} onRetry={()=>setAttempt(a=>a+1)}/>;
 }
