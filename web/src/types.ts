@@ -135,6 +135,10 @@ export interface EvidenceQuote {
   /** 去原网页并高亮这段引用的链接（浏览器 text fragment）；生成不出来就是空串。 */
   deep_link?: string;
   submitted_quote?: string | null;
+  binding?: {method:'format'|'fuzzy';confirmed:boolean;changes:Array<{
+    kind:'replace'|'insert'|'delete';submitted:string;original:string;
+    submitted_start:number;submitted_end:number;source_start:number;source_end:number;
+  }>} | null;
   context?: Array<{text:string;location:string;kind:'nearby'|'structure'}>;
 }
 export interface SimpleCard extends EvidenceQuote { origin?: {run_id:string;turn_index:number;card_id:string};

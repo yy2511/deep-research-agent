@@ -526,7 +526,8 @@ def test_legacy_schema_stays_text_only_until_features_enabled():
     params = {s['function']['name']: s['function']['parameters'] for s in plain}
     assert 'original' not in params['read_source']['properties']
     item = params['save_evidence']['properties']['cards']['items']['properties']['quotes']['items']
-    assert item['required'] == ['quote'] and 'image_ref' not in item['properties']
+    assert item['anyOf'] == [{'required': ['quote']}, {'required': ['candidate_id']}]
+    assert 'image_ref' not in item['properties']
     updated = vision.tool_schemas(plain, enabled=True, originals=True)
     params = {s['function']['name']: s['function']['parameters'] for s in updated}
     assert 'original' in params['read_source']['properties']

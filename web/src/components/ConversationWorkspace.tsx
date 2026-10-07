@@ -192,7 +192,8 @@ function QuoteDetail({quote,source,runId,index,total,onSource}:{quote:EvidenceQu
     <small className='cw-muted'>{source?.document?`我的资料 · ${source.document.file_name}`:hostOf(source?.url??quote.source_url)||'来源'}{quote.published_at??source?.published_at?` · 发布于 ${quote.published_at??source?.published_at}`:''}</small></div>
   </div>
   <label className='cw-label'>{total>1?`依据 ${index+1} · `:''}{contentName}</label><blockquote>{quote.quote}</blockquote>
-  {quote.submitted_quote&&quote.submitted_quote!==quote.quote&&<details className='cw-judge-context'><summary>查看模型提交的摘句</summary><p className='cw-muted'>匹配时允许空白差异，上面保留的是原文里的原话。</p><pre>{quote.submitted_quote}</pre></details>}
+  {quote.binding&&<p className='cw-muted'>{quote.binding.confirmed?'已由模型选定原文':'已按原文校正'} · {quote.binding.method==='format'?'排版等价定位':'近似文字定位'}</p>}
+  {quote.submitted_quote&&quote.submitted_quote!==quote.quote&&<details className='cw-judge-context'><summary>查看模型摘录与原文差异</summary><p className='cw-muted'>上面保存的是来源原文，下面保留模型最初提交的摘录；文字定位不判断结论是否正确。</p><pre>{quote.submitted_quote}</pre>{!!quote.binding?.changes.length&&<ul>{quote.binding.changes.map((change,i)=><li key={i}><span>模型：<code>{change.submitted||'（未抄写）'}</code></span> → <span>原文：<code>{change.original||'（无此文字）'}</code></span></li>)}</ul>}</details>}
   {!!quote.context?.length&&<details className='cw-judge-context'><summary>判断时参考的上下文 · {quote.context.length} 处</summary><p className='cw-muted'>从同一份{contentName}里提取，按位置排列；各段之间可能有省略。</p>{quote.context.map((c,i)=><div key={i}><small className='cw-muted'>{c.kind==='structure'?'章节 / 表头':`附近${contentName}`} · {c.location}</small><pre>{c.text}</pre></div>)}</details>}
   {source?.document&&<p className='cw-muted'>使用的是固定版本 <code title={source.document.version_id}>{source.document.version_id.slice(0,12)}</code>，之后更新资料库不会改动它。</p>}
   {source?.mcp&&<McpSourceDetails source={source} runId={runId}/>}

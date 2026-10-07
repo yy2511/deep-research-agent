@@ -1,22 +1,96 @@
-"""Resolve quotes against server-owned, actor-specific read exposures.
+"""Locate copied quotes in immutable, actor-visible source ranges.
 
-sources maps immutable snapshot refs to raw text. exposures MUST be supplied by
-the server for one actor, never by the model. Coordinates are Python characters,
-end-exclusive, matching the existing snapshot contract.
+Matching corrects the stored quotation, never the claim. Coordinates are Python
+characters, end-exclusive. Approximate matches retain the real snapshot slice.
 """
+from difflib import SequenceMatcher
+from html import unescape
+import math
+import re
+
+import regex
+from fuzzysearch.levenshtein import find_near_matches_levenshtein
+
+
+# Alignment tolerances, not document/quote length limits. The offline replay
+# report records their effect. The wider band only supplies selectable originals.
+FUZZY_SEARCH_ERROR_RATE = 0.20
+FUZZY_AUTO_ERROR_RATE = 0.02
+MAX_CANDIDATES = 10  # Existing response limit; total_matches stays unabridged.
+_QUOTES = str.maketrans({'‘': "'", '’': "'", '“': '"', '”': '"'})
+_LINK = regex.compile(r'!?\[(?P<label>[^\]\n]+)\](?P<dest>\((?:[^()\\]|\\.|(?&dest))*\))')
+_INLINE = re.compile(r'(?P<mark>\*\*|__|`)(?P<body>[^\n]+?)(?P=mark)')
+_ENTITY = re.compile(r'&(?:#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]+);')
 
 
 def _normalize(raw):
-    text, positions = [], []
-    for index, char in enumerate(raw):
+    return _collapse(raw, [(i, i + 1) for i in range(len(raw))])
+
+
+def _collapse(text, positions):
+    result, mapped = [], []
+    for char, (lo, hi) in zip(text, positions):
         if char.isspace():
-            if text and text[-1] == ' ':
-                positions[-1] = (positions[-1][0], index + 1)
+            if result and result[-1] == ' ':
+                mapped[-1] = (mapped[-1][0], hi)
                 continue
             char = ' '
-        text.append(char)
-        positions.append((index, index + 1))
-    return ''.join(text), positions
+        result.append(char)
+        mapped.append((lo, hi))
+    return ''.join(result), mapped
+
+
+def _unwrap(text, positions, pattern, group):
+    result, mapped, cursor = [], [], 0
+    for match in pattern.finditer(text):
+        result.append(text[cursor:match.start()])
+        mapped.extend(positions[cursor:match.start()])
+        lo, hi = match.span(group)
+        result.append(text[lo:hi])
+        inner = list(positions[lo:hi])
+        # Keep the markup in the raw slice if its whole visible label is matched.
+        inner[0] = (positions[match.start()][0], inner[0][1])
+        inner[-1] = (inner[-1][0], positions[match.end() - 1][1])
+        mapped.extend(inner)
+        cursor = match.end()
+    result.append(text[cursor:])
+    mapped.extend(positions[cursor:])
+    return ''.join(result), mapped
+
+
+def visible_text(raw, *, markup=False):
+    """Visible spelling plus raw coordinates; no punctuation folding here."""
+    text, positions = raw, [(i, i + 1) for i in range(len(raw))]
+    if markup:
+        text, positions = _unwrap(text, positions, _LINK, 'label')
+        text, positions = _unwrap(text, positions, _INLINE, 'body')
+        result, mapped, cursor = [], [], 0
+        for match in _ENTITY.finditer(text):
+            result.append(text[cursor:match.start()])
+            mapped.extend(positions[cursor:match.start()])
+            decoded = unescape(match[0])
+            result.append(decoded)
+            mapped.extend([(positions[match.start()][0], positions[match.end() - 1][1])] * len(decoded))
+            cursor = match.end()
+        result.append(text[cursor:])
+        mapped.extend(positions[cursor:])
+        text, positions = ''.join(result), mapped
+    return text, positions
+
+
+def _format_view(raw, *, markup=False):
+    text, positions = visible_text(raw, markup=markup)
+    result, mapped = [], []
+    for char, span in zip(text, positions):
+        # NFKC also changes e.g. m² to m2; only fold full-width ASCII here.
+        if '\uff01' <= char <= '\uff5e':
+            char = chr(ord(char) - 0xfee0)
+        char = char.translate(_QUOTES)
+        if char in ('\u200b', '\ufeff', '\u00ad'):
+            continue
+        result.append(char)
+        mapped.append(span)
+    return _collapse(''.join(result), mapped)
 
 
 def _ranges(ranges, length):
@@ -32,8 +106,62 @@ def _ranges(ranges, length):
     return merged
 
 
-def bind_quote(quote, sources, exposures, *, selection=None):
-    # selection 只能由服务端候选表提供。候选不授予阅读权限，也不能替代原话核验。
+def _changes(submitted, original, start):
+    return [{'kind': kind, 'submitted': submitted[a:b], 'original': original[c:d],
+             'submitted_start': a, 'submitted_end': b,
+             'source_start': start + c, 'source_end': start + d}
+            for kind, a, b, c, d in SequenceMatcher(None, submitted, original, autojunk=False).get_opcodes()
+            if kind != 'equal']
+
+
+def _candidate(ref, raw, lo, positions, start, end, submitted, method):
+    a, b = lo + positions[start][0], lo + positions[end - 1][1]
+    candidate = {'source_ref': ref, 'start': a, 'end': b, 'quote': raw[a:b]}
+    if method != 'exact':
+        candidate['binding'] = {'method': method, 'confirmed': False,
+                                'changes': _changes(submitted, raw[a:b], a)}
+    return candidate
+
+
+def _exact_matches(needle, text):
+    cursor = 0
+    while (start := text.find(needle, cursor)) != -1:
+        yield start, start + len(needle)
+        cursor = start + 1
+
+
+def _fuzzy_matches(needle, text, errors):
+    # Use the library's full-query Levenshtein search before its public wrapper
+    # consolidates overlapping matches: overlapping occurrences can be distinct
+    # evidence locations. Unicode offsets stay in characters, never UTF-8 bytes.
+    matches = {}
+    for match in find_near_matches_levenshtein(needle, text, errors):
+        if match.end > match.start:
+            span = (match.start, match.end)
+            matches[span] = min(matches.get(span, match.dist), match.dist)
+    # Drop worse endpoint variants of the same occurrence, not distinct
+    # overlapping occurrences. A shifted endpoint is not another source passage.
+    kept = []
+    for (lo, hi), distance in sorted(matches.items(), key=lambda item: (
+            item[1], abs(item[0][1] - item[0][0] - len(needle)), item[0])):
+        if any((a <= lo and hi <= b or lo <= a and b <= hi) and
+               (d < distance or abs(b - a - len(needle)) < abs(hi - lo - len(needle)))
+               for a, b, d in kept):
+            continue
+        kept.append((lo, hi, distance))
+    return kept
+
+
+def _result(candidates, *, status=None):
+    total = len(candidates)
+    result = {'status': status or ('not_found' if not total else 'bound' if total == 1 else 'ambiguous'),
+              'candidates': candidates[:MAX_CANDIDATES]}
+    if total > 1:
+        result['total_matches'] = total
+    return result
+
+
+def bind_quote(quote, sources, exposures, *, selection=None, markup_sources=()):
     if selection is not None:
         ref = selection['source_ref']
         raw = sources.get(ref)
@@ -41,31 +169,62 @@ def bind_quote(quote, sources, exposures, *, selection=None):
         if (raw is None or not 0 <= lo < hi <= len(raw)
                 or raw[lo:hi] != selection['quote']
                 or not any(a <= lo and hi <= b for a, b in _ranges(exposures.get(ref, []), len(raw)))):
-            return {'status': 'invalid_selection', 'candidates': []}
-        match = bind_quote(quote, {ref: raw}, {ref: [(lo, hi)]})
-        if (match['status'] == 'bound' and match['candidates'][0]['start'] == lo
-                and match['candidates'][0]['end'] == hi):
-            return match
-        return {'status': 'invalid_selection', 'candidates': []}
+            return _result([], status='invalid_selection')
+        # Keep old quote+ID calls, but permit ID-only selection. An explicitly
+        # different quote must not silently refer to another passage.
+        if quote is not None and _normalize(quote)[0].strip() not in {
+                _normalize(selection.get('submitted_quote', selection['quote']))[0].strip(),
+                _normalize(selection['quote'])[0].strip()}:
+            return _result([], status='invalid_selection')
+        candidate = {k: v for k, v in selection.items() if k != 'submitted_quote'}
+        if candidate.get('binding'):
+            candidate['binding'] = {**candidate['binding'], 'confirmed': True}
+        return _result([candidate])
+
     needle = _normalize(quote)[0].strip()
     if not needle:
-        return {'status': 'invalid', 'candidates': []}
-    candidates = []
-    total = 0
-    for ref, raw in sources.items():
-        for lo, hi in _ranges(exposures.get(ref, []), len(raw)):
-            normalized, positions = _normalize(raw[lo:hi])
-            cursor = 0
-            while (found := normalized.find(needle, cursor)) != -1:
-                start = lo + positions[found][0]
-                end = lo + positions[found + len(needle) - 1][1]
-                total += 1
-                if len(candidates) < 10:
-                    candidates.append({'source_ref': ref, 'start': start, 'end': end,
-                                       'quote': raw[start:end]})
-                cursor = found + 1
-    status = 'not_found' if total == 0 else 'bound' if total == 1 else 'ambiguous'
-    result = {'status': status, 'candidates': candidates}
-    if total > 1:
-        result['total_matches'] = total
-    return result
+        return _result([], status='invalid')
+    windows = [(ref, raw, lo, hi) for ref, raw in sources.items()
+               for lo, hi in _ranges(exposures.get(ref, []), len(raw))]
+    formatted = {mode: _format_view(quote, markup=mode)[0].strip() for mode in (False, True)}
+    for method in ('exact', 'format'):
+        candidates, views = [], []
+        for ref, raw, lo, hi in windows:
+            wanted = needle if method == 'exact' else formatted[ref in markup_sources]
+            if not wanted:
+                continue
+            text, positions = (_normalize(raw[lo:hi]) if method == 'exact' else
+                               _format_view(raw[lo:hi], markup=ref in markup_sources))
+            views.append((ref, raw, lo, hi, text, positions, wanted))
+            for a, b in _exact_matches(wanted, text):
+                candidates.append(_candidate(ref, raw, lo, positions, a, b, quote, method))
+        if candidates:
+            return _result(candidates)
+    # Search the complete scope for all small-copy-error alternatives first.
+    # Only widen when there is none; broad matches always need selection. This
+    # avoids expensive large-distance alignment for an otherwise obvious typo.
+    for error_rate in (FUZZY_AUTO_ERROR_RATE, FUZZY_SEARCH_ERROR_RATE):
+        candidates = []
+        for ref, raw, lo, hi, text, positions, wanted in views:
+            errors = math.floor(len(wanted) * error_rate)
+            for a, b, distance in _fuzzy_matches(wanted, text, errors):
+                c = _candidate(ref, raw, lo, positions, a, b, quote, 'fuzzy')
+                ops = SequenceMatcher(None, wanted, text[a:b], autojunk=False).get_opcodes()
+                missing_edge = any(kind == 'delete' and (x == 0 or y == len(wanted))
+                                   for kind, x, y, _, _ in ops)
+                boundary = missing_edge and ((a == 0 and lo > 0) or (b == len(text) and hi < len(raw)))
+                c['binding'].update(edit_distance=distance, query_chars=len(wanted),
+                                    missing_edge=missing_edge, needs_read=boundary)
+                candidates.append(c)
+        if candidates:
+            break
+    candidates.sort(key=lambda c: (c['binding']['edit_distance'], c['source_ref'], c['start']))
+    if not candidates:
+        return _result([])
+    best = candidates[0]['binding']
+    if all(c['binding']['needs_read'] for c in candidates):
+        return _result(candidates, status='needs_read')
+    automatic = (len(candidates) == 1 and best['edit_distance'] <= math.floor(best['query_chars'] * FUZZY_AUTO_ERROR_RATE)
+                 and not best['missing_edge'])
+    return {**_result(candidates, status='bound' if automatic else 'needs_selection'),
+            'search_error_rate': error_rate}

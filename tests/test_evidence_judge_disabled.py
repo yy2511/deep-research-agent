@@ -33,6 +33,8 @@ def test_disabled_request_describes_actual_mode(tmp_path, role, wrapup, profile)
     for stale in ('Jev 是系统自动调用', '交给 Jev', 'relation=supported', '再看新卡的 Jev', '该卡核验未通过'):
         assert stale not in system
     if not wrapup:
+        assert '仅允许空白差异' not in system and '相同 quote + candidate_id' not in system
+        assert '只交 candidate_id' in system and 'binding 展示校正差异' in system
         save = next(t['function'] for t in seen[0][1]['tools'] if t['function']['name'] == 'save_evidence')
         assert '不调用 JEV' in save['description'] and '任一段匹配失败整卡不保存' in save['description']
 
@@ -67,6 +69,9 @@ def test_frozen_prompt_hook_cannot_restore_jev_instructions(tmp_path, monkeypatc
     if not wrapup:
         save = next(t['function'] for t in seen[0][1]['tools'] if t['function']['name'] == 'save_evidence')
         assert '交给 Jev' not in save['description'] and '不调用 JEV' in save['description']
+        quote = save['parameters']['properties']['cards']['items']['properties']['quotes']['items']
+        assert {'required': ['candidate_id']} in quote['anyOf'] and 'required' not in quote
+        assert '相同 quote + candidate_id' not in save['description']
     assert path.read_bytes() == before
 
 

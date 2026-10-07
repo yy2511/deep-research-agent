@@ -68,7 +68,8 @@ def tool_schemas(schemas, *, enabled, originals):
             quote['properties'].update(image_ref={'type': 'string', 'description': 'native看图回执中的图片编号。'},
                 observation={'type': 'string', 'description': '实际视觉观察，不冒充原文字层或机器核实。'})
             quote.pop('required', None)
-            quote['anyOf'] = [{'required': ['quote']}, {'required': ['image_ref', 'observation']}]
+            quote['anyOf'] = [{'required': ['quote']}, {'required': ['candidate_id']},
+                              {'required': ['image_ref', 'observation']}]
     return result
 
 

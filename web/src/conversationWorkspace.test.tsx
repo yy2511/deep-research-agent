@@ -4,6 +4,22 @@ import { initialView, reduce } from './reducer';
 import { ConversationWorkspace, EvidenceDetail, FailedToolCalls, ProcessList, UsageOverview } from './components/ConversationWorkspace';
 import { processRows } from './conversationModel';
 
+it('证据卡显示原文校正方式、原摘录和具体差异', () => {
+  const html=renderToStaticMarkup(<EvidenceDetail card={{card_id:'c1',claim:'已送达',
+    quote:'紧急调拨物资。',source_ref:'s1',quotes:[{
+    quote:'紧急调拨物资。',submitted_quote:'紧急调摋物资。',source_ref:'s1',
+    binding:{method:'fuzzy',confirmed:false,changes:[{kind:'replace',submitted:'摋',original:'拨',
+      submitted_start:3,submitted_end:4,source_start:3,source_end:4}]}}]}} sources={[]}
+    runId='corrected' onSource={()=>{}} onOrigin={()=>{}} view={initialView()}/>);
+  expect(html).toContain('已按原文校正');
+  expect(html).toContain('近似文字定位');
+  expect(html).toContain('紧急调拨物资。');
+  expect(html).toContain('紧急调摋物资。');
+  expect(html).toContain('模型：<code>摋</code>');
+  expect(html).toContain('原文：<code>拨</code>');
+  expect(html).toContain('文字定位不判断结论是否正确');
+});
+
 it('浏览器证据明确显示页面快照身份', () => {
   const html=renderToStaticMarkup(<EvidenceDetail card={{card_id:'c1',claim:'降雨量',
     quote:'降雨量 42 mm',source_ref:'s1',source_kind:'browser_snapshot'}} sources={[]}

@@ -39,7 +39,8 @@ def test_explicit_source_never_falls_back_to_another_source(tmp_path, ref):
     ctx.store.write_source(RetrievedDoc(title="未读", snippet="", raw_content="只有第二页包含的原话",
                                        source_url="https://example.com/unread"))
     body, ok = save(ctx, "只有第二页包含的原话", source_ref=ref)
-    assert not ok and not body["results"][0]["accepted"]
+    assert ok and body['pending_selection'] == 1 and not body["results"][0]["accepted"]
+    assert body['results'][0]['binding_status'] == 'source_mismatch'
     assert not ctx.store.cards()
 
 
@@ -59,7 +60,7 @@ def test_ambiguity_is_pending_selection_and_same_page_candidate_can_be_saved(tmp
     assert sr._chars_of(card.location)[0] == raw.rfind("相同原话")
 
 
-@pytest.mark.parametrize("change", ["quote", "source", "unknown", "no_quote"])
+@pytest.mark.parametrize("change", ["quote", "source", "unknown"])
 def test_candidate_cannot_override_quote_or_source_validation(tmp_path, change):
     ctx = context(tmp_path, ["甲：相同原话。另一段真实文字", "乙：相同原话。"])
     body, _ = save(ctx)
@@ -71,9 +72,6 @@ def test_candidate_cannot_override_quote_or_source_validation(tmp_path, change):
         item["source_ref"] = "s2"
     elif change == "unknown":
         item["candidate_id"] = "invented"
-    else:
-        del item["quote"]
-        item.update(source_ref="s1", excerpt_no=1)
     payload, ok = ctx.save_evidence({"cards": [item]})
     assert not ok and not json.loads(payload)["results"][0]["accepted"]
     assert not ctx.store.cards()
@@ -160,7 +158,7 @@ def test_model_schema_exposes_optional_source_and_candidate(tmp_path):
     card = schema["properties"]["cards"]["items"]
     quote = card["properties"]["quotes"]["items"]
     assert {"source_ref", "candidate_id"} <= quote["properties"].keys()
-    assert quote["required"] == ["quote"]
+    assert quote['anyOf'] == [{'required': ['quote']}, {'required': ['candidate_id']}]
     assert set(card["required"]) == {"claim", "quotes"}
 
 

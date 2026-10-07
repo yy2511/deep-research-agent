@@ -19,10 +19,33 @@ class QuoteContext(BaseModel):
     kind: Literal["nearby", "structure"] = "nearby"
 
 
+class QuoteChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["replace", "insert", "delete"]
+    submitted: str
+    original: str
+    submitted_start: int
+    submitted_end: int
+    source_start: int
+    source_end: int
+
+
+class QuoteBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    method: Literal["format", "fuzzy"]
+    confirmed: bool = False
+    changes: list[QuoteChange] = Field(default_factory=list)
+    edit_distance: int | None = None
+    query_chars: int | None = None
+    missing_edge: bool = False
+    needs_read: bool = False
+
+
 class EvidenceQuote(BaseModel):
     model_config = ConfigDict(extra="forbid")
     quote: str
     submitted_quote: str | None = None
+    binding: QuoteBinding | None = None
     source_ref: str
     source_url: str = ""
     source_title: str = ""

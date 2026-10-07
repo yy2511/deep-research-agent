@@ -31,7 +31,7 @@ from dra import browser
 from dra.browser import BrowserConfig
 from dra import artifacts as artifact_store
 from dra.evidence_judge import JudgeConfig
-from dra.quote_binding import bind_quote
+from dra.quote_binding import bind_quote, visible_text
 from dra.evidence_quotes import EvidenceQuote, add_context, MAX_QUOTES, MAX_QUOTE_CHARS, MAX_CONTEXT_CHARS
 from dra.research_delegation import DelegationManager
 from dra.prompt_time import current_research_time, time_hint
@@ -1371,10 +1371,11 @@ TOOL_SCHEMAS: list[dict] = [
         "function": {
             "name": "save_evidence",
             "description": (
-                "保存证据卡（可批量）。一条 claim 提交全部必要依据 quotes，每段为连续逐字原话；"
-                "系统从你实际读过的快照逐段定位并补有限附近上下文，交给 Jev（自动引文核验模型）联合判断。"
+                "保存证据卡（可批量）。一条 claim 提交全部必要依据 quotes，每段尽量照原文摘录；"
+                "系统在你实际读过的快照中依次精确、排版等价、近似定位，保存真实原文并回报校正差异。"
+                "补充附近上下文，交给 Jev（自动引文核验模型）联合判断。"
                 "跨段/跨来源依据分别提交，不拼接成一段；远处论据须主动补读后提交。"
-                "任一段匹配失败整卡不保存。多处匹配在对应段用相同 quote + candidate_id 重交全部依据。"
+                "任一段匹配失败整卡不保存。待选段核对原文后只交 candidate_id，无需重抄；已定位段也可复用返回的 candidate_id。"
                 f"最多 {MAX_QUOTES} 段、原话合计 {MAX_QUOTE_CHARS} 字符，程序自动上下文最多 {MAX_CONTEXT_CHARS} 字符。"
             ),
             "parameters": {
@@ -1395,11 +1396,11 @@ TOOL_SCHEMAS: list[dict] = [
                                     "items": {
                                         "type": "object",
                                         "properties": {
-                                            "quote": {"type": "string", "description": "连续逐字摘录，保留对象及必要条件；不改写、不拼接不连续原文。"},
+                                            "quote": {"type": "string", "description": "尽量照抄连续原文，保留对象及必要条件；少量抄写差异由系统定位校正，不拼接不连续原文。与 candidate_id 至少提供一个。"},
                                             "source_ref": {"type": "string", "description": "可选，限定这一段的已读来源；找不到不会改绑其他来源。"},
-                                            "candidate_id": {"type": "string", "description": "可选，用本 Agent 上次返回的候选消除歧义，同时提交相同 quote。"},
+                                            "candidate_id": {"type": "string", "description": "直接选择本 Agent 回执里的原文候选，或复用已定位段；可只交此编号，无需再抄 quote。"},
                                         },
-                                        "required": ["quote"],
+                                        "anyOf": [{"required": ["quote"]}, {"required": ["candidate_id"]}],
                                         "additionalProperties": False,
                                     },
                                 },
@@ -1668,8 +1669,31 @@ _EVIDENCE_WRAPUP = """研究已结束，卡片不能再修正：Jev 判为依据
 _EVIDENCE_USE_INSTRUCTIONS = _EVIDENCE_HEADER + _EVIDENCE_SAVE + _EVIDENCE_USE + "\n"
 _WRAPUP_EVIDENCE_INSTRUCTIONS = _EVIDENCE_HEADER + _EVIDENCE_USE + _EVIDENCE_WRAPUP + "\n"
 
+
+def _quote_binding_prompt(prompt: str) -> str:
+    """Keep the selected base prompt frozen; describe today's tool contract."""
+    updates = {
+        "引文是否逐字出自已读内容由系统在存证时检查，不符合整卡拒收":
+            "引文是否能定位到已读内容由系统在存证时检查，未定位整卡不保存",
+        "每段 quote 必须是连续逐字原话；保留必要对象、条件、完整句子。":
+            "每段 quote 尽量照抄连续原文，保留必要对象、条件、完整句子。系统依次精确、排版等价、近似定位；"
+            "定位明确的轻微抄写差异会校正，卡片保存的始终是快照原文。回执 binding 展示校正差异，以返回的真实 quote 为准。",
+        "仅允许空白差异，不允许改写或拼接。":
+            "允许排版和少量抄写差异，不拼接不连续原文；歧义或较大差异由候选选择确认。",
+        "needs_selection 表示对应段原话存在但出处待选，整卡尚未保存；核对候选后在该段提供相同 quote + candidate_id，\n"
+        "其余必要引文仍须一并提交。":
+            "needs_selection 表示有原文候选待选，整卡尚未保存；核对原文、差异和来源后，该段只交 candidate_id 即可，无需重抄。\n"
+            "其余必要引文仍须一并提交，已定位段可复用回执的 candidate_id。source_mismatch 的候选来自另一已读来源，选用时不要再填旧来源。\n"
+            "needs_read 表示需要 read_source 补读，摘要不等于原文。",
+    }
+    for previous, current in updates.items():
+        prompt = prompt.replace(previous, current)
+    return prompt
+
+
 def _evidence_mode_prompt(prompt: str, *, enabled: bool) -> str:
     """Adapt the actual request after profile/frozen hooks; keep base prompts intact."""
+    prompt = _quote_binding_prompt(prompt)
     if enabled:
         return prompt
     prompt = prompt.replace(_EVIDENCE_HEADER, "【存证与引用核对】\n")
@@ -1697,15 +1721,28 @@ def _evidence_mode_prompt(prompt: str, *, enabled: bool) -> str:
 
 
 def _evidence_mode_schemas(schemas: list[dict], *, enabled: bool) -> list[dict]:
-    if enabled:
-        return schemas
     schemas = deepcopy(schemas)
     for item in schemas:
         function = item["function"]
         if function["name"] == "save_evidence":
+            # A frozen prompt profile can supply the old quote+ID schema. Its
+            # research wording stays frozen, but live tools describe live input.
             function["description"] = function["description"].replace(
-                "交给 Jev（自动引文核验模型）联合判断。", "供你核对；本轮不调用 JEV 核验模型。"
-            ).replace("交给 Jev 联合判断。", "供你核对；本轮不调用 JEV 核验模型。")
+                "每段为连续逐字原话；系统从你实际读过的快照逐段定位",
+                "每段尽量照原文摘录；系统在你实际读过的快照逐段精确、排版等价或近似定位，保存真实原文并回报校正差异"
+            ).replace("多处匹配在对应段用相同 quote + candidate_id 重交全部依据。",
+                      "待选段核对原文后只交 candidate_id，无需重抄；已定位段也可复用返回的 candidate_id。")
+            quote = function["parameters"]["properties"]["cards"]["items"]["properties"]["quotes"]["items"]
+            quote.pop("required", None)
+            branches = quote.setdefault("anyOf", [{"required": ["quote"]}])
+            if {"required": ["candidate_id"]} not in branches:
+                branches.append({"required": ["candidate_id"]})
+            quote["properties"]["quote"]["description"] = "尽量照抄连续原文；系统定位后回填真实原文并显示差异。提供 candidate_id 时可省略 quote。"
+            quote["properties"]["candidate_id"]["description"] = "选择本 Agent 回执里的原文候选，或复用已定位段；只交编号即可，无需重抄。"
+            if not enabled:
+                function["description"] = function["description"].replace(
+                    "交给 Jev（自动引文核验模型）联合判断。", "供你核对；本轮不调用 JEV 核验模型。"
+                ).replace("交给 Jev 联合判断。", "供你核对；本轮不调用 JEV 核验模型。")
     return schemas
 
 
@@ -1803,6 +1840,8 @@ def _quote_for_model(quote) -> dict:
     if quote.published_at:
         row["published_at"] = quote.published_at
     row["context"] = [block.model_dump() for block in quote.context]
+    if quote.binding:
+        row["binding"] = quote.binding.model_dump(exclude_none=True)
     return row
 
 
@@ -2680,6 +2719,29 @@ class ToolContext:
                     delegation_id=self.delegation_id)
         return rows
 
+    def _quote_candidate(self, candidate: dict, submitted: str) -> dict:
+        """Offer actual source text once; the returned ID can be reused without copying."""
+        source = self.readings[candidate["source_ref"]]
+        lo, hi = candidate["start"], candidate["end"]
+        a, b = next((a, b) for a, b in self.read_exposures[source.snapshot.ref]
+                    if a <= lo and hi <= b)
+        stored = {**candidate, "submitted_quote": submitted}
+        candidate_id = "q-" + hashlib.sha256(self._candidate_namespace +
+            json.dumps(stored, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:24]
+        self.quote_candidates[candidate_id] = stored
+        return {"candidate_id": candidate_id, "source_ref": source.snapshot.ref,
+                "title": source.snapshot.title, "url": source.snapshot.url,
+                "location": f"chars={lo}-{hi}", "quote": candidate["quote"],
+                "context": source.raw[max(a, lo-80):min(b, hi+80)][:500],
+                **({"binding": candidate["binding"]} if candidate.get("binding") else {})}
+
+    @staticmethod
+    def _quote_uses_markup(snapshot: SourceSnapshot) -> bool:
+        # Web extraction returns Markdown. Direct files and execution/MCP data
+        # keep literal syntax; no Markdown stripping of CSV, JSON or code output.
+        return not any((snapshot.document, snapshot.download, snapshot.computation,
+                        snapshot.mcp, snapshot.observation))
+
     def _bind_evidence_quote(self, item: dict):
         """绑定一段，失败返回原有候选合同；本方法不保存部分卡片。"""
         if "image_ref" in item:
@@ -2709,41 +2771,50 @@ class ToolContext:
         if "candidate_id" in item:
             candidate_id = item["candidate_id"]
             selection = self.quote_candidates.get(candidate_id) if isinstance(candidate_id, str) else None
-            if selection is None or "quote" not in item:
-                return failure("candidate_id 必须来自当前 Agent 的待选候选，且必须同时提交相同 quote")
+            if selection is None:
+                return failure("candidate_id 必须来自当前 Agent 已返回的原文候选")
         excerpt_no = item.get("excerpt_no")
         supplied = item.get("quote")
-        if "quote" in item:
-            if not isinstance(supplied, str) or not supplied.strip():
+        match = None
+        if "quote" in item or selection is not None:
+            if "quote" in item and (not isinstance(supplied, str) or not supplied.strip()):
                 return failure("quote 必须是非空的连续原话")
             with self._lock:
-                sources = {key: value.raw for key, value in self.readings.items()
-                           if key in self.read_exposures and value.snapshot.snapshot_kind == "full"
-                           and (not ref or key == target)}
-            binding = bind_quote(supplied, sources, self.read_exposures, selection=selection)
+                all_sources = {key: value.raw for key, value in self.readings.items()
+                               if key in self.read_exposures and value.snapshot.snapshot_kind == "full"}
+                markup = {key for key in all_sources if self._quote_uses_markup(self.readings[key].snapshot)}
+            sources = {key: raw for key, raw in all_sources.items() if not ref or key == target}
+            binding = bind_quote(supplied, sources, self.read_exposures,
+                                 selection=selection, markup_sources=markup)
+            if selection is not None and supplied is None:
+                supplied = selection["submitted_quote"]
+            if ref and binding["status"] == "not_found":
+                others = {key: raw for key, raw in all_sources.items() if key != target}
+                alternative = bind_quote(supplied, others, self.read_exposures, markup_sources=markup)
+                if alternative["candidates"] and alternative["status"] != "needs_read":
+                    binding = {**alternative, "status": "source_mismatch"}
             if binding["status"] != "bound":
-                ambiguous = binding["status"] == "ambiguous"
-                reason = ("原话存在多处，尚未存卡。核对候选出处与版本后，用相同 quote 和 candidate_id 再次提交；也可用 source_ref 限定来源。"
-                          if ambiguous else "candidate_id 与 quote、指定来源或当前已读范围不符，请重新核对候选。"
-                          if binding["status"] == "invalid_selection" else
-                          "在指定来源及你实际读过的原文范围内找不到quote。请read_source重读并逐字摘录；不要删除支持结论所必需的依据来通过匹配。")
-                candidates = []
-                for candidate in binding["candidates"][:10]:
-                    source = self.readings[candidate["source_ref"]]
-                    lo, hi = candidate["start"], candidate["end"]
-                    a, b = next((a,b) for a,b in self.read_exposures[source.snapshot.ref] if a <= lo and hi <= b)
-                    candidate_id = "q-" + hashlib.sha256(self._candidate_namespace +
-                        json.dumps(candidate, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:24]
-                    self.quote_candidates[candidate_id] = dict(candidate)
-                    candidates.append({"candidate_id": candidate_id, "source_ref": source.snapshot.ref,
-                        "title": source.snapshot.title, "url": source.snapshot.url,
-                        "location": f"chars={lo}-{hi}",
-                        "context": source.raw[max(a,lo-80):min(b,hi+80)][:500]})
-                if ambiguous:
-                    self.pending_quote_refs[" ".join(supplied.split())] = set(sources)
-                return failure(reason, binding_status=binding["status"], candidates=candidates,
+                status = binding["status"]
+                pending = status in {"ambiguous", "needs_selection", "source_mismatch"}
+                if status == "not_found" and ref and target not in sources:
+                    status = "needs_read"
+                reasons = {
+                    "ambiguous": "原文存在多处，尚未存卡。核对候选出处与版本后，只交 candidate_id 即可；也可用 source_ref 限定来源。",
+                    "needs_selection": "找到近似原文，尚未存卡。核对候选原文及差异后，只交 candidate_id 即可，无需重抄。",
+                    "source_mismatch": "指定来源未找到对应摘录；以下候选来自其它已读来源。核对后只交 candidate_id，不要携带原先的 source_ref。",
+                    "needs_read": "需要补读原文：当前已读范围没有完整对应材料，检索或压缩摘要不能代替原文。请 read_source 后再存证。",
+                    "invalid_selection": "candidate_id 与 quote、指定来源或当前已读范围不符，请重新核对候选。",
+                    "not_found": "在指定来源及你实际读过的原文范围内找不到对应摘录。请 read_source 定位或补读；不要删除必要依据来通过匹配。",
+                }
+                candidates = [self._quote_candidate(c, supplied) for c in binding["candidates"]] if pending else []
+                if pending:
+                    self.pending_quote_refs[" ".join(supplied.split())] = affected | {c['source_ref'] for c in candidates}
+                read_refs = sorted({c['source_ref'] for c in binding['candidates']} or affected)
+                return failure(reasons.get(status, "quote 必须是非空摘录"), binding_status=status, candidates=candidates,
                                candidates_total=binding.get("total_matches", len(binding["candidates"])),
-                               **({"status": "needs_selection"} if ambiguous else {}))
+                               **({"status": "needs_selection"} if pending else {}),
+                               **({"read_back": [{"tool": "read_source", "source_ref": r} for r in read_refs]}
+                                  if status == "needs_read" else {}))
             match = binding["candidates"][0]
             target = match["source_ref"]
             reading = self.readings[target]
@@ -2770,12 +2841,13 @@ class ToolContext:
                 return failure("请先在当前Agent中read_source该原文再存证")
         snap = reading.snapshot
         browser_snapshot = bool(snap.mcp and snap.mcp.get('source_kind') == 'browser_snapshot')
-        span = EvidenceQuote(quote=quote, submitted_quote=supplied, source_ref=snap.ref,
+        span = EvidenceQuote(quote=quote, submitted_quote=supplied, binding=match.get("binding") if match else None, source_ref=snap.ref,
             source_url=snap.url, source_title=snap.title, published_at=snap.published_at,
             source_kind=("computation" if snap.computation else "observation" if snap.observation else
                          "browser_snapshot" if browser_snapshot else "original"),
             observation=snap.observation,
-            location=location, deep_link="" if snap.observation or browser_snapshot else text_fragment_url(snap.url, quote) or "",
+            location=location, deep_link="" if snap.observation or browser_snapshot else text_fragment_url(
+                snap.url, visible_text(quote, markup=self._quote_uses_markup(snap))[0]) or "",
             summary_ref=ref if ref and ref != snap.ref else None)
         return span, excerpt_no, None, {target}
 
@@ -2826,8 +2898,8 @@ class ToolContext:
                 continue
             pieces = item["quotes"] if multi else [item]
             if (not isinstance(pieces, list) or not 1 <= len(pieces) <= MAX_QUOTES
-                    or any(not isinstance(q, dict) or (multi and "quote" not in q and "image_ref" not in q) for q in pieces)):
-                reject(index, f"quotes 须为 1–{MAX_QUOTES} 段对象，每段包含连续原话 quote")
+                    or any(not isinstance(q, dict) or (multi and not {"quote", "candidate_id", "image_ref"} & q.keys()) for q in pieces)):
+                reject(index, f"quotes 须为 1–{MAX_QUOTES} 段对象，每段包含摘录 quote 或已有 candidate_id")
                 continue
             bound, quote_results, affected = [], [], set()
             for number, piece in enumerate(pieces, 1):
@@ -2839,6 +2911,15 @@ class ToolContext:
                     bound.append((span, no))
                     quote_results.append({"quote_index": number, "binding_status": "bound",
                                           "source_ref": span.source_ref, "location": span.location})
+                    if no is not None:
+                        lo, hi = _chars_of(span.location)
+                        candidate = {"source_ref": span.source_ref, "start": lo, "end": hi, "quote": span.quote}
+                        if span.binding:
+                            candidate["binding"] = span.binding.model_dump(exclude_none=True)
+                        offered = self._quote_candidate(candidate, span.submitted_quote or span.quote)
+                        quote_results[-1].update(candidate_id=offered["candidate_id"], quote=span.quote)
+                        if span.binding:
+                            quote_results[-1]["binding"] = offered["binding"]
             failures = [r for r in quote_results if "reason" in r]
             if failures:
                 only_selection = all(r.get("status") == "needs_selection" for r in failures)
@@ -2864,7 +2945,7 @@ class ToolContext:
             first = quotes[0]
             card = EvidenceCard(card_id=self.store.next_card_id(), claim=claim, quotes=quotes,
                 judgment=evidence_judge.Judgment(status="pending") if self.config.evidence_judge.enabled else None,
-                **first.model_dump(exclude={"submitted_quote", "context"}), created_by=self.tool_role)
+                **first.model_dump(exclude={"submitted_quote", "context", "binding"}), created_by=self.tool_role)
             if llm.cancellation_requested() or self.budget_expired():
                 reject(index, "已取消或研究时限已到，未提交证据卡")
                 continue

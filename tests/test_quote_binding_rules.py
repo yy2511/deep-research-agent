@@ -65,8 +65,10 @@ def test_normalized_duplicate_does_not_silently_prefer_exact_match():
 
 
 @pytest.mark.parametrize('quote', ['精度0.05mm', '精度为0.02mm', '精度0.02 mm'])
-def test_no_fuzzy_acceptance(quote):
-    assert bind(quote, {'a': '精度0.02mm'}, {'a': [(0, 8)]})['status'] == 'not_found'
+def test_short_approximate_quotes_require_selection(quote):
+    result = bind(quote, {'a': '精度0.02mm'}, {'a': [(0, 8)]})
+    assert result['status'] == 'needs_selection'
+    assert result['candidates'][0]['quote'] == '精度0.02mm'
 
 
 @pytest.mark.parametrize('quote', ['', ' \n\t'])
