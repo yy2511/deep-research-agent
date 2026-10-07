@@ -74,6 +74,8 @@ docker build -t dra-sandbox:local sandbox_image
 ```
 
 在后端 `.env` 中设置 `DRA_EXECUTION_ENABLED=true`，然后重启后端。
+也可以在网页「设置 → 研究能力 → 运行代码」里开关并保存：网页上的选择会覆盖 `.env` 的开关，只影响之后开始的研究；
+没选过时跟随 `.env`。镜像、网络模式、时限和资源上限仍只按 `.env` 配置。同一页面会显示 Docker 实际是否可用。
 需要下载公开数据时，再设置 `DRA_EXECUTION_NETWORK_MODE=bridge`。主 Agent 可用 `download_source`
 直接下载 CSV/TSV/JSON/文本原文件，保留 URL、原始字节、编码和 SHA-256，导入只读 input 后用 Python 处理。
 下载与 input 导入不设文件大小上限；input 从磁盘只读挂载，不再使用原有的 32 MiB 输入区。
@@ -83,12 +85,28 @@ docker build -t dra-sandbox:local sandbox_image
 表格可直接交给 `bash` 中的 Python 按行列提取和计算；用 `source_refs` 声明输入来源（须是本轮已登记的来源编号，填错会在执行前退回）时，成功命令的非空 stdout 返回独立的计算结果 `source_ref`（标题写明输入文件），已展示部分可直接 `save_evidence`，不用重读原 CSV 的字符片段。未声明输入的输出（查看目录、调试打印等）只作工作参考，不登记为来源、不能存证。未展示输出按结果编号 `read_source` 续读；引用原文件原话时仍须实际读取原文件。
 计算证据与原始资料分开标注，详情保留输入文件哈希、命令、工作目录及本轮脚本写入/修改记录；提示词要求输出行标识、字段、单位和计算方法。它提供过程追溯，不自动验证计算逻辑或建立单元格级血缘。执行预览和日志仍使用已有上限，日志不完整时有标记。
 将网络配置改回 `none` 并重启即可恢复禁网模式；纯资料研究始终禁用 Web 下载和容器联网。
-启用后，主 Agent 可按需使用文件和 Bash 工具；没有指定文件格式时照常交付站内正文。
+启用后，主、子 Agent 可按需使用文件和 Bash 工具，共用会话工作区；子任务交回文件及来源，主线统一交付。没有指定文件格式时照常交付站内正文。
 要求 HTML、PDF 或导图时，交付文件会出现在答案下方，可预览或下载。HTML 可包含脚本交互、SVG、canvas 和外部资源；
 只要求 HTML 不会自动附带 PDF。制作环境与文件支持范围见 [STATUS.md](STATUS.md)。
 
 草稿、脚本和数据跟随研究会话保留，后续追问可以继续修改；已交付文件按轮保存独立副本。
 容器回收后可重建并接回工作文件，后台进程和内存不会保留。
+
+### 浏览器和图片检查
+
+“设置 → 研究能力 → 浏览器”控制按需启动的 Playwright 浏览器。Web 默认开启，Python API 需显式设置 `BrowserConfig(enabled=True)`。
+本机安装依赖（在项目根目录）：
+
+```bash
+npm ci --prefix web
+node web/node_modules/playwright/cli.js install chromium
+```
+
+主、子 Agent 各自保持连续的页面会话，共用工作区文件。可读取动态网页、定位原图，也可打开实际报告检查断图、排版和交互。
+截图通过与 `view_image` 相同的原生/辅助视觉通道传给模型；关闭看图时只保存图片，不声称已检查。
+官方 `api.deepseek.com` 的已确认 Flash 型号可原生读图；同名中转模型仍以该连接的 API 或人工声明为准，未知能力继续使用配置的备用视觉模型。
+自制报告、截图和工作文件只作交付检查，不能作为外部事实证据。浏览器使用本轮独立会话，不连接个人登录浏览器。
+应用 Dockerfile 已包含 Node、Playwright MCP 和 Chromium 安装步骤；Docker 部署更新时需重建应用镜像，执行沙箱镜像无需因浏览器功能另行修改。
 
 ### 引文判断与上下文设置
 
@@ -132,6 +150,9 @@ uv run python scripts/run_research.py "研究问题" --mode simple --run-live
 ```bash
 # 后端：默认跳过联网和付费用例
 uv run pytest
+
+# 本机 Chromium + 自建本机测试页面；不访问外部网页或调用模型
+uv run pytest tests/test_delivery_browser.py --run-browser
 
 # 仅在明确需要真实 API 验证时运行
 uv run pytest --run-live
