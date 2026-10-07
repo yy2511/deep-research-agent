@@ -123,13 +123,25 @@ PLANNING = "plan_without_clarification"
 NO_PLANNING = "none; research agent receives original question"
 
 
+PLAN_ATTEMPTS = 3
+"""计划生成最多尝试次数：网页上规划失败时用户可以重试，评测无人操作，按同样方式重新生成。"""
+
+
 def prepare_plan(problem, brief_config, *, plan_fn=None):
-    """只调用网页规划的第二步（生成计划）。失败如实抛出，不退回无计划研究。
+    """只调用网页规划的第二步（生成计划）。全部尝试失败才如实抛出，不退回无计划研究。
 
     返回 (交给研究入口的参数, 落盘记录)。计划模型只收到题目，没有搜索能力。
     """
-    brief = (plan_fn or research_brief.build_research_brief)(
-        problem, runtime_config.BriefConfig(**brief_config))
+    failures = []
+    for _ in range(PLAN_ATTEMPTS):
+        try:
+            brief = (plan_fn or research_brief.build_research_brief)(
+                problem, runtime_config.BriefConfig(**brief_config))
+            break
+        except Exception as exc:
+            failures.append(f"{type(exc).__name__}: {exc}"[:2000])
+    else:
+        raise ValueError(f"计划生成 {PLAN_ATTEMPTS} 次均失败：" + " | ".join(failures))
     # 评测没有人确认计划：交给研究的说明必须写成“未经用户确认”。
     unconfirmed = brief.model_copy(update={"needs_confirmation": False})
     kwargs = {"requirements": brief.to_run_requirements(),
@@ -137,7 +149,7 @@ def prepare_plan(problem, brief_config, *, plan_fn=None):
               "initial_route": [item.model_dump(mode="json") for item in brief.route]}
     record = {"protocol": PLANNING, "planner": brief_config,
               "clarification": "skipped: gap assessment not called",
-              "planner_needs_confirmation": brief.needs_confirmation,
+              "planner_needs_confirmation": brief.needs_confirmation, "planning_failures": failures,
               "brief": brief.model_dump(mode="json"), "brief_context": kwargs["brief_context"]}
     return kwargs, record
 

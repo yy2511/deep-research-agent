@@ -276,3 +276,28 @@ def test_bash_leak_audit_flags_commands_and_outputs_without_blocking(modules, tm
     hits = runner.bash_leak_audit(tmp_path)
     assert {h.get('tool_call_id') or h.get('file') for h in hits} == {'b', 'exec_2.stdout'}
     assert runner.bash_leak_audit(tmp_path / 'missing') == []
+
+
+def test_planning_is_retried_like_a_user_retry_and_failures_are_recorded(modules, monkeypatch, tmp_path):
+    runner = modules[1]
+    from dra.simple_research import SimpleConfig
+    monkeypatch.setattr(runner.simple_research, "render_markdown", lambda r: "report")
+    attempts = []
+    def plan(problem, config):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise ValueError("route too_short")
+        return _brief(False)
+    research = lambda q, **kw: SimpleNamespace(draft="A", draft_rejected=False, delivery_status="delivered",
+        stop_reason="finished", cards=[], sources=[], calls=[], usage={}, warnings=[])
+    result = runner.run_one({"id": 4, "problem": "q"}, tmp_path, SimpleConfig(), run_fn=research,
+                            brief_config={"planner_model": "m", "planner_provider": "p"}, plan_fn=plan)
+    assert result["status"] == "completed" and len(attempts) == 2
+    assert json.loads((tmp_path / "plan.json").read_text())["planning_failures"] == ["ValueError: route too_short"]
+    attempts.clear()
+    def always_bad(problem, config):
+        attempts.append(1)
+        raise ValueError("empty")
+    failed = runner.run_one({"id": 5, "problem": "q"}, tmp_path / "b", SimpleConfig(), run_fn=lambda *a, **k: pytest.fail("no research"),
+                            brief_config={"planner_model": "m", "planner_provider": "p"}, plan_fn=always_bad)
+    assert failed["status"] == "error" and len(attempts) == runner.PLAN_ATTEMPTS
