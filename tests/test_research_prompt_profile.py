@@ -27,7 +27,8 @@ def test_profile_reaches_real_model_call_without_mutating_defaults(tmp_path, pro
     def model(messages, **kwargs):
         calls.append((messages, kwargs))
         return _turn(('finish_research', {'draft': '', 'answers': [], 'coverage': [], 'gaps': ['No evidence.']}))
-    config = sr.SimpleConfig(prompt_profile=profile, max_llm_calls=1 if wrapup else None,
+    # 空正文会被打回；非收尾组给 3 次调用，打回后由调用额度收尾结束。
+    config = sr.SimpleConfig(prompt_profile=profile, max_llm_calls=1 if wrapup else 3,
                              delegation_enabled=delegation, evidence_judge={'enabled': True})
     sr.run_simple_research('Question', sr.requirements_from_query('Question'), config=config,
                            run_dir=tmp_path, model_call=model, search_fn=lambda _: [])
@@ -38,14 +39,14 @@ def test_profile_reaches_real_model_call_without_mutating_defaults(tmp_path, pro
     if not delegation or wrapup:
         assert 'wait_research' not in system and 'delegate_research' not in system
     if profile == 'product':
-        assert system.startswith(sr._quote_binding_prompt(
+        assert system.startswith(sr._live_contract_prompt(
             sr._wrapup_system(role='lead', delegation=delegation) if wrapup else
             sr._lead_system(delegation=delegation)))
         assert '因果' in finish['description']
     else:
         assert ('answers 数组' if profile == 'concise_qa_v2' else '<final_answer>') in system
         assert '因果、比较与总结等分析' not in system + finish['description']
-        assert sr._quote_binding_prompt(sr._WRAPUP_EVIDENCE_INSTRUCTIONS if wrapup else sr._EVIDENCE_USE_INSTRUCTIONS) in system
+        assert sr._live_contract_prompt(sr._WRAPUP_EVIDENCE_INSTRUCTIONS if wrapup else sr._EVIDENCE_USE_INSTRUCTIONS) in system
     if wrapup:
         # 收尾只剩一次交稿：不能再要求补读、重存或调用其他工具。
         assert '重新 save_evidence' not in system and 'update_research_plan 的 scope_update' not in system

@@ -106,4 +106,24 @@ def test_call_limit_switch_saved_and_applied_to_new_research(tmp_path, monkeypat
         assert after["subagent"] == before["subagent"]
         assert client.post("/api/research", json={"query": "q", "mode": "simple"}).status_code == 200
     assert captured[0].max_llm_calls == captured[0].max_tool_calls == (20 if enabled else None)
-    assert captured[0].wall_timeout_s == 1200
+    assert captured[0].wall_timeout_s is None
+
+
+@pytest.mark.parametrize("limit", [None, 900.0])
+def test_time_limit_switch_saved_and_applied_to_new_research(tmp_path, monkeypatch, limit):
+    """总时限默认关闭；开启后的秒数与关闭后的 None 都原样进入新研究。"""
+    monkeypatch.setattr(rc, "_CONFIG_PATH", tmp_path / "runtime_config.json")
+    monkeypatch.setattr(rc, "_cache", None)
+    captured = []
+    monkeypatch.setattr(web.REGISTRY, "start_simple_research",
+                        lambda query, **kwargs: captured.append(kwargs["config"]) or "offline-run")
+    with TestClient(web.app) as client:
+        before = client.get("/api/config").json()
+        assert before["wall_timeout_s"] is None and before["simple_budget"]["wall_timeout_s"] is None
+        body = {k: before[k] for k in rc.RuntimeModelSettings.model_fields}
+        body["wall_timeout_s"] = limit
+        assert client.put("/api/config", json=body).status_code == 200
+        monkeypatch.setattr(rc, "_cache", None)
+        assert client.get("/api/config").json()["simple_budget"]["wall_timeout_s"] == limit
+        assert client.post("/api/research", json={"query": "q", "mode": "simple"}).status_code == 200
+    assert captured[0].wall_timeout_s == limit

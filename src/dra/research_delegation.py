@@ -99,7 +99,7 @@ class DelegationManager:
                               or task['status'] == 'cancel_requested')
             if user_cancelled:
                 status = 'cancelled'
-            elif (expired or result.get('status') == 'research_time'
+            elif (expired
                   or result.get('status', '').startswith(('deadline', 'request_timeout'))):
                 status = 'timed_out'
             elif cancel.is_set() or result.get('status') == 'cancelled':

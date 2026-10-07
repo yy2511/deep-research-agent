@@ -349,7 +349,7 @@ def compact_context(ctx, messages, schemas, budget, *, call_model=None, force=Fa
                 'collapsed_refs': archive_batch['collapsed_refs'] if archive_batch else []})
 
     if not force and archive_check['checked_input_tokens'] <= target:
-        if llm.cancellation_requested() or budget.research_expired():
+        if llm.cancellation_requested() or budget.expired():
             return fail('提交前取消或超时')
         commit_archive()
         original.chunks = view.chunks
@@ -392,7 +392,7 @@ def compact_context(ctx, messages, schemas, budget, *, call_model=None, force=Fa
             _validate(cached, ctx)
             document['notes'].append({'summary': cached, 'hash': key, 'reused': True})
             return deepcopy(cached)
-        if llm.cancellation_requested() or budget.research_expired() or not budget.can_call(reserve=cfg.reserve_wrapup_calls):
+        if llm.cancellation_requested() or budget.expired() or not budget.can_call(reserve=cfg.reserve_wrapup_calls):
             raise ValueError('没有可供整理的预算，保留交付额度')
         req = request(process)
         limits = assess(ctx, req, phase='compact')
@@ -405,9 +405,9 @@ def compact_context(ctx, messages, schemas, budget, *, call_model=None, force=Fa
         adapter = cfg.adapter
         try:
             for attempt in range(cfg.summary_max_retries + 1):
-                if llm.cancellation_requested() or budget.research_expired():
+                if llm.cancellation_requested() or budget.expired():
                     raise llm.LLMDeadlineExceeded('会话摘要已无研究时间，不占用交稿预留')
-                attempt_deadline = min(budget.research_deadline or float('inf'),
+                attempt_deadline = min(budget.deadline or float('inf'),
                                        time.monotonic() + cfg.summary_timeout_s)
                 deadline_token = llm.set_request_deadline(attempt_deadline)
                 detail = {'attempt': attempt + 1, 'started_at': time.time(), 'status': 'running'}
@@ -429,11 +429,11 @@ def compact_context(ctx, messages, schemas, budget, *, call_model=None, force=Fa
                     detail.update(status='failed', ended_at=time.time(), error=f'{type(exc).__name__}: {exc}')
                     atomic_json(_path(ctx, checkpoint), document)
                     if (attempt >= cfg.summary_max_retries or llm.cancellation_requested()
-                            or budget.research_expired() or not _retryable_summary_error(exc)):
+                            or budget.expired() or not _retryable_summary_error(exc)):
                         raise
                     publish('retrying', call_id=record.call_id, attempt=attempt + 1,
                             next_attempt=attempt + 2, error=detail['error'])
-                    time.sleep(min(2 ** attempt, budget.research_seconds_left() or 2 ** attempt))
+                    time.sleep(min(2 ** attempt, budget.seconds_left() or 2 ** attempt))
                 finally:
                     llm.reset_request_deadline(deadline_token)
         finally:
@@ -445,7 +445,7 @@ def compact_context(ctx, messages, schemas, budget, *, call_model=None, force=Fa
         record = None
         entry.update(response=getattr(turn, 'content', ''), input_tokens=getattr(turn, 'input_tokens', None),
                      output_tokens=getattr(turn, 'output_tokens', None))
-        if llm.cancellation_requested() or budget.research_expired():
+        if llm.cancellation_requested() or budget.expired():
             raise ValueError('整理期间取消或到时，候选未应用')
         if getattr(turn, 'stopped', False) or getattr(turn, 'incomplete', False) or getattr(turn, 'tool_calls', []):
             raise ValueError('摘要输出不完整或包含工具调用')
@@ -489,7 +489,7 @@ def compact_context(ctx, messages, schemas, budget, *, call_model=None, force=Fa
                 'reserve_delivery_calls': cfg.reserve_wrapup_calls}
         document['plans'].append(plan)
         atomic_json(_path(ctx, checkpoint), document)
-        if budget.research_expired() or (remaining is not None and needed > remaining - cfg.reserve_wrapup_calls):
+        if budget.expired() or (remaining is not None and needed > remaining - cfg.reserve_wrapup_calls):
             raise ValueError('该分块方案的调用额度不足，未开始，保留交付额度')
         completed = []
         for group in groups:
@@ -553,7 +553,7 @@ def compact_context(ctx, messages, schemas, budget, *, call_model=None, force=Fa
         if chosen is None:
             raise ValueError('当前任务与目录仍不能容纳，不能静默裁剪')
         head, req, after, tail, keep, data = chosen
-        if llm.cancellation_requested() or budget.research_expired():
+        if llm.cancellation_requested() or budget.expired():
             raise ValueError('提交前取消或超时，候选未应用')
         document.update(status='committed', summary=data, retained_rounds=keep,
             after_tokens_estimate=round(after['checked_input_tokens']), target_reached=after['checked_input_tokens'] <= target,
@@ -579,7 +579,7 @@ def compact_context(ctx, messages, schemas, budget, *, call_model=None, force=Fa
         atomic_json(_path(ctx, checkpoint), document)
         publish('failed', error=str(exc), call_count=len(document['calls']))
         if (not force and archive_check['fits'] and archived_messages != messages and
-                not llm.cancellation_requested() and not budget.research_expired()):
+                not llm.cancellation_requested() and not budget.expired()):
             commit_archive()
             original.chunks = view.chunks
             return archived_messages

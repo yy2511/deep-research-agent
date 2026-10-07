@@ -64,14 +64,30 @@ def test_four_normal_waits_then_handoff_continue_in_research(research):
     assert len(seen) == 6
 
 
-def test_wait_preserves_two_strikes_instead_of_clearing_them(research):
-    ctx, budget, _, _ = research
-    script = Script([_turn(BAD), _turn(BAD), *[_turn(WAIT) for _ in range(4)], _turn(BAD)],
-                    finish=("finish_research", FINISH))
-    outcome = run(ctx, budget, script)
-    assert outcome["stop_reason"] == "no_progress+wrapup"
-    assert len(script.seen) == 8  # seven research requests, one finish-only request
-    assert script.tool_schemas[-1] == ["finish_research"]
+def _then_finish(turns, settle):
+    """先按序执行给定回合，之后让子任务结束并交稿；记录每次请求的工具清单。"""
+    seen, tools = [], []
+    def model(messages, **kwargs):
+        seen.append(messages)
+        tools.append([t["function"]["name"] for t in kwargs.get("tools") or []])
+        if len(seen) == len(turns):
+            settle()  # 子任务在最后一个给定回合结束，结果通知在交稿前一轮领取
+        if len(seen) <= len(turns):
+            return turns[len(seen) - 1]
+        return _turn(("finish_research", FINISH))
+    return model, seen, tools
+
+
+def test_repeated_errors_and_waits_do_not_end_research(research):
+    """工具报错、正常等待交替出现都只回执给模型；研究在模型交稿时结束，不进入收尾。"""
+    ctx, budget, _, settle = research
+    turns = [_turn(BAD), _turn(BAD), *[_turn(WAIT) for _ in range(4)], _turn(BAD), _turn(BAD), _turn(BAD)]
+    model, seen, tools = _then_finish(turns, settle)
+    outcome = run(ctx, budget, model)
+    assert outcome["stop_reason"] == "finished" and outcome["draft"] == FINISH["draft"]
+    assert len(seen) == len(turns) + 1
+    assert "search_sources" in tools[-1]  # 交稿那轮仍是正常研究请求，不是只许交稿的收尾
+    assert "unknown_tool" in json.dumps(seen[-1], ensure_ascii=False)
 
 
 @pytest.mark.parametrize("calls", [
@@ -79,23 +95,23 @@ def test_wait_preserves_two_strikes_instead_of_clearing_them(research):
     [("wait_research", {"delegation_ids": ["missing"], "timeout_s": 30})],
     [("inspect_research", {"view": "delegations"})],
 ])
-def test_invalid_mixed_or_status_only_turns_still_stop(research, calls):
-    ctx, budget, _, _ = research
-    script = Script([_turn(*calls) for _ in range(3)], finish=("finish_research", FINISH))
-    assert run(ctx, budget, script)["stop_reason"] == "no_progress+wrapup"
-    assert len(script.seen) == 4
+def test_invalid_mixed_or_status_only_turns_continue_until_finish(research, calls):
+    ctx, budget, _, settle = research
+    model, seen, _ = _then_finish([_turn(*calls) for _ in range(3)], settle)
+    assert run(ctx, budget, model)["stop_reason"] == "finished"
+    assert len(seen) == 4
 
 
 @pytest.mark.parametrize("empty", [False, True])
-def test_wait_on_completed_or_no_tasks_is_not_neutral(research, empty):
+def test_wait_on_completed_or_no_tasks_continues_until_finish(research, empty):
     ctx, budget, manager, settle = research
     settle()
     manager.drain("parent")
     if empty:
         manager.tasks.clear()
-    script = Script([_turn(("wait_research", {"timeout_s": 30})) for _ in range(3)],
-                    finish=("finish_research", FINISH))
-    assert run(ctx, budget, script)["stop_reason"] == "no_progress+wrapup"
+    model, seen, _ = _then_finish([_turn(("wait_research", {"timeout_s": 30})) for _ in range(3)], lambda: None)
+    assert run(ctx, budget, model)["stop_reason"] == "finished"
+    assert len(seen) == 4
 
 
 def test_inspecting_full_completed_result_is_valid_reading(research):
@@ -108,7 +124,7 @@ def test_inspecting_full_completed_result_is_valid_reading(research):
 
 
 @pytest.mark.parametrize("role", ["lead", "subagent"])
-def test_new_message_received_before_no_progress_check(research, role):
+def test_new_message_received_after_failed_turns(research, role):
     ctx, budget, manager, settle = research
     if role == "subagent":
         ctx = ctx.fork_for_subagent(ctx.config, budget=budget, delegation_id="sub1")
@@ -142,7 +158,7 @@ def test_wait_does_not_override_cancellation(research):
         assert run(ctx, budget, model)["stop_reason"] == "cancelled"
 
 
-def test_new_terminal_result_received_before_no_progress_check(research):
+def test_new_terminal_result_received_after_failed_turns(research):
     ctx, budget, _, settle = research
     seen = []
     def model(messages, **kwargs):

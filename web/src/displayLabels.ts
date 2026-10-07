@@ -67,7 +67,7 @@ export const STOP_LABEL: Record<string, { text: string; tone: "ok" | "warn" | "m
   "call_budget+wrapup": { text: "模型调用次数用完，提前收尾", tone: "warn" },
   "no_progress+wrapup": { text: "连续几次没有进展，提前收尾", tone: "warn" },
   cancelled: { text: "你停止了研究", tone: "muted" },
-  deadline: { text: "到了时间上限", tone: "warn" },
+  deadline: { text: "到了时间上限，未完成交稿", tone: "warn" },
   failed: { text: "运行出错", tone: "muted" },
   "failed+partial_delivery": { text: "附件修正中断，已保留可用成果", tone: "warn" },
   context_limit: { text: "上下文装不下了，已保留现有成果", tone: "muted" },

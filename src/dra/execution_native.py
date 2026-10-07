@@ -124,6 +124,9 @@ class NativeSession(ExecutionSession):
                 self.close()
                 raise
 
+    def _keep_alive(self):
+        pass  # 本机命令逐条启动，没有需要续期的常驻容器。
+
     def summary(self):
         limits={k:getattr(self.config,k) for k in ('command_timeout_s','max_commands','network_mode')}
         return {**super().summary(),'limits':limits,'isolation':'macOS Seatbelt / SRT',

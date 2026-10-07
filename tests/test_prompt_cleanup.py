@@ -89,8 +89,9 @@ def test_language_rule_appears_once(tmp_path):
     def model(messages, **_):
         seen.append(messages)
         return _turn(("finish_research", {"draft": "", "gaps": ["无"]}))
+    # 空正文会被打回；调用额度让这轮在几次打回后收尾结束。
     sr.run_simple_research("Compare A and B", sr.requirements_from_query("Compare A and B"),
-                           config=sr.SimpleConfig(), run_dir=tmp_path, model_call=model, search_fn=lambda _q: [])
+                           config=sr.SimpleConfig(max_llm_calls=3), run_dir=tmp_path, model_call=model, search_fn=lambda _q: [])
     request = json.dumps(seen[0], ensure_ascii=False)
     assert request.count("【回答语言】") == 1
     assert "语言与问题一致" not in request

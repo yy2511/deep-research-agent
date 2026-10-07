@@ -49,7 +49,7 @@ def test_route_updates_leave_all_research_tool_quota_available(tmp_path):
 
 
 def test_identical_plan_is_accepted_without_history_or_research_progress(tmp_path):
-    config, store, budget, context = setup_context(tmp_path, max_invalid_turns=2)
+    config, store, budget, context = setup_context(tmp_path)
     context.update_research_plan(PLAN)
     got = []
     sink = events.subscribe(got.append)
@@ -59,7 +59,7 @@ def test_identical_plan_is_accepted_without_history_or_research_progress(tmp_pat
         outcome = sr.run_lead_loop(store, config, [], budget=budget, context=context, model_call=script)
     finally:
         events.unsubscribe(sink)
-    assert outcome["stop_reason"] == "no_progress+wrapup"
+    assert outcome["stop_reason"] == "finished"
     assert context.tool_calls == 0
     assert not [e for e in got if e["type"] == "research_plan_updated"]
     assert len([a for a in store.state["actions"] if a["action"] == "research_plan"]) == 1

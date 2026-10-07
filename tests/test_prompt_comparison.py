@@ -81,7 +81,7 @@ def test_frozen_bundle_reaches_model_and_restores_live_product(comparison, tmp_p
     schemas_before = deepcopy(sr.LEAD_TOOL_SCHEMAS)
     with comparison.installed_bundle(bundle):
         sr.run_simple_research("Question only", sr.requirements_from_query("Question only"),
-            config=sr.SimpleConfig(prompt_profile=profile, max_llm_calls=1 if wrapup else None),
+            config=sr.SimpleConfig(prompt_profile=profile, max_llm_calls=1 if wrapup else 3),
             run_dir=tmp_path, model_call=model, search_fn=lambda _: [])
     assert seen[0][0][0]["content"].startswith(marker)
     finish = next(s["function"] for s in seen[0][1]["tools"] if s["function"]["name"] == "finish_research")

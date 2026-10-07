@@ -49,7 +49,7 @@ def test_runtime_toggle_preserves_models_and_resolves_caps(tmp_path, monkeypatch
         config = rc.to_simple_config(loaded)
         assert config.max_llm_calls == (20 if enabled else None)
         assert config.max_tool_calls == (20 if enabled else None)
-        assert config.wall_timeout_s == 1200
+        assert config.wall_timeout_s is None
         assert loaded.call_limits_enabled is enabled
 
 
@@ -165,13 +165,14 @@ def test_unlimited_cancel_preserves_pending_requests_without_executing(tmp_path)
     assert stats["totals"]["successful"] == 0
 
 
-def test_zero_tool_rounds_and_no_progress_wrapup_are_preserved(tmp_path):
+def test_zero_tool_rounds_continue_until_model_finishes(tmp_path):
+    """连续不调用工具只提醒模型，不替用户结束研究；模型自己交稿才结束。"""
     script = Script([_turn(), _turn(), _turn()],
                     finish=("finish_research", {"draft": "无法继续", "coverage": []}))
     result = sr.run_simple_research("q", run_dir=tmp_path, model_call=script)
-    assert result.stop_reason == "no_progress+wrapup"
+    assert result.stop_reason == "finished"
     stats = json.loads((tmp_path / "call_stats.json").read_text())
     assert [r["tool_calls"] for r in stats["rounds"]] == [0, 0, 0, 1]
-    assert stats["rounds"][-1]["step"] == "wrapup"
+    assert all(r["step"] != "wrapup" for r in stats["rounds"])
     prompt = json.dumps(script.seen[-1], ensure_ascii=False)
-    assert "【剩余模型额度】" not in prompt and "工具额度用尽" not in prompt
+    assert "你没有调用任何工具" in prompt and "【剩余模型额度】" not in prompt

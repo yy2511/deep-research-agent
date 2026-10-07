@@ -138,6 +138,9 @@ class TestSimpleEndToEnd:
             "artifacts": [{"path": "/workspace/output/report.pdf", "title": "报告"}],
         }))]
         _, calls = _install_boundaries(monkeypatch, turns=turns)
+        # 替身修不好附件，也不再因连续无效被叫停；用调用次数上限让这轮在预算内结束。
+        monkeypatch.setattr(runtime_config, "current",
+                            lambda: runtime_config._code_defaults().model_copy(update={"call_limits_enabled": True}))
         with TestClient(web.app) as client:
             response = client.post("/api/research", json={"query": QUERY, "mode": "simple"})
             assert response.status_code == 200, response.text
@@ -421,7 +424,7 @@ class TestSimpleBudgetPreview:
     def test_api_config_budget_matches_cli_simple_defaults(self, isolated_web, monkeypatch):
         """真实 /api/config 的投入范围与 simple CLI 缺省一致（实测配置=用户入口）。
 
-        对齐契约锚定值：默认次数不限，1200 秒总时限与 Web 相同。
+        对齐契约锚定值：默认次数不限，也不设总时限，与 Web 相同。
         沿用同文件预算预览测试的 settings fixture 姿势：isolated_web 只替换了
         runtime_config 适配函数，current() 仍需可序列化替身。
         """
@@ -447,7 +450,7 @@ class TestSimpleBudgetPreview:
             budget["max_llm_calls"],
             budget["max_tool_calls"],
             budget["wall_timeout_s"],
-        ) == (None, None, 1200.0)
+        ) == (None, None, None)
 
         # 显式极小值原样使用，不放大的行为同样适用 CLI。
         args = module.parser().parse_args(

@@ -564,7 +564,7 @@ def test_subagent_wrapup_is_attributed_to_the_subagent_not_the_lead(tmp_path):
                 )
             ),
             _turn(("search_sources", {"query": "a"})),
-            _turn(("search_sources", {"query": "b"})),  # 撞保留区 → 计无效轮次 → 熔断
+            _turn(("search_sources", {"query": "b"})),  # 用满子 Agent 工具额度 → 子 Agent 收尾
         ]
     )
     adapter = SubAgentConfig(
@@ -572,7 +572,7 @@ def test_subagent_wrapup_is_attributed_to_the_subagent_not_the_lead(tmp_path):
         provider="test",
         reasoning=False,
         max_tool_calls=2,
-        save_reserve_calls=1,
+        save_reserve_calls=0,
         max_invalid_calls=1,
     )
     result, _ = _run(tmp_path, script, adapter=adapter)

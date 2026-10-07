@@ -52,22 +52,22 @@ def test_reserve_single_card_read_is_complete_and_leaves_saving_quota(tmp_path):
     assert context.plan_items == PLAN["items"]
 
 
-def test_repeated_or_unknown_free_reads_cannot_extend_the_loop(tmp_path):
+def test_repeated_or_unknown_free_reads_are_bounded_by_call_budget(tmp_path):
+    """被拒的重复/未知回读不占工具额度，也不再按连续无效结束；由用户设置的模型额度兜底。"""
     config, store, budget, context = seeded(tmp_path)
-    config.max_invalid_turns = 2
     context.tool_calls = 2
     script = Script([
         _turn(("inspect_research", {"view": "cards", "card_id": "c1"})),
         _turn(("inspect_research", {"view": "cards", "card_id": "c1"})),
-        _turn(("inspect_research", {"view": "cards", "card_id": "missing"})),
+        *[_turn(("inspect_research", {"view": "cards", "card_id": "missing"})) for _ in range(5)],
     ], finish=("finish_research", FINISH))
     outcome = sr.run_lead_loop(store, config, sr.requirements_from_query(store.query),
         budget=budget, context=context, model_call=script)
-    assert len(context.receipts) == 3
-    assert [r["ok"] for r in context.receipts] == [True, False, False]
+    assert len(context.receipts) == 7  # 8 次模型调用中 1 次留给收尾
+    assert [r["ok"] for r in context.receipts] == [True] + [False] * 6
     assert context.tool_calls == 2
-    assert outcome["stop_reason"] == "no_progress+wrapup"
-    assert len(script.seen) == 4
+    assert outcome["stop_reason"] == "call_budget+wrapup"
+    assert len(script.seen) == 8 and script.tool_schemas[-1] == ["finish_research"]
 
 
 def test_early_metered_inspection_does_not_use_up_the_final_reread(tmp_path):

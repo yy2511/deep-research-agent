@@ -186,13 +186,13 @@ def test_real_local_browser_keeps_page_clicks_reports_broken_image_and_delivers_
     assert not session.thread.is_alive()
 
 
-def test_finish_can_snapshot_existing_files_during_reserved_wrapup(tmp_path):
+def test_finish_can_snapshot_existing_files_near_deadline(tmp_path):
     ctx = context(tmp_path, execution=ExecutionConfig(enabled=True), wrapup_reserve_s=120)
     ctx.budget = sr.Budget(ctx.config, time.monotonic() + 60)
     ctx.execution = ExecutionSession(tmp_path, 'delivery', ctx.config.execution, deadline=ctx.budget_deadline)
     ctx.execution.workspace.prepare()
     (ctx.execution.workspace.path / 'output/report.csv').write_bytes(b'total\n42\n')
-    assert ctx.budget_expired() and not ctx.budget.expired()
+    assert ctx.budget.near_deadline() and not ctx.budget_expired()
     assert artifacts.prepare_finish(ctx, {'draft': '结果为42。', 'artifacts': [{'path': 'report.csv', 'title': '结果'}]}) == '结果为42。'
     assert not ctx.pending_artifact_errors and ctx.execution.state == 'new'
 

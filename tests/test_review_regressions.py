@@ -166,7 +166,8 @@ def test_real_local_page_distinguishes_script_output_edits_and_delayed_changes(t
 def test_cancelled_child_keeps_shared_execution_inputs_files_and_budgets(tmp_path, monkeypatch, failure):
     parent = context(tmp_path, execution=ExecutionConfig(enabled=True))
     child = parent.fork_for_subagent(parent.config, budget=sr.Budget(parent.config, None), delegation_id='child')
-    session = ExecutionSession(tmp_path, 'delivery', parent.config.execution, cancelled=llm.cancellation_requested)
+    session = ExecutionSession(tmp_path, 'delivery', parent.config.execution, deadline=time.monotonic() + 600,
+                               cancelled=llm.cancellation_requested)
     parent.execution = session
     session.state = 'ready'
     session.workspace.prepare()

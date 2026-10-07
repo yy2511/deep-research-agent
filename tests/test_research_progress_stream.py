@@ -512,7 +512,7 @@ class TestSseDelivery:
         """两个运行的事件互不串号：SSE 与历史各归各的 run_id。"""
         _install_boundaries(monkeypatch, lambda: StreamingScript([
             ("第一问的说明。", [("search_sources", {"query": "one"})]),
-            ("", [("finish_research", {"draft": "第一问答案 [c1]。"})]),
+            ("", [("finish_research", {"draft": "第一问答案。"})]),
         ]))
         with TestClient(web.app) as client:
             run_a, _ = _run_research(client, "问题 A")
@@ -531,7 +531,7 @@ class TestSseDelivery:
         texts_b = _join_messages(events_b)
         assert texts_a[f"{run_a}:1"] == "第一问的说明。"
         assert texts_b[f"{run_b}:1"] == "第一问的说明。"
-        # 脚本没存 c1，正常交稿被拒后还可能产生真实的兜底说明；所有消息仍按 run 隔离。
+        # 所有消息仍按 run 隔离。
         assert all(key.startswith(f"{run_a}:") for key in texts_a)
         assert all(key.startswith(f"{run_b}:") for key in texts_b)
         assert not set(texts_a) & set(texts_b), "两个 run 的 msg_id 不得相同"
@@ -579,7 +579,7 @@ def test_injected_model_call_still_emits_full_message_once(isolated_web, monkeyp
 
     script = Script([
         _turn(("search_sources", {"query": "sqlite3_rsync ssh local"})),
-        _turn(("finish_research", {"draft": "不要求一端为远程 [c1]。"})),
+        _turn(("finish_research", {"draft": "不要求一端为远程。"})),
     ])
     for turn in script.turns:
         turn.content = "我先查官方文档。"
@@ -627,18 +627,18 @@ def test_lead_prompt_requires_public_progress_and_stays_bounded():
     assert "无进展" in _LEAD_SYSTEM
 
 
-def test_text_only_turns_still_hit_no_progress_bound(isolated_web, monkeypatch):
-    """纯文本无工具回合仍然计入无进展并进入有界收尾——说明再多也不无限自说自话。"""
+def test_text_only_turns_continue_until_model_finishes(isolated_web, monkeypatch):
+    """纯文本无工具回合只提醒模型调用工具，不替用户结束研究；模型交稿后正常结束。"""
     _install_boundaries(monkeypatch, lambda: StreamingScript(
-        [("我先说明一下方向。", []) for _ in range(3)],
-        wrapup_text="材料不足，如实说明缺口。"))
+        [*[("我先说明一下方向。", []) for _ in range(3)],
+         ("", [("finish_research", {"draft": "材料不足，如实说明缺口。"})])]))
     with TestClient(web.app) as client:
         run_id, detail = _run_research(client)
         payload = client.get(f"/api/runs/{run_id}/simple").json()
         events = _events(client, run_id)
-    assert payload["stop_reason"].startswith("no_progress"), (
+    assert payload["stop_reason"] == "finished", (
         payload["stop_reason"], payload["warnings"],
         [(c["step"], c["status"], c.get("error")) for c in payload["calls"]])
     assert len([e for e in events if e["type"] == "lead_message"]) >= 3
-    # 有界：模型调用数仍受配置上限约束
-    assert len(payload["calls"]) <= 8
+    assert [c["step"] for c in payload["calls"]].count("wrapup") == 0
+    assert len(payload["calls"]) == 4

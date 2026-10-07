@@ -20,6 +20,9 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field
 
 MiB = 1024 * 1024
+# 研究不设总时限时 Docker 容器的租期与续期间隔：容器随每次使用续期，服务崩溃后的遗留容器最多存活一个租期。
+OPEN_LEASE_S = 86400
+LEASE_RENEW_S = 600
 _PENDING: set[str] = set()
 _ENV_PATH = Path(__file__).resolve().parents[2] / '.env'
 
@@ -41,7 +44,8 @@ class ExecutionConfig(BaseModel):
     memory_mb: int = Field(default=2048, ge=128, le=8192)
     pids: int = Field(default=128, ge=16, le=256)
     command_timeout_s: float = Field(default=30, gt=0, le=120)
-    max_commands: int = Field(default=20, ge=1, le=40)
+    max_commands: int | None = Field(default=None, ge=1)
+    """每轮 Bash 次数上限；None（默认）只统计不限制，服从研究的总时间与总调用预算。"""
     idle_timeout_s: float = Field(default=600, ge=0, le=86400)
     idle_check_s: float = Field(default=60, ge=0.1, le=60)
     max_containers: int = Field(default=3, ge=1, le=16)
@@ -154,7 +158,9 @@ class ExecutionSession:
     def __init__(self, run_dir, run_id, config, *, deadline=None, cancelled=None, conversation_id=None, pool=None):
         from dra.execution_workspace import ConversationWorkspace
         self.run_dir=Path(run_dir); self.run_id=run_id; self.config=config
-        self.deadline=deadline if deadline is not None else time.monotonic()+600
+        # 不设研究时限时会话没有截止时间；Docker 容器改用随使用续期的租期，崩溃遗留仍会自行退出。
+        self.deadline=deadline if deadline is not None else math.inf
+        self.lease_until=0.0
         self.cancelled=cancelled or (lambda:False)
         self.directory=self.run_dir/'execution'; self.client=None; self.container=None
         self.lock=threading.RLock(); self.state='new'; self.commands=0; self.log_bytes=0; self.input_bytes=0
@@ -203,7 +209,7 @@ class ExecutionSession:
                 self.workspace.reset_input()
                 if entry and entry.image_id==image.id:
                     self.reused=True; self.state='ready'
-                    self._renew_lease(self.deadline-time.monotonic())
+                    self._renew_lease(self._lease_ttl())
                     self._persist()
                     return
                 if entry:
@@ -221,7 +227,7 @@ class ExecutionSession:
                 if os.getuid()==0: os.chown(probe_path,self.workspace.uid,self.workspace.gid)
                 self.container_name=f'dra-exec-{instance_id(self.run_dir.parent)}-{uuid4().hex[:12]}'
                 self._persist()
-                self.container=self.client.containers.create(self.image_id,command=[str(max(1,math.ceil(self.deadline-time.monotonic())))],
+                self.container=self.client.containers.create(self.image_id,command=[str(max(1,math.ceil(self._lease_ttl())))],
                     name=self.container_name,user='65534:65534' if self.workspace.uid!=65534 else '65533:65533',working_dir='/',init=True,
                     read_only=True,network_mode=self.config.network_mode,ipc_mode='private',cap_drop=['ALL'],
                     security_opt=['no-new-privileges:true'],tmpfs=tmpfs,mounts=self.workspace.mounts(),shm_size=32*MiB,
@@ -233,11 +239,12 @@ class ExecutionSession:
                                  'DRA_DEPENDENCY_KEY':'docker-'+image.id.removeprefix('sha256:')[:12]},
                     labels={'dra.managed':'1','dra.instance':instance_id(self.run_dir.parent),'dra.run':self.run_id,
                             'dra.conversation':self.workspace.key,
-                            'dra.expires':str(time.time()+self.deadline-time.monotonic())},
+                            'dra.expires':str(time.time()+self._lease_ttl())},
                     ulimits=[docker.types.Ulimit(name='core',soft=0,hard=0)],
                     log_config=docker.types.LogConfig(type='json-file',config={'max-size':'1m','max-file':'1'}),
                     use_config_proxy=False)
                 self._persist(); self.container.start(); self.state='ready'
+                self.lease_until=time.monotonic()+self._lease_ttl()
                 # 配置已发送还不够：在实际容器中检查 cgroup 与文件权限。
                 check="""import json,os,pathlib
 p=pathlib.Path('/sys/fs/cgroup')
@@ -266,10 +273,19 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
                 if isinstance(exc,ExecutionError): raise
                 raise ExecutionError(self.error) from exc
 
+    def _lease_ttl(self):
+        return min(self.deadline-time.monotonic(), OPEN_LEASE_S)
+
     def _renew_lease(self, ttl):
         receipt=self._exec(['/opt/runtime/.venv/bin/python','-I','/opt/dra-tools/helper.py','--lease',str(max(1,ttl))],5,user='0:0',logs=False)
         if not receipt['ok'] or json.loads(receipt['stdout']).get('ok') is not True:
             raise ExecutionError('lease_failed')
+        self.lease_until=time.monotonic()+max(1,ttl)
+
+    def _keep_alive(self):
+        """无研究截止时间时，每次使用把容器租期续到 OPEN_LEASE_S；有截止时间时租期已覆盖整轮。"""
+        if math.isinf(self.deadline) and self.lease_until-time.monotonic()<OPEN_LEASE_S-LEASE_RENEW_S:
+            self._renew_lease(self._lease_ttl())
 
     def release(self):
         """结束本轮租用。文件保留；只有无后台工作进程的健康容器可待用。"""
@@ -399,6 +415,7 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
     def tool(self,name,args):
         with self.lock:
             self.start()
+            self._keep_alive()
             if name not in ('bash','read_file','write_file','edit_file'): raise ExecutionError('invalid_arguments')
             args=dict(args)
             key='cwd' if name=='bash' else 'path'
@@ -406,7 +423,7 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
             request={**args,'op':name}
             workspace_path(args.get('cwd','/workspace/work') if name=='bash' else args.get('path'),write=name in ('bash','write_file','edit_file'))
             if name=='bash':
-                if self.commands>=self.config.max_commands: raise ExecutionError('command_budget')
+                if self.config.max_commands is not None and self.commands>=self.config.max_commands: raise ExecutionError('command_budget')
                 command=args.get('command')
                 if not isinstance(command,str) or not command or len(command.encode())>32768: raise ExecutionError('invalid_arguments')
                 timeout=args.get('timeout_s',self.config.command_timeout_s)

@@ -79,7 +79,7 @@ export function capabilityTiles(saved: ConfigPayload, execution: ExecutionProbe,
       tone: saved.compaction_enabled ? "ok" : "off" },
     { id: "cap-time", icon: "timer", label: "研究时限",
       value: minutesText(saved.wall_timeout_s ?? null),
-      detail: retries != null ? `请求失败最多重试 ${retries} 次` : "含收尾时间",
+      detail: retries != null ? `请求失败最多重试 ${retries} 次` : saved.wall_timeout_s ? "临近截止提醒交稿" : "由 Agent 交稿或你叫停",
       tone: "ok" },
   ];
 }
@@ -178,8 +178,8 @@ export function CapabilitySettings({ s, onManageSkills }: { s: RuntimeSettings; 
   const numberField = (key: "wall_timeout_s" | "wrapup_reserve_s" | "summary_timeout_s" | "summary_max_retries", label: string, unit: string, fallback: number, min: number, hint?: ReactNode) =>
     <label className="field" key={key}><span className="field-label">{label}（{unit}）</span>
       <input className="input input-num" aria-label={label} type="number" min={min} step={1}
-        value={config[key] ?? ""} placeholder={key === "wall_timeout_s" ? "留空表示不限" : String(fallback)}
-        onChange={e => setConfig({ ...config, [key]: e.target.value ? Number(e.target.value) : key === "wall_timeout_s" ? null : fallback })} />
+        value={config[key] ?? ""} placeholder={String(fallback)}
+        onChange={e => setConfig({ ...config, [key]: e.target.value ? Number(e.target.value) : fallback })} />
       {hint && <small className="field-hint">{hint}</small>}
     </label>;
 
@@ -281,11 +281,15 @@ export function CapabilitySettings({ s, onManageSkills }: { s: RuntimeSettings; 
       <h3>研究过程</h3>
 
       <CapCard id="cap-time" icon="timer" title="时间与重试"
-        summary="总时限包含收尾预留。进入收尾后停止新的检索、阅读和整理，用已有材料写回答。">
-        <div className="field-grid">
-          {numberField("wall_timeout_s", "总时限", "秒", 1200, 1, config.wall_timeout_s ? `约 ${minutesText(Math.round(config.wall_timeout_s / 60) * 60)}` : "不限总时长")}
-          {numberField("wrapup_reserve_s", "收尾预留", "秒", 120, 0, "留给写回答的时间，不额外延长总时限")}
-        </div>
+        summary="默认不限时长：Agent 自己判断何时交稿，你也可以随时叫停。开启总时限后，临近截止会提醒 Agent 整理证据交稿，期间仍可存证、计算和生成文件；到点还没交稿就记为未完成，已有材料保留。">
+        <SettingRow title="限制研究总时长" description="关闭时不设时间上限，研究不会因为时间被中止。">
+          <Switch label="限制研究总时长" checked={config.wall_timeout_s != null}
+            onChange={v => setConfig({ ...config, wall_timeout_s: v ? saved.wall_timeout_s ?? 1200 : null })} />
+        </SettingRow>
+        {config.wall_timeout_s != null && <div className="field-grid">
+          {numberField("wall_timeout_s", "总时限", "秒", 1200, 1, `约 ${minutesText(Math.round(config.wall_timeout_s / 60) * 60)}`)}
+          {numberField("wrapup_reserve_s", "交稿提醒", "秒", 120, 0, "剩余这么多秒时提醒 Agent 交稿，工具照常可用，不延长总时限；填 0 不提醒")}
+        </div>}
         {policy && <div className="cap-readonly">
           <strong>研究模型请求失败时自动重试</strong>
           <p>每次请求失败后最多重试 <b>{policy.research.max_retries}</b> 次，也就是最多发出 <b>{policy.research.max_attempts}</b> 次请求。主 Agent、子任务和收尾写回答都按这个处理；当前阶段的剩余时间用完或你叫停研究后，不再发起新的重试（已经发出的请求不一定立刻中断）。</p>
@@ -335,7 +339,7 @@ export function CapabilitySettings({ s, onManageSkills }: { s: RuntimeSettings; 
       </CapCard>
 
       <section className="card cap-card" id="cap-limits">
-        <SettingRow title="限制调用次数" description="开启后，主 Agent 和子任务的模型、工具调用次数都有上限，并留出收尾的次数。不论开关，研究总时限都有效。">
+        <SettingRow title="限制调用次数" description="开启后，主 Agent 和子任务的模型、工具调用次数都有上限，并留出收尾的次数。开启研究总时限时，两种上限同时有效。">
           <Switch label="限制调用次数" checked={!!config.call_limits_enabled} onChange={v => setConfig({ ...config, call_limits_enabled: v })} />
         </SettingRow>
       </section>

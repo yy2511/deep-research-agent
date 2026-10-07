@@ -67,16 +67,22 @@ def test_compaction_preserves_loaded_content(tmp_path):
     assert 'Compare costs' in json.dumps(sr._build_messages(base, ctx, [], h, seconds_left=None))
 
 
-def test_repeated_activation_does_not_reset_no_progress(tmp_path):
+def test_repeated_activation_is_receipted_without_reloading(tmp_path):
+    """重复加载同一技能只回执“未变化”，不重复加载；结束由模型交稿决定。"""
     ctx = context(tmp_path)
     ctx.config.max_llm_calls = None
     ctx.config.max_tool_calls = None
+    seen = []
     def model(messages, **kwargs):
-        return _turn(('load_skill', {'name':'compare'}))
+        seen.append(messages)
+        if len(seen) <= 5:
+            return _turn(('load_skill', {'name':'compare'}))
+        return _turn(('finish_research', {'draft': '按技能完成比较。', 'gaps': []}))
     result = sr.run_lead_loop(ctx.store, ctx.config, [], budget=sr.Budget(ctx.config, None), context=ctx, model_call=model)
-    assert result['stop_reason'] == 'no_progress'
+    assert result['stop_reason'] == 'finished' and len(seen) == 6
     assert len(ctx.store.state['skills']['loaded']) == 1
-    assert ctx.tool_calls < 10
+    receipts = [json.loads(r['payload']) for r in ctx.receipts if r['tool'] == 'load_skill']
+    assert len(receipts) == 5 and [r.get('changed') for r in receipts[1:]] == [False] * 4
 
 
 def test_automatic_loading_discloses_only_catalog_until_requested(tmp_path):

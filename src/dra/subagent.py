@@ -38,7 +38,7 @@ class SubAgentConfig(BaseModel):
     enable_search_fallback: bool = True
     # 工具调用总预算。
     max_tool_calls: int = 12
-    # 连续无效调用（未知工具/坏参数/校验全拒/纯文本回复）熔断阈值，防死循环空烧。
+    # 现役研究不再按连续无效回合结束；开启调用次数限制时仍用于估算子 Agent 的模型额度。
     max_invalid_calls: int = 3
     # 降落保留区：额度只剩这么多次时
     # search/fetch_page 拒收（不耗预算、计 strike），只放行 save_evidence/finish——

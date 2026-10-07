@@ -105,6 +105,20 @@ describe("研究能力页", () => {
     expect(html).toContain('aria-label="摘要重试次数"');
     expect(html).not.toContain('aria-label="研究重试次数"');
   });
+  it("总时限是开关：默认关闭时不显示时限输入，开启后显示总时限和交稿提醒", () => {
+    const off = { ...config, wall_timeout_s: null };
+    const offHtml = renderToStaticMarkup(<CapabilitySettings s={fakeSettings(off)} onManageSkills={() => {}} />);
+    expect(offHtml).toMatch(/aria-checked="false" aria-label="限制研究总时长"/);
+    expect(offHtml).not.toContain('aria-label="总时限"');
+    expect(offHtml).not.toContain('aria-label="交稿提醒"');
+    expect(offHtml).not.toContain("收尾预留");
+    expect(capabilityTiles(off, probe(status()), { names: [] }).find(t => t.id === "cap-time")?.value).toBe("不限");
+    const onHtml = renderToStaticMarkup(<CapabilitySettings s={fakeSettings({ ...config, wall_timeout_s: 900 })} onManageSkills={() => {}} />);
+    expect(onHtml).toMatch(/aria-checked="true" aria-label="限制研究总时长"/);
+    expect(onHtml).toMatch(/aria-label="总时限"[^>]*value="900"/);
+    expect(onHtml).toContain('aria-label="交稿提醒"');
+    expect(onHtml).toContain("工具照常可用，不延长总时限");
+  });
   it("执行开关跟随本机默认时如实说明；草稿未保存时总览仍显示已保存状态", () => {
     const html = renderToStaticMarkup(<CapabilitySettings s={fakeSettings(config)} onManageSkills={() => {}} />);
     expect(html).toContain("跟随本机默认（开启）");

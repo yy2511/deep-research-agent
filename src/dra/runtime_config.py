@@ -59,7 +59,8 @@ class RuntimeModelSettings(BaseModel):
     vision: VisionConfig = Field(default_factory=VisionConfig)
     browser: BrowserConfig = Field(default_factory=lambda: BrowserConfig(enabled=True))
     evidence_judge: JudgeConfig = Field(default_factory=JudgeConfig)
-    wall_timeout_s: float | None = Field(default=1200.0, gt=0)
+    wall_timeout_s: float | None = Field(default=None, gt=0)
+    """研究总时限（秒）；None（默认）不设时限。"""
     wrapup_reserve_s: float = Field(default=120.0, ge=0)
     summary_timeout_s: float = Field(default=120.0, gt=0)
     summary_max_retries: int = Field(default=1, ge=0)
