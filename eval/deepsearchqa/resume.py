@@ -1,4 +1,10 @@
-"""Versioned continuation with quota-aware sleeps and bounded infrastructure retries."""
+"""Versioned continuation with quota-aware sleeps and bounded infrastructure retries.
+
+只续跑已经建立的旧批次（concise-v2-20261003），按该批次冻结的协议继续：提示词、研究配置、
+评分方式和复用的参考结果都取自批次记录，不在这里写死。它不能新建批次——旧协议沿用 JEV 开启、
+GPT-5.5 抽取评分和旧参考答案，与 2026-10-06 选定的产品提示词（原提示词 + Claude 修改）及现行
+评分口径不一致。新的全量评测需另建使用选定提示词的入口。
+"""
 from __future__ import annotations
 
 import argparse
@@ -61,6 +67,20 @@ class KeepAwake:
         self.stop()
 
 
+def frozen_profile(batch):
+    """已建批次冻结的提示词；没有批次记录时拒绝运行，不用旧协议新开批次。"""
+    path = batch / 'manifest.json'
+    if not path.exists():
+        raise SystemExit(f'批次 {batch.name} 不存在。resume.py 只续跑已建立的旧批次（concise-v2-20261003），'
+                         '不能新建批次：旧协议沿用 JEV 开启、GPT-5.5 抽取评分和旧参考答案，'
+                         '与选定的产品提示词（原提示词 + Claude 修改）及现行评分口径不一致。'
+                         '新的全量评测请另建使用选定提示词的入口。')
+    profile = read(path)['protocol']['config'].get('prompt_profile')
+    if not profile:
+        raise SystemExit(f'批次 {batch.name} 没有记录续跑提示词，不能用 resume.py 续跑。')
+    return profile
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--batch', default='concise-v2-20261003')
@@ -83,16 +103,16 @@ def main():
     if fingerprint(notebook) != NOTEBOOK_SHA256:
         raise ValueError('Official notebook checksum mismatch')
     templates = extract_prompt(notebook)
-    print(json.dumps({'questions': len(rows), 'profile': 'concise_qa_v2', 'judge': identity,
+    batch = HERE / 'runs' / args.batch
+    profile = frozen_profile(batch)
+    print(json.dumps({'questions': len(rows), 'profile': profile, 'judge': identity,
                       'workers': args.workers, 'judge_workers': args.judge_workers,
                       'run_live': args.run_live}), flush=True)
     if not args.run_live:
         return
-    batch = HERE / 'runs' / args.batch
-    batch.mkdir(parents=True, exist_ok=True)
     with batch_lock(batch), KeepAwake() as awake:
         protocol = prepare_batch(batch, HERE / 'runs' / args.reference_batch, rows, identity,
-                                 allow_partial=True, prompt_profile='concise_qa_v2')
+                                 allow_partial=True, prompt_profile=profile)
         policy = {'quota_threshold_percent': THRESHOLDS, 'max_opencode_calls': MAX_CALLS,
                   'account_billing_settings_changed': False,
                   'billing_hard_cap': False, 'automatic_recharge_authorized': False,

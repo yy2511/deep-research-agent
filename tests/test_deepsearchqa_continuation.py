@@ -181,3 +181,25 @@ def test_identical_normalized_grades_are_imported_including_zero(mods, tmp_path,
     runner.atomic_json(batch / '1/normalized.json', {**normalized, 'answer': 'Edited after scoring'})
     with pytest.raises(ValueError, match='Normalized answer changed'):
         runner.run_queue(batch, protocol, [question], {}, identity, workers=1, judge_workers=1)
+
+
+def test_resume_reads_the_frozen_profile_and_refuses_new_batches(mods, tmp_path, monkeypatch):
+    """resume.py 只续跑已建批次：提示词取自批次记录，新批次名直接拒绝且不创建目录。"""
+    _, _, resume, _ = mods
+    batch = tmp_path / 'old-batch'
+    batch.mkdir()
+    (batch / 'manifest.json').write_text(json.dumps({'protocol': {'config': {'prompt_profile': 'concise_qa_v2'}}}))
+    assert resume.frozen_profile(batch) == 'concise_qa_v2'
+    (batch / 'manifest.json').write_text(json.dumps({'protocol': {'config': {}}}))
+    with pytest.raises(SystemExit, match='没有记录续跑提示词'):
+        resume.frozen_profile(batch)
+    monkeypatch.setattr(resume, 'HERE', tmp_path)
+    monkeypatch.setattr(resume, 'load_questions', lambda: [])
+    monkeypatch.setattr(resume, 'fingerprint', lambda _: resume.NOTEBOOK_SHA256)
+    monkeypatch.setattr(resume, 'extract_prompt', lambda _: {})
+    (tmp_path / '.official').mkdir()
+    (tmp_path / '.official/starter.ipynb').write_text('{}')
+    monkeypatch.setattr('sys.argv', ['resume.py', '--batch', 'product-full-new', '--run-live'])
+    with pytest.raises(SystemExit, match='不能新建批次'):
+        resume.main()
+    assert not (tmp_path / 'runs' / 'product-full-new').exists()
