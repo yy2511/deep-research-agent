@@ -44,6 +44,7 @@ from dra.research_brief import build_research_brief, render_brief_context
 from dra.execution import ExecutionConfig, ExecutionError
 from dra.evidence_judge import JudgeConfig
 from dra.vision import VisionConfig
+from dra.browser import BrowserConfig
 from dra.models import RetrievedDoc
 from dra.paths import RUNS_DIR
 from dra.tools import UrlFetchError
@@ -173,13 +174,14 @@ def eval_config(model: str = MODEL, provider: str = PROVIDER, *, subagents: bool
     settings = settings.model_copy(update={"subagent": settings.subagent.model_copy(update=node),
                                            "evidence_judge": JudgeConfig(enabled=False)})
     config = runtime_config.to_simple_config(
-        settings, execution=ExecutionConfig(enabled=False), vision=VisionConfig(enabled=False), wall_timeout_s=WALL_TIMEOUT_S,
+        settings, execution=ExecutionConfig(enabled=False), vision=VisionConfig(enabled=False),
+        browser=BrowserConfig(enabled=False), wall_timeout_s=WALL_TIMEOUT_S,
         search_snippet_chars=SNIPPET_CHARS, delegation_enabled=subagents,
         **({} if condense else {"condense_over_chars": None}), **overrides)
     if adapter_overrides:
         config = config.model_copy(update={"adapter": config.adapter.model_copy(update=adapter_overrides)})
-    if config.mcp_servers or config.source_mode != "web" or config.execution.enabled:
-        raise SystemExit("评测配置不对：必须不接外部资料服务、不用资料库、不开代码执行")
+    if config.mcp_servers or config.source_mode != "web" or config.execution.enabled or config.browser.enabled:
+        raise SystemExit("评测配置不对：必须不接外部资料服务、不用资料库、不开代码执行或浏览器")
     return config
 
 
@@ -202,7 +204,8 @@ def run_one(question: dict, out: Path, *, corpus: Corpus | None = None, model_ca
     """plan＝(规划模型, 服务商) 时先生成计划再研究；plan_call 只用于离线测试替换规划调用。"""
     corpus = corpus or Corpus()
     config = config or eval_config()
-    config = config.model_copy(update={'vision': config.vision.model_copy(update={'enabled': False})})
+    config = config.model_copy(update={'vision': config.vision.model_copy(update={'enabled': False}),
+                                      'browser': BrowserConfig(enabled=False)})
     block = FetchBlock()
     run_id = f"bcp-{question['query_id']}-{datetime.now():%Y%m%d-%H%M%S}"
     query = QUERY_TEMPLATE.format(Question=question["query"])

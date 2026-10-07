@@ -59,15 +59,15 @@ PY'''})
     assert actual == {'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest(), 'readonly': True}
 
 
-def test_no_output_timeout_stops_all_processes(session):
+def test_no_output_timeout_stops_command_group_and_keeps_session(session):
     s=session; container=s.container
     started=time.monotonic()
     with pytest.raises(ExecutionError,match='command_timeout'):
-        s.tool('bash',{'command':'sleep 100 & wait','timeout_s':.4})
+        s.tool('bash',{'command':'sleep 100 & echo $! >/workspace/work/child.pid; wait','timeout_s':.4})
     assert time.monotonic()-started<5
-    assert s.state=='closed'
-    import docker
-    with pytest.raises(docker.errors.NotFound):container.reload()
+    assert s.state=='ready' and s.container is container
+    r=s.tool('bash',{'command':'test ! -e /proc/$(cat /workspace/work/child.pid)/stat && echo resumed'})
+    assert r['ok'] and 'resumed' in r['stdout']
 
 
 def test_cancel_stops_silent_command(session):
@@ -77,7 +77,9 @@ def test_cancel_stops_silent_command(session):
         with pytest.raises(ExecutionError,match='cancelled'):
             session.tool('bash',{'command':'sleep 100','timeout_s':10})
     finally:timer.cancel()
-    assert session.state=='closed'
+    assert session.state=='ready'
+    flag.clear()
+    assert session.tool('bash',{'command':'echo resumed'})['ok']
 
 
 def test_output_and_tmpfs_are_bounded(session):
@@ -94,13 +96,14 @@ def test_process_limit_stops_spawning_without_killing_controller(session):
     assert r['ok'] and 'pids_limited' in r['stdout'],r
 
 
-def test_oom_invalidates_workspace(tmp_path):
+def test_oom_command_keeps_healthy_controller(tmp_path):
     s=ExecutionSession(tmp_path/'oom','oom',ExecutionConfig(enabled=True,memory_mb=128))
     try:
         s.start()
         with pytest.raises(ExecutionError):
             s.tool('bash',{'command':'python -c "x=bytearray(256*1024*1024)"','timeout_s':10})
-        assert s.state=='closed'
+        assert s.state=='ready'
+        assert s.tool('bash',{'command':'echo resumed'})['ok']
     finally:s.close()
 
 

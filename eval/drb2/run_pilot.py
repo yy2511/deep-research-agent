@@ -28,6 +28,7 @@ from dra import research, runtime_config, simple_research, subagent, file_source
 from dra.execution import ExecutionConfig, ExecutionError
 from dra.evidence_judge import JudgeConfig
 from dra.vision import VisionConfig
+from dra.browser import BrowserConfig
 from dra.paths import RUNS_DIR
 from dra.site_filter import normalize_blocked_sites, provider_exclude_domains
 from dra.tools import UrlFetchError
@@ -109,7 +110,8 @@ def report_for_judge(result: simple_research.SimpleResult) -> str:
 def run_one(task: dict, out: Path) -> dict:
     sites, skipped = blocked_sites_for(task)
     config = runtime_config.to_simple_config(runtime_config.current(), blocked_sites=sites,
-        execution=ExecutionConfig(enabled=False), vision=VisionConfig(enabled=False), evidence_judge=JudgeConfig(enabled=False))
+        execution=ExecutionConfig(enabled=False), vision=VisionConfig(enabled=False),
+        browser=BrowserConfig(enabled=False), evidence_judge=JudgeConfig(enabled=False))
     guard = TitleGuard(task["content"]["blocked"].get("title", ""))
     run_id = f"drb2-idx{task['idx']}-{datetime.now():%Y%m%d-%H%M%S}"
     original_fetch = simple_research.fetch_url_content

@@ -1,8 +1,16 @@
 import { expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { initialView, reduce } from './reducer';
-import { ConversationWorkspace, FailedToolCalls, ProcessList, UsageOverview } from './components/ConversationWorkspace';
+import { ConversationWorkspace, EvidenceDetail, FailedToolCalls, ProcessList, UsageOverview } from './components/ConversationWorkspace';
 import { processRows } from './conversationModel';
+
+it('浏览器证据明确显示页面快照身份', () => {
+  const html=renderToStaticMarkup(<EvidenceDetail card={{card_id:'c1',claim:'降雨量',
+    quote:'降雨量 42 mm',source_ref:'s1',source_kind:'browser_snapshot'}} sources={[]}
+    runId='browser' onSource={()=>{}} onOrigin={()=>{}} view={initialView()}/>);
+  expect(html).toContain('浏览器页面快照</label>');
+  expect(html).not.toContain('>原文</label>');
+});
 
 it('正式答案使用独立正文，不把下载报告封装标题与状态段再次显示', () => {
   const view=initialView();

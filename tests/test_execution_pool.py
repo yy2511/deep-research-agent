@@ -181,7 +181,7 @@ def test_warm_container_gets_a_new_lease_beyond_first_run_deadline(tmp_path):
 
 
 @pytest.mark.docker
-def test_cancelled_pooled_command_releases_exclusivity_and_keeps_data(tmp_path):
+def test_cancelled_pooled_command_keeps_lease_until_run_release(tmp_path):
     import threading
     flag=threading.Event()
     pool=pool_type()(tmp_path,ExecutionConfig(enabled=True),start_checker=False)
@@ -194,6 +194,10 @@ def test_cancelled_pooled_command_releases_exclusivity_and_keeps_data(tmp_path):
             with pytest.raises(ExecutionError,match='cancelled'):
                 one.tool('bash',{'command':'sleep 100','timeout_s':10})
         finally: timer.cancel()
-        assert not pool.active and not pool.warm
+        assert one.state=='ready' and pool.active[one.workspace.key] is one
+        flag.clear()
+        assert one.tool('bash',{'command':'echo resumed'})['ok']
+        one.release()
+        assert not pool.active and pool.warm
         assert two.tool('read_file',{'path':'/workspace/work/data'})['content']=='saved'
     finally: pool.shutdown()

@@ -18,6 +18,7 @@ from pydantic import BaseModel,ConfigDict,Field
 from dra import llm
 from dra.durable import atomic_json
 from dra.execution import ExecutionError,workspace_path
+from dra.execution_workspace import ConversationWorkspace
 
 OutputFormat=str
 MIMES={'.html':('html','text/html'),'.pdf':('pdf','application/pdf'),'.png':('png','image/png'),
@@ -91,12 +92,15 @@ def prepare_finish(ctx,args,requirements=None):
     draft=args.get('draft','');draft_file=args.get('draft_file');items=args.get('artifacts',[])
     if not draft_file and items==[]:return draft
     if draft_file and 'draft' in args:raise ExecutionError('invalid_arguments','draft 与 draft_file 只能给一个')
-    available=ctx.tool_role=='lead' and ctx.config.execution.enabled and ctx.execution is not None
+    workspace=ctx.execution or ConversationWorkspace(ctx.store.dir,ctx.store.run_id,ctx.config.execution,
+        ctx.history.data['conversation_id'] if ctx.history else None)
+    available=(ctx.tool_role=='lead' and (ctx.config.execution.enabled or ctx.config.browser.enabled)
+               and (ctx.execution is not None or workspace.path.is_dir()))
     if draft_file:
         if not available:raise ExecutionError('workspace_unavailable')
         workspace_path(draft_file,write=True,direct=True)
         if not draft_file.startswith('/workspace/work/') or not draft_file.endswith('.md'):raise ExecutionError('path_denied')
-        files=ctx.execution.snapshot({draft_file:None})
+        files=workspace.snapshot({draft_file:None})
         try:draft=files[draft_file].decode('utf-8')
         except UnicodeError as exc:raise ExecutionError('invalid_draft','正文须为 UTF-8') from exc
     if not isinstance(items,list):
@@ -117,7 +121,7 @@ def prepare_finish(ctx,args,requirements=None):
             if not set(request.requirement_ids)<=allowed:raise ExecutionError('unknown_requirement')
             paths.add(request.path)
             filename=PurePosixPath(request.path).name
-            data=ctx.execution.snapshot({request.path:None})[request.path]
+            data=workspace.snapshot({request.path:None})[request.path]
             fmt,mime=validate_file(filename,data)
             pending.append({**request.model_dump(),'filename':filename,'format':fmt,'mime':mime,'data':data})
         except (ExecutionError,ValueError) as exc:
@@ -171,7 +175,8 @@ def publish(ctx,draft):
                 except (ValueError,TypeError,KeyError):continue
                 if ident:execution_ids.append(ident)
             provenance=dict(draft_sha256=hashlib.sha256(draft.encode()).hexdigest(),
-                image_id=ctx.execution.image_id,inputs=dict(ctx.execution.inputs),
+                image_id=ctx.execution.image_id if ctx.execution else None,
+                inputs=dict(ctx.execution.inputs) if ctx.execution else {},
                 source_materials=ctx.execution_materials,execution_files=list(ctx.execution_files.values()),
                 execution_ids=execution_ids,tool_call_id=ctx.active_tool_call_id)
             atomic_json(candidate/'manifest.json',{'artifacts':records,'provenance':provenance})

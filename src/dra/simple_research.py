@@ -2147,6 +2147,9 @@ class ToolContext:
             if source and source.mcp:
                 payload["mcp"] = source.mcp
                 payload["source_note"] = "这是外部 MCP 工具返回的资料快照；仅证明引文来自该回执，不代表网页全文或事实已核实。"
+                if source.mcp.get('source_kind') == 'browser_snapshot':
+                    payload['source_kind'] = 'browser_snapshot'
+                    payload['source_note'] = '这是浏览器页面快照，包含可访问性结构标记；仅证明引文来自本次页面显示，不是网页原始源码，也不代表事实已核实。'
                 result = json.dumps(payload, ensure_ascii=False)
             if source and source.download:
                 payload["download"] = source.download
@@ -2766,11 +2769,13 @@ class ToolContext:
             if not any(a <= lo and hi <= b for a,b in self.read_exposures.get(target, [])):
                 return failure("请先在当前Agent中read_source该原文再存证")
         snap = reading.snapshot
+        browser_snapshot = bool(snap.mcp and snap.mcp.get('source_kind') == 'browser_snapshot')
         span = EvidenceQuote(quote=quote, submitted_quote=supplied, source_ref=snap.ref,
             source_url=snap.url, source_title=snap.title, published_at=snap.published_at,
-            source_kind="computation" if snap.computation else "observation" if snap.observation else "original",
+            source_kind=("computation" if snap.computation else "observation" if snap.observation else
+                         "browser_snapshot" if browser_snapshot else "original"),
             observation=snap.observation,
-            location=location, deep_link="" if snap.observation else text_fragment_url(snap.url, quote) or "",
+            location=location, deep_link="" if snap.observation or browser_snapshot else text_fragment_url(snap.url, quote) or "",
             summary_ref=ref if ref and ref != snap.ref else None)
         return span, excerpt_no, None, {target}
 
@@ -5295,7 +5300,7 @@ def run_lead_loop(
                     gaps = [*gaps, wrapup_note]
 
     if (not draft and context.artifact_repair_draft and not llm.cancellation_requested()
-            and stop_reason != 'cancelled' and not (context.user_input and context.user_input.pending())):
+            and stop_reason != 'cancelled' and not (context.user_input and context.user_input.pending.is_set())):
         draft, coverage, gaps, context.pending_artifacts, context.pending_artifact_errors, parsed = context.artifact_repair_draft
         plan_note = _finish_plan(context, parsed, role)
         if plan_note:gaps = [*gaps, plan_note]

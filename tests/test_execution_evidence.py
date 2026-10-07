@@ -198,7 +198,7 @@ def test_stderr_log_limit_does_not_mislabel_complete_stdout(tmp_path, monkeypatc
                   for channel, data in ([error, output] if stderr_first else [output, error]))
     stream = SimpleNamespace(setblocking=lambda value: None, recv=lambda size: next(chunks, b''), close=lambda: None)
     session = ex.ExecutionSession(tmp_path, 'test', ExecutionConfig(enabled=True))
-    session.container = SimpleNamespace(id='test')
+    session.container = SimpleNamespace(id='test', exec_run=lambda *a, **kw: SimpleNamespace(exit_code=0))
     session.client = SimpleNamespace(api=SimpleNamespace(
         exec_create=lambda *a, **kw: {'Id': 'test'}, exec_start=lambda *a, **kw: stream,
         exec_inspect=lambda token: {'Running': False, 'ExitCode': 0}))

@@ -162,7 +162,7 @@ function ImageDetails({runId,quote}:{runId:string;quote:EvidenceQuote}) {
 }
 
 function SourceText({runId,card,wide=false}:{runId:string;card:EvidenceQuote;wide?:boolean}) {
- const contentName=card.source_kind==='computation'?'计算输出':card.source_kind==='observation'?'视觉模型输出':'原文';
+ const contentName=card.source_kind==='computation'?'计算输出':card.source_kind==='observation'?'视觉模型输出':card.source_kind==='browser_snapshot'?'浏览器页面快照':'原文';
  const [text,setText]=useState<string|null>(null),[error,setError]=useState('');
  const mark=useRef<HTMLElement>(null);
  useEffect(()=>{if(card.location?.startsWith('image='))return;let alive=true;setText(null);setError('');const abort=new AbortController();
@@ -184,7 +184,7 @@ function SourceText({runId,card,wide=false}:{runId:string;card:EvidenceQuote;wid
 function QuoteDetail({quote,source,runId,index,total,onSource}:{quote:EvidenceQuote;source?:SimpleSource;runId:string;index:number;total:number;onSource:()=>void}) {
  const [expanded,setExpanded]=useState(false);
  const url=quote.deep_link||quote.source_url||source?.url;
- const contentName=source?.computation||quote.source_kind==='computation'?'计算输出':quote.source_kind==='observation'?'视觉观察':'原文';
+ const contentName=source?.computation||quote.source_kind==='computation'?'计算输出':quote.source_kind==='observation'?'视觉观察':quote.source_kind==='browser_snapshot'?'浏览器页面快照':'原文';
  return <section className='cw-quote-section' aria-label={`依据 ${index+1}`}>
   <div className='cw-source-row'>
    <span className='cw-source-badge'>{(hostOf(source?.url??quote.source_url)||source?.document?.file_name||'资料').slice(0,2).toUpperCase()}</span>

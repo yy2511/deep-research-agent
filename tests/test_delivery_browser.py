@@ -197,12 +197,16 @@ def test_finish_can_snapshot_existing_files_during_reserved_wrapup(tmp_path):
     assert not ctx.pending_artifact_errors and ctx.execution.state == 'new'
 
 
-@pytest.mark.parametrize('end', ['budget', 'provider_failure', 'cancelled'])
-def test_interrupted_attachment_repair_preserves_valid_work_unless_cancelled(tmp_path, monkeypatch, end):
+@pytest.mark.parametrize('end,web_input', [(end, inbox) for end in ['budget', 'provider_failure', 'cancelled']
+    for inbox in [False, True]] + [('queued_input', True)])
+def test_interrupted_attachment_repair_preserves_valid_work_unless_cancelled(tmp_path, monkeypatch, end, web_input):
     from dra import execution_tools, llm
     config = sr.SimpleConfig(execution=ExecutionConfig(enabled=True), max_llm_calls=1, reserve_wrapup_calls=0)
-    if end == 'provider_failure':config = config.model_copy(update={'max_llm_calls': 2})
+    if end in ('provider_failure', 'queued_input'):config = config.model_copy(update={'max_llm_calls': 2})
     ctx = context(tmp_path, **config.model_dump())
+    if web_input:
+        from dra.research_input import ResearchInput
+        ctx.user_input = ResearchInput('delivery', lambda event: None)
     ctx.execution = ExecutionSession(tmp_path, 'delivery', ctx.config.execution)
     ctx.execution.workspace.prepare()
     (ctx.execution.workspace.path / 'output/good.csv').write_bytes(b'total\n42\n')
@@ -214,7 +218,9 @@ def test_interrupted_attachment_repair_preserves_valid_work_unless_cancelled(tmp
     def model(messages, **kwargs):
         nonlocal call_count
         call_count += 1
-        if call_count > 1:raise RuntimeError('offline provider failure')
+        if call_count > 1:
+            if end == 'queued_input':ctx.user_input.accept('new-scope', '请改为只查另一件事情。')
+            raise RuntimeError('offline provider failure')
         return _turn(('finish_research', {'draft': '此前已完成的正文。', 'artifacts': [
             {'path': 'good.csv', 'title': '有效结果'}, {'path': 'missing.jpg', 'title': '缺少图片'}]}))
     budget = sr.Budget(ctx.config, None)
@@ -222,7 +228,7 @@ def test_interrupted_attachment_repair_preserves_valid_work_unless_cancelled(tmp
         monkeypatch.setattr(llm, 'cancellation_requested', lambda: ctx.artifact_repair_draft is not None)
     outcome = sr.run_lead_loop(ctx.store, ctx.config, [sr.Requirement(id='goal', text='q')],
         context=ctx, budget=budget, model_call=model)
-    if end == 'cancelled':
+    if end in ('cancelled', 'queued_input'):
         assert not outcome['draft'] and not ctx.accepted_artifacts
     else:
         assert outcome['draft'] == '此前已完成的正文。' and ctx.accepted_artifacts

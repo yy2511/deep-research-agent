@@ -244,6 +244,9 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
                 if isinstance(exc,docker.errors.APIError) and exc.response is not None and 400<=exc.response.status_code<500 and self.container is None:
                     self.container_name=None
                 self.close()
+                if self.error in ('cancelled','command_timeout') and self.state=='closed':
+                    # 初始化还没有接受命令；其它 Agent 可以重新取得实例，预算不重置。
+                    self.state='new'; self._persist()
                 if isinstance(exc,(KeyboardInterrupt,SystemExit)): raise
                 from dra.llm import LLMPersistenceError
                 if isinstance(exc,LLMPersistenceError): raise
@@ -281,9 +284,13 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
 
     def _exec(self, argv, timeout, *, capture=8192, logs=True, stdin=None, user=None):
         from dra.llm import LLMPersistenceError
+        from dra.execution_process import RUN, STOP, CLEANUP
         self._check(); end=min(self.deadline,time.monotonic()+timeout)
         self._last_quota_check=time.monotonic()
         execution_id='exec_'+uuid4().hex; started=time.monotonic()
+        control_path='/tmp/dra-'+execution_id
+        if logs:
+            argv=['python','-I','-c',RUN,control_path,*argv]
         token=self.client.api.exec_create(self.container.id,argv,user=user or self.workspace.worker,workdir='/',tty=False,stdin=stdin is not None)['Id']
         stream=None; handles={}; saved=0; outputs={1:bytearray(),2:bytearray()}; total=0
         stdout_total=0; stdout_saved=0
@@ -338,13 +345,30 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
             code=info['ExitCode']
             if code==137:
                 raise ExecutionError('process_killed', '进程被强制终止（退出 137，可能达到内存限制）')
+            if logs:
+                cleaned=self.container.exec_run(['python','-I','-c',CLEANUP,control_path],
+                    user=user or self.workspace.worker,workdir='/')
+                if cleaned.exit_code!=0:raise ExecutionError('command_cleanup_failed')
             return {'ok':code==0,'error_code':None if code==0 else 'process_exit','exit_code':code,
                     'stdout':outputs[1].decode('utf-8','replace'),'stderr':outputs[2].decode('utf-8','replace'),
                     'truncated':total>sum(map(len,outputs.values())), 'log_truncated':logs and total>saved,
                     'stdout_log_truncated':logs and stdout_total>stdout_saved,
                     'elapsed_ms':round(1000*(time.monotonic()-started)),'execution_id':execution_id,'workspace_available':True}
         except BaseException as exc:
-            self.error=getattr(exc,'code','execution_uncertain'); self.close()
+            self.error=getattr(exc,'code','execution_uncertain')
+            if logs and isinstance(exc,ExecutionError) and exc.code in ('cancelled','command_timeout','process_killed'):
+                # 各 Agent 的命令串行使用同一实例；只停止当前命令组，不销毁共享环境。
+                # 控制调用不再次检查已触发的取消信号，也不消耗新的研究命令额度。
+                try:
+                    stopped=self.container.exec_run(['python','-I','-c',STOP,control_path],
+                        user=user or self.workspace.worker,workdir='/')
+                    if stopped.exit_code!=0:raise ExecutionError('command_cancel_failed')
+                except Exception:
+                    self.close()
+                    raise
+                self._persist()
+            else:
+                self.close()
             from dra.llm import LLMPersistenceError
             if isinstance(exc,(LLMPersistenceError,KeyboardInterrupt,SystemExit)): raise
             if isinstance(exc,ExecutionError): raise

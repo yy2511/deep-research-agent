@@ -20,6 +20,7 @@ from dra.durable import atomic_json
 from dra.execution import ExecutionConfig, ExecutionError
 from dra.evidence_judge import JudgeConfig
 from dra.vision import VisionConfig
+from dra.browser import BrowserConfig
 from dra.paths import RUNS_DIR
 from dra.site_filter import provider_exclude_domains
 from dra.tools import UrlFetchError
@@ -55,6 +56,7 @@ def research_config(settings, seconds):
     return runtime_config.to_simple_config(
         settings, wall_timeout_s=seconds, execution=ExecutionConfig(enabled=False), vision=VisionConfig(enabled=False),
         evidence_judge=JudgeConfig(enabled=False),
+        browser=BrowserConfig(enabled=False),
         blocked_sites=BLOCKED_SITES, source_mode="web", mcp_servers=[])
 
 
@@ -103,7 +105,8 @@ def delivered_answer(result):
 def run_one(question, out, config, *, run_fn=None):
     """question 只含 id/problem/category，标准答案与答案类型不进入研究进程。"""
     run_fn = run_fn or research.run_minimal_research
-    config = config.model_copy(update={'vision': config.vision.model_copy(update={'enabled': False})})
+    config = config.model_copy(update={'vision': config.vision.model_copy(update={'enabled': False}),
+                                      'browser': BrowserConfig(enabled=False)})
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     run_id = f"dsqa-{question['id']}-{datetime.now():%Y%m%d-%H%M%S-%f}"

@@ -34,6 +34,7 @@ def test_new_research_config_disables_jev_even_if_web_enabled(modules):
         subagent={'provider': 'fixture', 'model': 'fixture'}, evidence_judge={'enabled': True})
     config = modules[1].research_config(settings, 1200)
     assert not config.evidence_judge.enabled
+    assert not config.browser.enabled and settings.browser.enabled
     assert settings.evidence_judge.enabled  # evaluator must not rewrite Web settings
     assert config.wall_timeout_s == 1200
 
@@ -133,6 +134,7 @@ def test_runner_closes_new_download_route_and_keeps_vision_off(modules, monkeypa
     def research(query, **kwargs):
         config = kwargs['config']
         seen.append(config.vision.enabled)
+        assert not config.browser.enabled
         ctx = ToolContext(RunStore(tmp_path / 'isolated', run_id='guard', query=query), config)
         receipt, ok = ctx.execute('read_source', {'url': 'https://example.org/chart.png', 'original': True})
         assert not ok and '原件下载未启用' in receipt
@@ -141,7 +143,7 @@ def test_runner_closes_new_download_route_and_keeps_vision_off(modules, monkeypa
             stop_reason='finished', cards=[], sources=[], calls=[], usage={}, warnings=[])
     monkeypatch.setattr(runner.simple_research, 'render_markdown', lambda *a: '')
     result = runner.run_one({'id': 1, 'problem': 'offline question'}, tmp_path / 'out',
-        SimpleConfig(vision=VisionConfig(enabled=True)), run_fn=research)
+        SimpleConfig(vision=VisionConfig(enabled=True), browser={'enabled': True}), run_fn=research)
     assert seen == [False]
     assert result['blocked_original_downloads'] == ['https://example.org/chart.png']
     assert file_sources.fetch_original is original
