@@ -56,6 +56,10 @@ class ModelOverride(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
     model: str = Field(min_length=1, max_length=300)
     context_window: int | None = Field(default=None, gt=0, le=100_000_000)
+    max_input_tokens: int | None = Field(default=None, gt=0)
+    max_output_tokens: int | None = Field(default=None, gt=0)
+    image_input: bool | None = None
+    image_transport: bool | None = None
     reasoning_efforts: list[str] | None = Field(default=None, max_length=16)
 
     @field_validator('reasoning_efforts')
@@ -160,8 +164,9 @@ def model_metadata(row):
     top=row.get('top_provider') if isinstance(row.get('top_provider'),dict) else {}
     context=next((v for v in map(_positive,[row.get('context_length'),row.get('context_window'),
         row.get('max_context_length'),limit.get('context'),top.get('context_length')]) if v),None)
-    output=next((v for v in map(_positive,[row.get('max_output_tokens'),limit.get('output'),
+    output=next((v for v in map(_positive,[row.get('max_output_tokens'),row.get('max_completion_tokens'),limit.get('output'),
         top.get('max_completion_tokens')]) if v),None)
+    input_limit=next((v for v in map(_positive,[row.get('max_input_tokens'),row.get('max_prompt_tokens'),limit.get('input')]) if v),None)
     efforts=row.get('reasoning_efforts',row.get('supported_reasoning_efforts'))
     options=row.get('reasoning_options')
     if efforts is None and isinstance(options,list):
@@ -172,7 +177,15 @@ def model_metadata(row):
         efforts=None
     reasoning=row.get('reasoning') if type(row.get('reasoning')) is bool else None
     if reasoning is None and efforts:reasoning=True
-    return {'context_window':context,'max_output_tokens':output,'reasoning':reasoning,
+    modalities = row.get('input_modalities', (row.get('modalities') or {}).get('input') if isinstance(row.get('modalities'), dict) else None)
+    architecture = row.get('architecture') or {}
+    if modalities is None and isinstance(architecture, dict):
+        modalities = architecture.get('input_modalities')
+    image_input = row.get('image_input', row.get('supports_vision'))
+    if type(image_input) is not bool:
+        image_input = 'image' in modalities if isinstance(modalities, list) else None
+    image_transport = row.get('image_transport') if type(row.get('image_transport')) is bool else None
+    return {'image_input':image_input,'image_transport':image_transport,'context_window':context,'max_input_tokens':input_limit,'max_output_tokens':output,'reasoning':reasoning,
             'reasoning_efforts':list(dict.fromkeys(efforts)) if efforts is not None else None}
 
 
@@ -238,8 +251,8 @@ def status(provider):
         candidate=catalog.get('models',{}).get(mid,{})
         public=candidate if catalog.get('normalized') else model_metadata(candidate)
         meta={'id':mid,**model_metadata({}),'sources':{}}
-        for source,fields in (('catalog',public),('api',saved.get('models',{}).get(mid,{})),('manual',overrides.get(mid,{}))):
-            for k in ('context_window','max_output_tokens','reasoning','reasoning_efforts'):
+        for source,fields in (('catalog',public),('official', _official_images(base_url, mid)),('api',saved.get('models',{}).get(mid,{})),('manual',overrides.get(mid,{}))):
+            for k in ('context_window','max_input_tokens','max_output_tokens','reasoning','reasoning_efforts','image_input','image_transport'):
                 if fields.get(k) is not None:
                     meta[k]=fields[k];meta['sources'][k]=source
         details.append(meta)
@@ -253,6 +266,47 @@ def status(provider):
 def list_status():
     from dra import llm
     return [status(p) for p in [*llm._PROVIDERS,*custom_connections()]]
+
+
+def _official_images(base_url, model):
+    # https://api-docs.deepseek.com/guides/vision/；只适用于实际官方端点。
+    return ({'image_input': True, 'image_transport': True}
+            if urlsplit(base_url or '').hostname == 'api.deepseek.com'
+            and model in ('deepseek-flash', 'deepseek-v4-flash-vision-exp') else {})
+
+
+def capacity_snapshot(provider, model):
+    """Read cached route declarations only. A public catalog is not relay evidence.
+
+    Explicit manual values can fill missing fields or lower a route limit; they
+    cannot raise a smaller limit returned by that same endpoint. No network calls.
+    """
+    with _LOCK:
+        data = _load()
+        discovery = data['discovery'].get(provider, {})
+        api = discovery.get('models', {}).get(model, {})
+        manual = data['overrides'].get(provider, {}).get(model, {})
+        connection = data['connections'].get(provider, {})
+    result = {'provider': provider, 'model': model, 'checked_at': discovery.get('checked_at'),
+              'protocol': 'chat_completions', 'reasoning_format': connection.get('reasoning_format', 'auto'),
+              'sources': {}, 'declarations': {}}
+    from dra import llm
+    base_url = connection.get('base_url') or (llm._resolve_base_url(provider) if provider in llm._PROVIDERS else '')
+    # 官方接口的明确能力不推广到同名中转模型；手动禁用和实际 API 声明优先。
+    # https://api-docs.deepseek.com/guides/vision/
+    official = _official_images(base_url, model)
+    for field in ('image_input', 'image_transport'):
+        values = {source: row[field] for source, row in (('official', official), ('api', api), ('manual', manual)) if type(row.get(field)) is bool}
+        result[field] = next((row[field] for row in (manual, api, official) if type(row.get(field)) is bool), None)
+        result['declarations'][field] = values
+        result['sources'][field] = list(values)
+    for field in ('context_window', 'max_input_tokens', 'max_output_tokens'):
+        values = {source: row[field] for source, row in (('api', api), ('manual', manual))
+                  if _positive(row.get(field)) is not None}
+        result['declarations'][field] = values
+        result[field] = min(values.values()) if values else None
+        result['sources'][field] = [s for s, v in values.items() if v == result[field]]
+    return result
 
 
 def safe_error(exc, *, operation: Literal['models','chat']='models'):

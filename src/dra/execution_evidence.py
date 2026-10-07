@@ -24,7 +24,7 @@ def register_result(ctx, args: dict, payload: dict, declared: list) -> None:
             raw = visible
         inputs = []
         for item in ctx.execution_materials:
-            source = ctx.store.source(item.get('source_ref', ''))
+            source = ctx.store.original_source(item.get('source_ref', ''))
             if source is not None:
                 inputs.append({**item, 'run_id': ctx.store.run_id, 'title': source.title,
                                'url': source.url, 'download': source.download,
@@ -34,6 +34,10 @@ def register_result(ctx, args: dict, payload: dict, declared: list) -> None:
             'tool_call_id': ctx.active_tool_call_id, 'command': args['command'],
             'cwd': args.get('cwd', '/workspace/work'), 'exit_code': payload['exit_code'],
             'source_mode': ctx.config.source_mode,
+            'network_mode': ctx.execution.config.network_mode if hasattr(ctx.execution, 'config') else ctx.config.execution.network_mode,
+            'image': ctx.config.execution.image,
+            'image_id': getattr(ctx.execution, 'image_id', None),
+            'dependency_manifest': '/opt/dra-tools/python-packages.txt',
             'library_version_ids': ctx.config.library_selection.get('version_ids', []),
             'declared_source_refs': args.get('source_refs', []), 'inputs': inputs,
             'stdout_truncated': output_truncated,

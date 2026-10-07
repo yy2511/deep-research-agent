@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import mimetypes
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -16,14 +17,15 @@ import xml.etree.ElementTree as ET
 from pydantic import BaseModel,ConfigDict,Field
 from dra import llm
 from dra.durable import atomic_json
-from dra.execution import ExecutionError,MiB,workspace_path
+from dra.execution import ExecutionError,workspace_path
 
-OutputFormat=Literal['html','pdf','mindmap','png','svg','csv','json','markdown','text','code']
+OutputFormat=str
 MIMES={'.html':('html','text/html'),'.pdf':('pdf','application/pdf'),'.png':('png','image/png'),
+       '.jpg':('jpeg','image/jpeg'),'.jpeg':('jpeg','image/jpeg'),'.webp':('webp','image/webp'),'.gif':('gif','image/gif'),
        '.svg':('svg','image/svg+xml'),'.csv':('csv','text/csv'),'.json':('json','application/json'),
        '.md':('markdown','text/markdown'),'.txt':('text','text/plain'),
        **{e:('code','text/plain') for e in ('.py','.js','.ts','.sh','.sql','.r','.css')}}
-_QUOTA_LOCK=threading.Lock()
+_PUBLISH_LOCK=threading.Lock()
 
 
 class ArtifactRequest(BaseModel):
@@ -35,13 +37,14 @@ class ArtifactRequest(BaseModel):
 
 
 def validate_file(filename,data):
-    """检查文件格式和完整性；个人 demo 的 HTML/SVG 内容原样交付。"""
+    """已知预览格式检查完整性，其他文件原样下载，不用扩展名白名单挡交付。"""
     suffix=PurePosixPath(filename).suffix.lower()
-    if suffix not in MIMES or not data or len(data)>20*MiB:raise ExecutionError('invalid_artifact','类型或大小不支持')
+    if suffix not in MIMES:
+        return suffix.lstrip('.') or 'file', mimetypes.guess_type(filename)[0] or 'application/octet-stream'
     fmt,mime=MIMES[suffix]
     try:
         if fmt=='pdf':
-            # Web 进程不解析/解压模型生成的 PDF 对象；这里只做有界封装检查，浏览器只提供下载。
+            # 不在 Web 进程展开 PDF 对象；浏览器负责预览。
             end=re.search(rb'startxref\s+(\d+)\s+%%EOF\s*$',data[-4096:])
             if not re.match(rb'%PDF-(1\.[0-7]|2\.0)\b',data[:16]) or not end:raise ValueError('PDF 文件头/尾无效')
             offset=int(end[1]);head=data[offset:offset+80]
@@ -49,7 +52,12 @@ def validate_file(filename,data):
         elif fmt=='png':
             if data[:8]!=b'\x89PNG\r\n\x1a\n' or data[12:16]!=b'IHDR' or b'IEND' not in data[-16:]:raise ValueError('不是完整 PNG')
             w,h=struct.unpack('>II',data[16:24])
-            if not 0<w*h<=40_000_000:raise ValueError('图片尺寸超限')
+            if not w or not h:raise ValueError('图片尺寸无效')
+        elif fmt in ('jpeg','webp','gif'):
+            import io
+            from PIL import Image
+            with Image.open(io.BytesIO(data)) as image:
+                image.verify()
         else:
             text=data.decode('utf-8')
             if '\x00' in text:raise ValueError('文本含 NUL')
@@ -60,6 +68,20 @@ def validate_file(filename,data):
     except ExecutionError:raise
     except Exception as exc:raise ExecutionError('invalid_artifact',str(exc)[:250]) from exc
     return fmt,mime
+
+
+def output_path(path):
+    """相对附件路径以 output 为根；仍沿用工作区的路径边界。"""
+    if not isinstance(path, str):raise ExecutionError('path_denied')
+    if not path.startswith('/'):
+        path = '/workspace/' + path if path.startswith('output/') else '/workspace/output/' + path
+    workspace_path(path, write=True)
+    if not path.startswith('/workspace/output/'):raise ExecutionError('path_denied')
+    return path
+
+
+def previewable(record):
+    return (record['format'] in ('html','pdf','svg','png','jpeg','webp','gif','csv','json','markdown','text','code'))
 
 
 def prepare_finish(ctx,args,requirements=None):
@@ -74,40 +96,38 @@ def prepare_finish(ctx,args,requirements=None):
         if not available:raise ExecutionError('workspace_unavailable')
         workspace_path(draft_file,write=True,direct=True)
         if not draft_file.startswith('/workspace/work/') or not draft_file.endswith('.md'):raise ExecutionError('path_denied')
-        files=ctx.execution.snapshot({draft_file:256*1024})
+        files=ctx.execution.snapshot({draft_file:None})
         try:draft=files[draft_file].decode('utf-8')
         except UnicodeError as exc:raise ExecutionError('invalid_draft','正文须为 UTF-8') from exc
-    if not isinstance(items,list) or len(items)>8:
+    if not isinstance(items,list):
         ctx.pending_artifact_errors.append({'error_code':'invalid_arguments',
-            'message':'附件列表未采用：artifacts 必须是数组，且最多提交 8 个附件'})
+            'message':'附件列表未采用：artifacts 必须是数组'})
         items=[]
     if items and not available:
         ctx.pending_artifact_errors.append({'error_code':'workspace_unavailable','message':'工作区不可用，附件未交付'})
         items=[]
     allowed={r.id for r in (requirements if requirements is not None else ctx.effective_requirements)}
-    pending=[];paths=set();total=0
+    pending=[];paths=set()
     for item in items:
         path=item.get('path') if isinstance(item,dict) else None
         try:
             request=ArtifactRequest.model_validate(item)
-            workspace_path(request.path,write=True,direct=True)
-            if not request.path.startswith('/workspace/output/') or request.path in paths:raise ExecutionError('path_denied')
+            request.path=output_path(request.path)
+            if request.path in paths:raise ExecutionError('duplicate_artifact')
             if not set(request.requirement_ids)<=allowed:raise ExecutionError('unknown_requirement')
             paths.add(request.path)
             filename=PurePosixPath(request.path).name
-            if not re.fullmatch(r'[\w. -]{1,150}',filename) or filename.startswith('.'):raise ExecutionError('invalid_filename')
-            data=ctx.execution.snapshot({request.path:20*MiB})[request.path]
+            data=ctx.execution.snapshot({request.path:None})[request.path]
             fmt,mime=validate_file(filename,data)
-            if total+len(data)>50*MiB:raise ExecutionError('quota_exceeded','附件总量超过 50 MiB，本附件未交付')
-            total+=len(data)
             pending.append({**request.model_dump(),'filename':filename,'format':fmt,'mime':mime,'data':data})
         except (ExecutionError,ValueError) as exc:
             if isinstance(exc,ExecutionError) and exc.code in ('cancelled','command_timeout','cancelled_or_deadline'):
                 raise
             error={'message':f'附件未交付：{str(exc)[:500]}','error_code':getattr(exc,'code','invalid_arguments')}
             if isinstance(path,str):error['path']=path
+            if isinstance(item,dict):error['requirement_ids']=item.get('requirement_ids',[])
             ctx.pending_artifact_errors.append(error)
-    if llm.cancellation_requested() or ctx.budget_expired():raise ExecutionError('cancelled_or_deadline')
+    if llm.cancellation_requested() or (ctx.budget and ctx.budget.expired()):raise ExecutionError('cancelled_or_deadline')
     ctx.pending_artifacts=pending
     return draft
 
@@ -118,7 +138,8 @@ def missing_formats(requirements,artifacts):
         items=[a for a in artifacts if req.id in a['requirement_ids']]
         formats={a['format'] for a in items}
         for wanted in req.output_formats:
-            present=wanted in formats
+            normalized={'jpg':'jpeg','md':'markdown','txt':'text'}.get(wanted.lower().lstrip('.'),wanted.lower().lstrip('.'))
+            present=normalized in formats
             if wanted=='mindmap':
                 maps=[a for a in items if a['kind'] in ('mindmap','mindmap_source')]
                 present=any(a['format'] in ('png','svg','pdf') for a in maps) and any(a['format']=='json' for a in maps)
@@ -131,12 +152,7 @@ def publish(ctx,draft):
     if not pending:return []
     records=[]; directory=ctx.store.dir/'artifacts'; candidate=None
     try:
-        with _QUOTA_LOCK:
-            root=ctx.store.dir.parent
-            total=sum(p.stat().st_size for p in root.glob('*/artifacts/**/*') if p.is_file() and not p.is_symlink())
-            requested=sum(len(item['data']) for item in pending)
-            if total+requested>2*1024*MiB or shutil.disk_usage(root).free-requested<1024*MiB:
-                raise ExecutionError('quota_exceeded','附件存储不足；正文仍可交付')
+        with _PUBLISH_LOCK:
             if directory.exists():raise ExecutionError('artifact_conflict')
             candidate=Path(tempfile.mkdtemp(prefix='.artifact-candidate-',dir=ctx.store.dir))
             for item in pending:
@@ -176,13 +192,12 @@ def committed_records(payload):
 
 def read_committed_file(run_dir, record):
     aid=record.get('artifact_id','');name=record.get('filename','')
-    if not re.fullmatch(r'a_[a-f0-9]{32}',aid) or not re.fullmatch(r'[\w. -]{1,150}',name) or name.startswith('.'):
+    if not re.fullmatch(r'a_[a-f0-9]{32}',aid) or not name or name in ('.','..') or '/' in name or '\x00' in name:
         raise ExecutionError('invalid_artifact')
     root=Path(run_dir).resolve();path=root/'artifacts'/aid/name
     if record.get('storage_path')!=f'artifacts/{aid}/{name}' or path.resolve()!=path:
         raise ExecutionError('invalid_artifact')
     try:
-        if path.stat().st_size>20*MiB:raise ExecutionError('invalid_artifact')
         data=path.read_bytes()
     except OSError as exc:raise ExecutionError('artifact_missing') from exc
     if len(data)!=record.get('size') or hashlib.sha256(data).hexdigest()!=record.get('sha256'):

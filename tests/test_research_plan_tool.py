@@ -34,7 +34,7 @@ def _config():
         adapter=SubAgentConfig(model="m", provider="p", reasoning=False),
         max_llm_calls=16,
         max_tool_calls=16,
-        wall_timeout_s=30.0,
+        wall_timeout_s=30.0, wrapup_reserve_s=0,
     )
 
 

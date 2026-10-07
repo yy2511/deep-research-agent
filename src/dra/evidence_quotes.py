@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 MAX_QUOTES = 8
 MAX_QUOTE_CHARS = 24000
-MAX_CONTEXT_CHARS = 6000
-NEARBY_CHARS = 500
+MAX_CONTEXT_CHARS = 12000
+NEARBY_CHARS = 1000
 
 
 class QuoteContext(BaseModel):
@@ -27,6 +27,7 @@ class EvidenceQuote(BaseModel):
     source_url: str = ""
     source_title: str = ""
     source_kind: str = "original"
+    observation: dict | None = None
     published_at: str | None = None
     location: str = ""
     deep_link: str = ""
@@ -83,6 +84,7 @@ def _structure(raw: str, lo: int):
 
 def add_context(quotes: list[EvidenceQuote], raw_sources: dict[str, str]) -> None:
     """原话原封保留，额外上下文同源去重；不同位置始终分块显示。"""
+    quotes = [q for q in quotes if not q.location.startswith("image=")]
     covered: dict[str, list[tuple[int, int]]] = {}
     for q in quotes:
         covered.setdefault(q.source_ref, []).append(chars_of(q.location))

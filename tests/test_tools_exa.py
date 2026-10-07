@@ -91,19 +91,20 @@ def test_exa_search_normal(monkeypatch):
     assert "2024-03-15" in docs[0].published_at
     # 第 2 条无 publishedDate
     assert docs[1].published_at is None
-    assert docs[1].snippet == "Short text"  # 老响应无 highlights 时回退全文头部
+    assert docs[1].snippet == "Short text"  # 老响应无 highlights 时使用返回的 text
     # 第 3 条短日期格式
     assert docs[2].published_at is not None
     assert "2024-01-01" in docs[2].published_at
 
 
-def test_exa_search_requests_bounded_highlights_and_keeps_full_text(monkeypatch):
-    """搜索列表使用 query-related highlights，全文仍留给 fetch_page。"""
+def test_exa_search_keeps_full_highlights_without_requesting_a_character_cap(monkeypatch):
+    """完整保留相关片段及其末尾条件，全文仍留给 fetch_page。"""
+    highlights = ["与查询直接相关的第一段。" * 80, "第二段的关键限定条件。"]
     fake_resp = _fake_exa_response([{
         "title": "T",
         "url": "https://example.com/a",
         "text": "正文开头无关。" + "完整正文" * 300,
-        "highlights": ["与查询直接相关的第一段。", "与查询直接相关的第二段。"],
+        "highlights": highlights,
         "publishedDate": None,
         "score": 1.0,
     }])
@@ -121,14 +122,13 @@ def test_exa_search_requests_bounded_highlights_and_keeps_full_text(monkeypatch)
     assert captured["contents"]["text"] is True
     assert captured["contents"]["highlights"] == {
         "query": "目标查询",
-        "maxCharacters": 600,
     }
-    assert doc.snippet == "与查询直接相关的第一段。\n与查询直接相关的第二段。"
+    assert doc.snippet == "\n".join(highlights)
     assert len(doc.raw_content) > len(doc.snippet)
 
 
-def test_exa_search_malformed_highlights_falls_back_to_bounded_text(monkeypatch):
-    """第三方响应 highlights 形态异常时不能逐字符拼接或撑爆 snippet。"""
+def test_exa_search_malformed_highlights_falls_back_to_full_returned_text(monkeypatch):
+    """第三方响应 highlights 形态异常时不逐字符拼接；沿用 text，不裁剪。"""
     body = "正文" * 500
     fake_resp = _fake_exa_response([{
         "title": "T", "url": "https://example.com/a", "text": body,
@@ -139,7 +139,7 @@ def test_exa_search_malformed_highlights_falls_back_to_bounded_text(monkeypatch)
 
     doc = real_exa("q", top_k=1)[0]
 
-    assert doc.snippet == body[:600]
+    assert doc.snippet == body
 
 
 # ---------------------------------------------------------------------------

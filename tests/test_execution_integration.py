@@ -21,13 +21,15 @@ def test_disabled_execution_is_not_advertised_or_executed(tmp_path):
     assert not script.context.receipts[0]['ok']
 
 
-def test_child_cannot_execute_or_share_workspace(tmp_path):
+def test_child_executes_in_parent_workspace(tmp_path):
+    from test_execution_evidence import LocalSession
     store=sr.open_run(tmp_path,run_id='r',query='q')
     ctx=sr.ToolContext(store,sr.SimpleConfig(execution=ExecutionConfig(enabled=True)))
+    ctx.execution=LocalSession(store)
     child=ctx.fork_for_subagent(ctx.config,budget=sr.Budget(ctx.config,None),delegation_id='sub1',parent_call_id='p')
-    payload,ok=child.execute('bash',{'command':'echo no'})
-    assert not ok and json.loads(payload)['error_code']=='role_denied'
-    assert child.execution is None
+    payload,ok=child.execute('bash',{'command':'echo shared'})
+    assert ok and json.loads(payload)['stdout'].strip()=='shared'
+    assert child.execution is ctx.execution
 
 
 @pytest.mark.docker

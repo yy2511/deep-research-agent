@@ -1,6 +1,42 @@
 import threading
+import json
 import pytest
 from dra.research_delegation import DelegationManager
+
+
+def test_wait_returns_selected_status_without_repeating_delivered_findings(tmp_path):
+    from dra import simple_research as sr
+
+    findings = 'UNIQUE_CHILD_FINDINGS:' + '原文依据' * 1500 + ':END_OF_FINDINGS'
+    manager = DelegationManager(
+        lambda task, cancel: {'findings': findings if task['goal'] == 'first' else 'second result',
+                              'gaps': ['待核实的条件'], 'card_ids': ['c1'], 'summary_available': True},
+        lambda event: None)
+    tasks = manager.submit([('first', ''), ('second', '')], 'dispatch')
+    manager.close(cancel=False)
+
+    ctx = sr.ToolContext(sr.RunStore(tmp_path, run_id='wait-delivery', query='q'), sr.SimpleConfig())
+    ctx.delegation_manager = manager
+    ctx.delegation_messages = []
+    sr._receive_delegation_messages(ctx)
+    history = []
+    for i in range(3):
+        rows = manager.wait([tasks[1]['id']], timeout=0)
+        assert rows == [{'id': tasks[1]['id'], 'status': 'completed', 'accepts_messages': False}]
+        history.append([
+            {'role': 'assistant', 'content': '', 'tool_calls': [{'id': f'wait{i}'}]},
+            {'role': 'tool', 'tool_call_id': f'wait{i}', 'content': json.dumps(rows)}])
+        sr._receive_delegation_messages(ctx)
+        messages = sr._build_messages([], ctx, [], history, seconds_left=None)
+        content = '\n'.join(m.get('content') or '' for m in messages)
+        assert content.count(findings) == 1
+        assert content.count('second result') == 1
+
+    assert manager.drain('parent') == []
+    assert {r['id'] for r in manager.wait(timeout=0)} == {t['id'] for t in tasks}
+    result = manager.inspect(tasks[0]['id'])[0]['result']
+    assert result['findings'] == findings
+    assert result['gaps'] == ['待核实的条件'] and result['card_ids'] == ['c1']
 
 
 def test_background_result_and_messages_without_waiting_for_sibling():
@@ -82,6 +118,7 @@ def test_real_loop_main_continues_fast_result_arrives_and_slow_child_gets_messag
     captured=[]
     lead_turn=0
     sent=False
+    fast_findings = 'FAST_RESULT_READY' + ' supporting detail' * 500 + 'FINAL_QUALIFICATION'
     def observe(event):
         captured.append(event)
         if event.get('type')=='delegation_updated' and event.get('kind')=='message' and event.get('target')=='sub2':
@@ -99,7 +136,7 @@ def test_real_loop_main_continues_fast_result_arrives_and_slow_child_gets_messag
                 assert '新增核对参数' in json.dumps(messages,ensure_ascii=False)
                 return _turn(('finish_research',{'draft':'slow child done','gaps':[]}))
             assert parent_work.wait(3), 'dispatch blocked parent research'
-            return _turn(('finish_research',{'draft':'FAST_RESULT_READY','gaps':[]}))
+            return _turn(('finish_research',{'draft':fast_findings,'gaps':[]}))
         lead_turn+=1
         if lead_turn==1:
             return _turn(('delegate_research',{'tasks':[{'goal':'fast-child','context':''},{'goal':'slow-child','context':''}]}))
@@ -107,6 +144,7 @@ def test_real_loop_main_continues_fast_result_arrives_and_slow_child_gets_messag
             return _turn(('search_sources',{'query':'independent parent work'}))
         text=json.dumps(messages,ensure_ascii=False)
         if 'FAST_RESULT_READY' in text and not sent:
+            assert fast_findings in text
             assert not release_slow.is_set()
             sent=True
             return _turn(('send_research_message',{'target':'sub2','message':'新增核对参数'}))
@@ -118,7 +156,7 @@ def test_real_loop_main_continues_fast_result_arrives_and_slow_child_gets_messag
         return [_doc()]
     try:
         result=sr.run_simple_research('异步验收',sr.requirements_from_query('异步验收'),
-            config=sr.SimpleConfig(max_llm_calls=20,max_tool_calls=12,max_invalid_turns=10,wall_timeout_s=15),
+            config=sr.SimpleConfig(max_llm_calls=20,max_tool_calls=12,max_invalid_turns=10,wall_timeout_s=15, wrapup_reserve_s=0),
             run_dir=tmp_path/'run',model_call=model,search_fn=search)
     finally:
         release_slow.set();events.unsubscribe(handle)
@@ -172,17 +210,19 @@ def test_parent_budget_reserves_wrapup_until_child_is_settled(tmp_path):
     from dra import simple_research as sr, llm
     from test_simple_research import _turn
     entered=threading.Event();release=threading.Event();wrapped=threading.Event()
+    child_findings = 'CHILD_FINAL' + ' supporting detail' * 500 + 'FINAL_QUALIFICATION'
     def model(messages,**kwargs):
         if '你是研究子 Agent' in messages[0]['content']:
             entered.set();assert release.wait(3)
-            return _turn(('finish_research',{'draft':'CHILD_FINAL','gaps':[]}))
+            return _turn(('finish_research',{'draft':child_findings,'gaps':[]}))
         if [s['function']['name'] for s in kwargs['tools']] == ['finish_research']:
-            assert 'CHILD_FINAL' in str(messages)
+            assert child_findings in str(messages)
+            assert str(messages).count('CHILD_FINAL') == 1
             wrapped.set()
             return llm.ToolTurn(content='汇总已落盘的子任务发现。')
         return _turn(('delegate_research',{'tasks':[{'goal':'budget-child','context':''}]}))
     with ThreadPoolExecutor(max_workers=1) as pool:
-        future=pool.submit(sr.run_simple_research,'test',config=sr.SimpleConfig(max_llm_calls=2,reserve_wrapup_calls=1,wall_timeout_s=10),run_dir=tmp_path/'run',model_call=model)
+        future=pool.submit(sr.run_simple_research,'test',config=sr.SimpleConfig(max_llm_calls=2,reserve_wrapup_calls=1,wall_timeout_s=10, wrapup_reserve_s=0),run_dir=tmp_path/'run',model_call=model)
         try:
             assert entered.wait(1)
             assert not wrapped.is_set() and not future.done()
@@ -201,7 +241,7 @@ def test_recursive_dispatch_is_rejected_even_if_model_invents_tool(tmp_path):
     script=GoalScript([_turn(('delegate_research',{'tasks':[{'goal':'child','context':''}]}))],
         {'child':[_turn(('delegate_research',{'tasks':[{'goal':'grandchild','context':''}]})),
                   _turn(('finish_research',{'draft':'done','gaps':[]}))]},finish=('finish_research',{'draft':'done','gaps':[]}))
-    sr.run_simple_research('test',config=sr.SimpleConfig(wall_timeout_s=10),run_dir=tmp_path/'run',model_call=script)
+    sr.run_simple_research('test',config=sr.SimpleConfig(wall_timeout_s=10, wrapup_reserve_s=0),run_dir=tmp_path/'run',model_call=script)
     data=json.loads((tmp_path/'run'/'run.json').read_text())
     tasks={a['payload']['task']['id'] for a in data['actions'] if a['action']=='delegation_event' and 'task' in a['payload']}
     assert tasks=={'sub1'}
@@ -230,7 +270,7 @@ def test_repeated_provider_call_ids_do_not_reuse_task_or_budget_identity(tmp_pat
     script=GoalScript([_turn(('delegate_research',{'tasks':[{'goal':g,'context':''}]})) for g in ('one','two')],
         {g:[_turn(('finish_research',{'draft':g,'gaps':[]}))] for g in ('one','two')},
         finish=('finish_research',{'draft':'done','gaps':[]}))
-    result=sr.run_simple_research('test',config=sr.SimpleConfig(wall_timeout_s=10),run_dir=tmp_path/'run',model_call=script)
+    result=sr.run_simple_research('test',config=sr.SimpleConfig(wall_timeout_s=10, wrapup_reserve_s=0),run_dir=tmp_path/'run',model_call=script)
     data=json.loads((tmp_path/'run'/'run.json').read_text())
     tasks=[a['payload']['task'] for a in data['actions'] if a['action']=='delegation_event' and a['payload']['kind']=='result']
     assert {t['id'] for t in tasks}=={'sub1','sub2'}

@@ -223,7 +223,7 @@ _BOUNDARY_SEQUENCE = [
 _WRAPUP_DRAFT = "sqlite3_rsync 不要求一端为远程；两文件都在本机也能同步 [c1]。"
 
 BASE = sr.SimpleConfig(
-    max_llm_calls=10, max_tool_calls=10, wall_timeout_s=60.0
+    max_llm_calls=10, max_tool_calls=10, wall_timeout_s=60.0, wrapup_reserve_s=0
 )
 
 
@@ -257,7 +257,7 @@ def test_active_finish_is_distinguished_from_budget_wrapup():
 
 def test_tool_budget_exhaustion_still_produces_bounded_wrapup_answer():
     """保留区拒绝精读并记录原因，工具额度耗尽后仍有一次有界收尾。"""
-    config = sr.SimpleConfig(max_llm_calls=10, max_tool_calls=3, wall_timeout_s=60.0)
+    config = sr.SimpleConfig(max_llm_calls=10, max_tool_calls=3, wall_timeout_s=60.0, wrapup_reserve_s=0)
     result, script = _run(
         [
             _turn(("search_sources", {"query": "q1"})),
@@ -297,7 +297,7 @@ def test_tool_budget_exhaustion_still_produces_bounded_wrapup_answer():
 def test_model_budget_exhaustion_reserves_room_for_wrapup():
     """模型额度预算要在耗尽前留出收尾那次调用。"""
     config = sr.SimpleConfig(
-        max_llm_calls=6, max_tool_calls=10, wall_timeout_s=60.0
+        max_llm_calls=6, max_tool_calls=10, wall_timeout_s=60.0, wrapup_reserve_s=0
     )
     result, _ = _run(_TIRE_SEQUENCE, config=config, wrapup_text=_WRAPUP_DRAFT)
     steps = [c.step for c in result.calls]
@@ -336,7 +336,7 @@ def test_no_evidence_answer_is_not_reported_as_answered():
 def test_wrapup_never_auto_assembles_cards_into_a_verified_answer():
     """兜底绝不等于自动拼装：收尾交出的正文仍要过核查与引用门。"""
     config = sr.SimpleConfig(
-        max_llm_calls=10, max_tool_calls=3, wall_timeout_s=60.0, tool_reserve_calls=0
+        max_llm_calls=10, max_tool_calls=3, wall_timeout_s=60.0, wrapup_reserve_s=0, tool_reserve_calls=0
     )
     result, _ = _run(
         _FINISH_SEQUENCE[:3],
@@ -444,7 +444,7 @@ def test_new_config_params_are_bounded_and_rejected_when_out_of_range():
 def test_long_document_target_beyond_display_window_is_saved_and_findable():
     """保存范围与展示窗口分开：6000 字之后的目标串可 find、可引用。"""
     config = sr.SimpleConfig(
-        max_llm_calls=8, max_tool_calls=8, wall_timeout_s=60.0, read_window_chars=2000
+        max_llm_calls=8, max_tool_calls=8, wall_timeout_s=60.0, wrapup_reserve_s=0, read_window_chars=2000
     )
     result, script = _run(_LONG_SEQUENCE, config=config, raw=LONG_RAW, wrapup_text="收尾")
 
@@ -475,7 +475,7 @@ def test_long_document_target_beyond_display_window_is_saved_and_findable():
 
 def test_cross_boundary_find_locates_string_spanning_two_excerpts():
     """跨片段命中可定位：字符串落在 700 字边界上时不再返回 None。"""
-    config = sr.SimpleConfig(max_llm_calls=8, max_tool_calls=8, wall_timeout_s=60.0)
+    config = sr.SimpleConfig(max_llm_calls=8, max_tool_calls=8, wall_timeout_s=60.0, wrapup_reserve_s=0)
     result, script = _run(
         _BOUNDARY_SEQUENCE, config=config, raw=BOUNDARY_RAW, wrapup_text="收尾"
     )
@@ -502,7 +502,7 @@ def test_cross_boundary_find_locates_string_spanning_two_excerpts():
 def test_every_range_path_respects_the_per_call_window(range_arg):
     """range 的每条路径（含无上界）都不得突破单次回执窗口，且授权=展示。"""
     config = sr.SimpleConfig(
-        max_llm_calls=6, max_tool_calls=6, wall_timeout_s=60.0, read_window_chars=2000
+        max_llm_calls=6, max_tool_calls=6, wall_timeout_s=60.0, wrapup_reserve_s=0, read_window_chars=2000
     )
     turns = [
         _turn(("search_sources", {"query": "q"})),
@@ -564,7 +564,7 @@ def test_cursor_beyond_source_returns_empty_tail():
 def test_truncation_is_explicit_when_storage_cap_is_exceeded():
     """超过存储上限才截断，且如实标记；不把截断说成全文。"""
     config = sr.SimpleConfig(
-        max_llm_calls=8, max_tool_calls=8, wall_timeout_s=60.0, storage_max_chars=3000
+        max_llm_calls=8, max_tool_calls=8, wall_timeout_s=60.0, wrapup_reserve_s=0, storage_max_chars=3000
     )
     turns = [
         _turn(("search_sources", {"query": "超限长文"})),

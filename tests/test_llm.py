@@ -517,7 +517,7 @@ def test_trace_full_io_mode_preserves_complete_long_input_and_output():
 
 def test_trace_prefixes_cover_current_roles():
     assert llm_module._TRACE_STEP_PREFIXES == (
-        "condense", "lead_research", "lead_wrapup", "subagent_research",
+        "condense", "vision_observation", "lead_research", "lead_wrapup", "subagent_research",
         "subagent_wrapup", "research_brief",
     )
 

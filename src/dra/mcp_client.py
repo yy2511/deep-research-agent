@@ -159,7 +159,7 @@ async def _exchange(server, *, tool=None, arguments=None):
                 response = await client.call_tool(tool, arguments)
                 payload = response.model_dump(mode="json", by_alias=True, exclude_none=True)
                 _check_secret_echo(payload, headers)
-                if len(json.dumps(payload, ensure_ascii=False)) > MAX_RESULT_CHARS:
+                if _text_result_size(payload) > MAX_RESULT_CHARS:
                     raise MCPError("MCP 返回超过 200000 字符上限，请缩小查询范围；未保存截断结果")
                 if payload.get('resultType', 'complete') != 'complete':
                     raise MCPError("该 MCP 工具需要额外交互或后台任务；第一版仅支持直接返回结果")
@@ -244,8 +244,14 @@ def model_tool_name(server_id: str, tool_name: str) -> str:
     return f"mcp_{server_id}_{slug}_{digest}"
 
 
-def source_parts(payload: dict) -> tuple[list[dict], list[str]]:
-    if len(json.dumps(payload, ensure_ascii=False)) > MAX_RESULT_CHARS:
+def _text_result_size(payload):
+    # 图片字节由原件/视觉链路保存，不把 base64 当作文本回执预算。
+    return len(json.dumps({**payload, 'content': [{k: v for k, v in block.items() if k != 'data'}
+        if block.get('type') == 'image' else block for block in payload.get('content', [])]}, ensure_ascii=False))
+
+
+def source_parts(payload: dict, *, bounded=True) -> tuple[list[dict], list[str]]:
+    if bounded and _text_result_size(payload) > MAX_RESULT_CHARS:
         raise MCPError("MCP 返回超过保存上限")
     parts, warnings = [], []
     for index, block in enumerate(payload.get('content') or []):
@@ -255,7 +261,7 @@ def source_parts(payload: dict) -> tuple[list[dict], list[str]]:
             resource = block['resource']
             parts.append({'text': resource['text'], 'block': index, 'format': 'resource',
                           'uri': resource.get('uri', '')})
-        else:
+        elif block.get('type') != 'image':
             warnings.append(f"第 {index + 1} 个内容块为 {block.get('type', '未知')}，未转换为可引用文本")
     structured = payload.get('structuredContent')
     if structured is not None:
@@ -276,7 +282,7 @@ def source_parts(payload: dict) -> tuple[list[dict], list[str]]:
             parts.append({'text': json.dumps(structured, ensure_ascii=False, indent=2),
                           'block': len(payload.get('content') or []), 'format': 'structured_json'})
     parts = [p for p in parts if p['text'].strip()]
-    if len(parts) > 20:
+    if bounded and len(parts) > 20:
         raise MCPError("MCP 文本块数量超过上限，请缩小请求")
     return parts, warnings
 

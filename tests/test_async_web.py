@@ -24,7 +24,7 @@ def test_background_tree_keeps_web_slot_and_replays_terminal(isolated_web,monkey
         return _turn(('finish_research',{'draft':'主线整合结果','gaps':[]}))
     def search(q):parent_work.set();return [_doc()]
     def boundary(*args,**kwargs):
-        kwargs['config']=kwargs['config'].model_copy(update={'max_llm_calls':10,'wall_timeout_s':15})
+        kwargs['config']=kwargs['config'].model_copy(update={'max_llm_calls':10,'wall_timeout_s':15, "wrapup_reserve_s": 0})
         return original(*args,**kwargs,model_call=model,search_fn=search)
     monkeypatch.setattr(research,'run_minimal_research',boundary)
     with TestClient(web.app) as client:

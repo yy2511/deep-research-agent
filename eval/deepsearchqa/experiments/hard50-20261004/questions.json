@@ -1,0 +1,252 @@
+[
+  {
+    "id": 166,
+    "problem": "Which of the secondary schools that are part of the Blackdown Education Partnership, excluding Cullompton Community College, held a “Requires Improvement” rating as of 20th December 2019? Please list them in alphabetical order.",
+    "problem_category": "Education"
+  },
+  {
+    "id": 821,
+    "problem": "According to Stats NZ data, list all the years between 1997 and 2012 that the Auckland Region, Wellington Region and Gisborne Region all individually had populations of 46,000 or more",
+    "problem_category": "Other"
+  },
+  {
+    "id": 71,
+    "problem": "According to the CDC, which US states had a death rate due to heart disease >191.5, a death rate due to cancer >161.9, and a death rate due to diabetes >33.1 in 2022?",
+    "problem_category": "Health"
+  },
+  {
+    "id": 544,
+    "problem": "I am performing research into best practices for low birth weight births. In 2017, which Canadian provinces had a Proportion of low birth weight births (<2500 grams at birth) above 6.0 but an Infant Mortality rate (per 1000 live births) below 4.5? Source all data from Statistics Canada Table: 13-10-0368-01 and Table: 13-10-0404-01. Ensure that all values are for both sexes.",
+    "problem_category": "Health"
+  },
+  {
+    "id": 110,
+    "problem": "List every Batman game before 2024 that includes The Condiment King, but does not include him as a playable character and the game cannot have a Batman voiced by Troy Baker.",
+    "problem_category": "Media & Entertainment"
+  },
+  {
+    "id": 178,
+    "problem": "Out of the countries with both an above-average homicide rate and an above-average percentage of the population with drug use disorders in 2021, which of those countries had the lowest GDP per capita in 2021? Use the Our World in Data website for the numbers.",
+    "problem_category": "Finance & Economics"
+  },
+  {
+    "id": 314,
+    "problem": "I need some information on internet penetration for a media studies project where I am required to use specific sources. So according to Our World in Data’s – tabled figures from the Number of People Using the Internet chart (at continent level), of the continent with the 4th highest percentage of internet users in 2021 as a % of its population (using World Population Review’s 2020 continent level population figures) which countries had a period on period relative change in the number of internet users, of 100% or over between 2011 and 2021. Just list the countries in a bulleted list from highest to lowest increase. Use Our World in Data’s definition of countries per continent to determine what countries to analyse for the percentage change country data. Include only the countries where all the data is available.",
+    "problem_category": "Technology"
+  },
+  {
+    "id": 824,
+    "problem": "List every U.S. President from 1872 to 2020 who was elected (or re-elected) on an Election Day where the precipitation in Washington, D.C. was 0.1 or higher according to NOAA weather data. Use the \"Washington Area\" as your location resource.",
+    "problem_category": "History"
+  },
+  {
+    "id": 184,
+    "problem": "Of the body with the biggest annual income in the financial year 2023-2024 out of The National Trust, English Heritage and the Woodland Trust, what is the income from donations and legacies made up of? (i.e. the types of donations, not the monetary amounts). Give me a list as shown on their financial statement.",
+    "problem_category": "Finance & Economics"
+  },
+  {
+    "id": 639,
+    "problem": "I’m trying to decide whether to attend CU Boulder or UH Hilo. I want to attend a school with a population under 10,000, and I would prefer an acreage of less than 500 since I use a wheelchair. The school needs to have a performing arts program, preferably with a minor in dance. If either school has professors who have worked in Oslo, I’d like to prioritize that school over all others, but if not, then go ahead with my other requirements. If either of the universities has professors that have worked on Broadway, I’d like to prioritize that school over all others, but if not, then go ahead with my other requirements. Please respond with a clear answer of which school is best for my needs.",
+    "problem_category": "Education"
+  },
+  {
+    "id": 781,
+    "problem": "Official reports published by the U.S. Department of Transportation's Office of Aviation Consumer Protection show total consumer submissions (complaints, inquiries, and opinions) received by airlines operating in the United States from month to month. Which U.S. airline received the highest percent (%) increase in total consumer submissions between June 2023 and July 2023?",
+    "problem_category": "Travel"
+  },
+  {
+    "id": 850,
+    "problem": "According to the hesa.ac.uk, which academic year between 2015 and 2020 saw the biggest difference between the total number of undergraduate and postgraduate student enrolments in England, Northern Ireland, Scotland and Wales collectively?",
+    "problem_category": "Education"
+  },
+  {
+    "id": 613,
+    "problem": "I'm looking into some possible correlations for a study I'm working on. Could you tell me which country fits all of the following criteria: had a daily per capita fat supply higher than 150g in 2020 (total daily fat supply per person in grams), had a death rate due to low physical activity lower than 4.0 in 100,000 people in 2020 (age-standardized deaths), had a life expectancy at birth of 83 years or more in 2020, and also had a GDP per capita of $48,000 or more in 2020 (according to the Maddison Project). Please only use data found on the official Our World in Data website.",
+    "problem_category": "Health"
+  },
+  {
+    "id": 548,
+    "problem": "Considering the City2Surf results from 2015-2019, which year had the largest difference between the first place man and first place woman in the 30-39 year old divisions?",
+    "problem_category": "Sports"
+  },
+  {
+    "id": 347,
+    "problem": "Out of all of the tropical cyclones whose storm track passed within 15 nautical miles of Myrtle Beach, SC between 1953 and 2023, which ones produced a maximum rainfall of at least 15 inches somewhere in the contiguous United States? The location of maximum rainfall does not need to be within 15 nautical miles of Myrtle Beach, SC, only the storm track does.",
+    "problem_category": "Other"
+  },
+  {
+    "id": 807,
+    "problem": "In the Pokémon TCG, which \"Sabrina's\" Pokémon cards as part of the \"Gym Heroes\", \"Gym Challenge\", and \"Pokémon VS\" sets have at least 70HP with no weakness and one attack that deals anywhere from 20 to 40 points?",
+    "problem_category": "Media & Entertainment"
+  },
+  {
+    "id": 103,
+    "problem": "Using the County Health Rankings database, which Idaho counties had both a low adult obesity rate (35% or less) and a low overall uninsured rate (10% or less) as of 2023 data?",
+    "problem_category": "Health"
+  },
+  {
+    "id": 689,
+    "problem": "Of British Chancellors of the Exchequer who served between January 2000 and January 2024, list all those born south of Greater London.",
+    "problem_category": "Politics & Government"
+  },
+  {
+    "id": 289,
+    "problem": "Of the US CBSAs located in Arizona which had a median AQI in the “moderate level of concern range” as per the EPA's annual AQI by CBSA report for 2021, which still had a median AQI in that range in the subsequent 2022 report?",
+    "problem_category": "Health"
+  },
+  {
+    "id": 33,
+    "problem": "Refer to macrotrends.net for NVIDIA’s historical annual stock price data and to worldometers.info for United States GDP percentage change. For the years 2020, 2021, 2022, and 2023, tell me which of these saw NVIDIA’s stock price grow by more than 125% (annual % change) and the GDP of the United States grow by more than 2.5%.",
+    "problem_category": "Finance & Economics"
+  },
+  {
+    "id": 86,
+    "problem": "According to global5050.org COVID-19 Sex-Disaggregated Data Tracker, as of September 2022, which clinical pathway shows the greatest disparity between the genders in the USA?",
+    "problem_category": "Health"
+  },
+  {
+    "id": 536,
+    "problem": "Find the 15 countries with the highest percentage of tenure insecurity per the 2020 Prindex Report and determine which of those had a Worry and Experience Gap of more than 40 points according to the 2023 Lloyd's Register Foundation World Risk Poll. Then, find the top five causes of death in each of those countries in 2021 per ourworldindata.org. Are there any causes of death that are present on every one of those countries' top five lists, and if so, which ones?",
+    "problem_category": "Health"
+  },
+  {
+    "id": 478,
+    "problem": "Based on information detailed on cia.gov, find the country in the region of Africa that had the highest youth unemployment rate for ages 15-24 est as of 2024, and the country in the region of East and Southeast Asia that had the highest youth unemployment rate est as of 2024 as well as the country in the region of South America. Out of these three countries, which of these countries had a lower labor force (under 275,000 est. 2024), and the highest youth unemployment rate compared to the rest of the world as of a 2024 est?",
+    "problem_category": "Politics & Government"
+  },
+  {
+    "id": 343,
+    "problem": "using ourworldindata.org, find and list the countries which were consistently listed within the top five countries for highest homicide rates per 100,000 between the years 2015 - 2020.",
+    "problem_category": "History"
+  },
+  {
+    "id": 433,
+    "problem": "As of 2024, of all the former Vice Presidents of the United States who ran for President and won, how many saw military service and which branches did they serve in?",
+    "problem_category": "History"
+  },
+  {
+    "id": 310,
+    "problem": "Cross reference the following \"Country Comparisons\" on the CIA World Factbook (2022 Archive): \"Life expectancy at birth\", \"Death rate\", and \"Population growth rate.\" Of the countries that had a life expectancy of over 80 years, which of those countries had both a death rate of over 10 deaths per 1000 people, and a positive population growth?",
+    "problem_category": "Geography"
+  },
+  {
+    "id": 622,
+    "problem": "At the end of 2023, out of the top 5 common stocks listed on the NASDAQ by market cap, which of these had an increase in net income when compared to 2022, and an increase in the EPS ratio? Provide their symbols only.",
+    "problem_category": "Finance & Economics"
+  },
+  {
+    "id": 68,
+    "problem": "I am doing a study on the performance of rail operators in the UK. Identify the rail operators that had between 5 and 10 million passenger journeys in the UK between October and December 2021 (according to the ORR Passenger rail usage report from October to December 2021), and also had a punctuality score of less than 70% of trains on time in the same period (according to the ORR Passenger rail performance report from October to December 2021). Of these operators, did any have a delay compensation claim approval rate of less than 80% and a volume of delay compensation claims closed of less than 100,000, between October 2021 and January 2022 (according to the ORR Rail delay compensation claims report from 17 October 2021 to 8 January 2022)? If so, please list them.",
+    "problem_category": "Travel"
+  },
+  {
+    "id": 473,
+    "problem": "Which 2007 Rock and Roll hall of fame inductee had the longest-charting song on the Billboard Hot 100 prior to January 2024? Name the artist and song.",
+    "problem_category": "Media & Entertainment"
+  },
+  {
+    "id": 157,
+    "problem": "According to Elections Canada, which years during the 20th century had a federal election voter turnout rate of or over 75%? Exclude referendums.",
+    "problem_category": "Politics & Government"
+  },
+  {
+    "id": 404,
+    "problem": "Everdina de Weert was born in the The Netherlands in June of 1918. Who are her grandparents and in what years and cities did each pair of grandparents get married?",
+    "problem_category": "History"
+  },
+  {
+    "id": 490,
+    "problem": "Based on OWID sources for records of the year 2021, of the countries that are in the top 5 globally in terms of annual death rate count for all causes (estimated death rate per 100,000 people) and the top 5 globally for annual death rate by injuries (such as accidents, violence and suicides) also estimated death rate per 100,000 people, which country had the largest child mortality rate also in 2021.",
+    "problem_category": "Health"
+  },
+  {
+    "id": 791,
+    "problem": "Of the republicans who won U.S. House of Representative races in Washington in 2018, which of them had Davita Inc. as their top contributor in the 2018 election cycle when only considering campaign committee contributions, according to opensecrets.org? Provide their last names in a comma-separated list in alphabetical order.",
+    "problem_category": "Politics & Government"
+  },
+  {
+    "id": 104,
+    "problem": "According to data from the United States Federal Reserve regarding household debt, which metropolitan statistical areas, located partially or entirely within New Jersey, had an estimated debt to income ratio range that extends to 1.35 or higher in Q1 of 2023?",
+    "problem_category": "Finance & Economics"
+  },
+  {
+    "id": 436,
+    "problem": "According to Burden of Disease data sourced from ourworldindata.org, out of of Denmark, Norway, and Sweden, which countries have had their annual number of cancer deaths increase by more than a third when comparing 1980 data to 2021 data?",
+    "problem_category": "Health"
+  },
+  {
+    "id": 174,
+    "problem": "I have some leftover apricot jam that I want to use up. Give me a list with the names of every recipe that is either on Paul Hollywood's website or Mary Berry's website (using recipes from books from 2023 or before), that use apricot jam as an ingredient and either have cake, pie, tart or pudding in the title.",
+    "problem_category": "Other"
+  },
+  {
+    "id": 226,
+    "problem": "Trying to find a non-Oxbridge university to suit my daughter who wants to study History. Which UK universities were ranked in the top 25 overall in the Guardian 2022 university guide, had a History teaching satisfaction score of 92 or higher, and are located in a city with a population under 100,000 according to the 2021 UK census?",
+    "problem_category": "Education"
+  },
+  {
+    "id": 171,
+    "problem": "According to the UNdata website, out of India, Pakistan, Nepal, Bhutan, and Bangladesh, which countries had an increase in the percentage of their workforce being unemployed between 2015 and 2020, when rounded to one decimal place?",
+    "problem_category": "Finance & Economics"
+  },
+  {
+    "id": 322,
+    "problem": "According to tornadopath.com, the second-deadliest tornado in recorded Illinois history (in terms of fatalities) took place in a particular county. During what year did the next-deadliest tornado (in terms of fatalities) in the history of THAT COUNTY occur? Do not consider any data from later than 12/31/23.",
+    "problem_category": "History"
+  },
+  {
+    "id": 393,
+    "problem": "According to the IUCN red list, what are the scientific names of every plant and animal species, not including subspecies and varieties, or subpopulations, once reported as present in the U.S. that were assessed as extinct (E) or extinct in the wild (EW) listed under publication year 2015 or 2017 (2016 excluded).",
+    "problem_category": "Science"
+  },
+  {
+    "id": 892,
+    "problem": "According to the IUCN red list for 2020, list the near-threatened species that are from the Mediterranean and Black Sea Marine Region and the phylum Mollusca. Present them in a comma-separate list.",
+    "problem_category": "Science"
+  },
+  {
+    "id": 117,
+    "problem": "Please list the names of the overburden wells that were monitored in 2019 on the two former Nestlé spring sites in Ontario, Canada.",
+    "problem_category": "Science"
+  },
+  {
+    "id": 610,
+    "problem": "According to Our World in Data, what are the top four interstate wars between 1800 and 2011 that caused the most combatant deaths?",
+    "problem_category": "History"
+  },
+  {
+    "id": 546,
+    "problem": "Except for any bats, list all of the species that, according to the IUCN red list, can be found in the Habitats category \"Caves and Subterranean Habitats (non-aquatic)\" in Australia, which are also in the Red List category \"Vulnerable\". Don't consider any data assessed or published after 2023.",
+    "problem_category": "Science"
+  },
+  {
+    "id": 144,
+    "problem": "In the diaries of Samuel Pepys, which naval figure is mentioned in every December except for December 1668?",
+    "problem_category": "History"
+  },
+  {
+    "id": 133,
+    "problem": "According to FAOSTAT's food consumer price index, which countries were above the baseline in January 2010? Of these, determine which were also above the baseline in January 2015 but below the baseline in January 2020.",
+    "problem_category": "Science"
+  },
+  {
+    "id": 461,
+    "problem": "According to the Texas A&M budget website (budget.tamu.edu), out of the fiscal years 2020, 2021, 2022, and 2023, in which years were faculty salaries as a percentage of total revenue above 21%?",
+    "problem_category": "Finance & Economics"
+  },
+  {
+    "id": 786,
+    "problem": "Identify all the landlocked countries around the world that, according to the World Factbook's Field Listing on natural resources, produce both lignite (not including higher grades represented by the term \"coal\") and copper (including copper and/or copper ore) as natural resources with \"significant contributions\" to their economies. Of those, what countries saw a decrease in CO2 emission estimates (in tons per capita) between the years 2015 and 2020 according to UNdata?",
+    "problem_category": "Geography"
+  },
+  {
+    "id": 628,
+    "problem": "Which years, from 1973 to 2021, were Antarctic krill caught in both Areas 88 and 58 in the Southern Ocean? Exclude years for which the catches were less than 1000 tons for either area. Use only information from the Commission for the Conservation of Antarctic Marine Living Resources (CCAMLR) in your response.",
+    "problem_category": "Science"
+  },
+  {
+    "id": 198,
+    "problem": "According to Union Pacific's 2023 10-K, excluding the premium category, which commodity type accounted for the greatest percentage of its revenue in 2023?",
+    "problem_category": "Finance & Economics"
+  }
+]

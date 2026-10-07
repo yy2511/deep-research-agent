@@ -3,8 +3,8 @@
 覆盖的是真实行为，不是字段镜像：
 1. 已存证的来源，其历史 read_source 回执在下一轮装配里变成一行存根；
 2. 账本与磁盘不受影响（账本仍记完整回执长度，快照文件仍在）；
-3. 未存证的已读片段要留痕，并且还能继续存卡（不重读也能引）；
-4. 归档后「不带参数整篇重读」被拦（只回存根），显式 range/find 照常；
+3. 不再主动预览未存证片段，已有阅读权限仍可用于存卡；
+4. 归档后可主动重读全文或局部，新阅读回执保持至下次存证；
 5. 同一来源本次还有拒收 → 不归档（模型还得看着原文改）；
 6. keep 模式保留完整回执。
 """
@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 
 from dra import simple_research as sr
 
@@ -94,6 +95,14 @@ def test_saved_source_leaves_working_context():
                        and TAIL_MARKER in m.get("content", ""))
     assert len(json.dumps(_stubs(script)[0], ensure_ascii=False)) < len(raw_receipt)
     assert "该来源已归档" in last
+    assert "【可引用来源】" in last and "s2「sqlite3_rsync 官方文档」" in last
+    assert "**已归档**" in last and "【归档来源回读】" in last
+    stub = _stubs(script)[0]
+    assert stub["source_ref"] == "s2" and stub["url"] == "https://sqlite.org/rsync.html"
+    assert 'read_source(source_ref="s2")' in stub["note"]
+    assert "find=" in stub["note"] and "range=" in stub["note"]
+    assert "unused_readable_count" not in stub and "unused_readable_previews" not in stub
+    assert "【最近已读、可直接存证的片段】" not in last
     assert result.delivery_status == "delivered"
 
 
@@ -123,8 +132,8 @@ def test_archive_does_not_touch_ledger_or_snapshot(tmp_path):
     assert result.cards[0].quote in body
 
 
-def test_unused_readable_excerpts_survive_archiving():
-    """未存证的已读片段要留痕，且不重读也能继续存卡。"""
+def test_read_permissions_survive_archiving_without_unused_previews():
+    """不重复推送未存证片段，也不会剥夺已有阅读权限。"""
     second_save = (
         "save_evidence",
         {"cards": [{"claim": "第二张", "source_ref": "s2", "excerpt_no": 2}]},
@@ -133,32 +142,44 @@ def test_unused_readable_excerpts_survive_archiving():
         _seq(_turn(second_save), _turn(("inspect_research", {"view": "summary"}))),
         raw=LONG_RAW,
     )
-    # 只存了第 1 段之后那一轮：存根里必须把"还没用过的已读片段"列出来
-    unused = [
-        p["excerpt_no"]
-        for stub in _stubs(script, turn=3)
-        for p in stub["unused_readable_previews"]
-    ]
-    assert 2 in unused, f"未存证的已读片段必须留在存根里，实际 {unused}"
-    # 用那个未存证编号继续存卡：成功（证明归档没有剥夺引用能力）
+    assert _stubs(script, turn=3)
+    assert all("unused_readable_previews" not in stub for stub in _stubs(script, turn=3))
+    # 此前已经看过的原文仍可继续存卡。
     assert [c.claim for c in result.cards] == ["第一张", "第二张"]
 
 
-def test_no_arg_reread_returns_stub_not_full_text():
-    """归档来源的"不带参数"重读被拦：只回存根，不把整篇灌回来。"""
+@pytest.mark.parametrize("args", [
+    {"source_ref": "s1"},
+    {"source_ref": "s2"},
+    {"url": "https://sqlite.org/rsync.html"},
+])
+def test_no_locator_reread_returns_original_until_next_save(args):
+    """摘要编号、正文编号和 URL 都可主动重读；旧回执不恢复，新回执可再次归档。"""
     result, script = _run(
-        _seq(_turn(READ_CALL), _turn(("inspect_research", {"view": "summary"}))),
+        _seq(_turn(("read_source", args)),
+             _turn(("inspect_research", {"view": "summary"})),
+             _turn(("save_evidence", {"cards": [{"claim": "第二张", "quote": TAIL_MARKER}]}))),
         raw=LONG_RAW,
     )
-    stubs = _stubs(script)
-    assert stubs, "无参重读必须拿到存根（而不是错误回执，也不是整篇原文）"
-    assert stubs[-1]["total_chars"] == len(script.context.readings["s2"].raw)
+    original_stub = _stubs(script, turn=3)[0]
+    for turn in (4, 5):
+        assert _stubs(script, turn=turn) == [original_stub]
+        reads = [json.loads(content) for content in _tool_contents(script, turn=turn)]
+        full = next(p for p in reads if p.get("excerpts"))
+        assert full["shown_range"] == f"chars=0-{len(LONG_RAW)}"
+        assert not full["has_more"] and full["next_cursor"] is None
+        assert any(TAIL_MARKER in e["quote"] for e in full["excerpts"])
+    reads = [r for r in script.context.receipts if r["tool"] == "read_source"]
+    assert len(reads) == 2 and all(r["ok"] for r in reads)
+    assert _stubs(script)[0] == original_stub
+    assert len(_stubs(script)) == 2
     assert all(LONG_RAW not in content for content in _tool_contents(script))
+    assert result.cards[-1].quote == TAIL_MARKER
     assert not any("错误" in w for w in result.warnings)
 
 
 def test_explicit_range_reread_still_works_after_archiving():
-    """显式区间照常读回——归档拦的只是"无参整篇"。"""
+    """显式区间照常读回局部原文。"""
     reread = ("read_source", {"source_ref": "s2", "range": "0-200"})
     _result, script = _run(
         _seq(_turn(reread), _turn(("inspect_research", {"view": "summary"}))),

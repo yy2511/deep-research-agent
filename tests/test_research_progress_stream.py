@@ -186,7 +186,7 @@ def _simple_config():
 
     return SimpleConfig(
         adapter=SubAgentConfig(model="test-model", provider="test", reasoning=False),
-        max_llm_calls=8, max_tool_calls=8, wall_timeout_s=30.0,
+        max_llm_calls=8, max_tool_calls=8, wall_timeout_s=30.0, wrapup_reserve_s=0,
     )
 
 

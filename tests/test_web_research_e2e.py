@@ -35,7 +35,7 @@ def _config(**overrides):
         ),
         max_llm_calls=8,
         max_tool_calls=8,
-        wall_timeout_s=30.0,
+        wall_timeout_s=30.0, wrapup_reserve_s=0,
     )
     return base.model_copy(update=overrides) if overrides else base
 
@@ -149,7 +149,7 @@ class TestSimpleEndToEnd:
         assert len(payload["gaps"]) >= 3
         assert payload["artifact_errors"][0]["error_code"] == "workspace_unavailable"
         assert payload["delivery_status"] == "limited" and not payload["artifacts"]
-        assert calls["model"] == len(turns), "辅助信息错误不应引发额外交稿调用"
+        assert calls["model"] > len(turns), "附件错误须在预算内交回模型修正，有效正文仍须保留"
         assert draft in detail["report_md"] == payload["markdown"]
 
     def test_normal_delivery_via_http_entry(self, isolated_web, monkeypatch):
@@ -287,7 +287,7 @@ class TestSimpleEndToEnd:
             **kwargs,
         ):
             # 墙钟极短：拉到 deadline，既不交稿也没有核查
-            capped = config.model_copy(update={"wall_timeout_s": 0.2})
+            capped = config.model_copy(update={"wall_timeout_s": 0.2, "wrapup_reserve_s": 0})
             return original(
                 query,
                 requirements,
@@ -421,7 +421,7 @@ class TestSimpleBudgetPreview:
     def test_api_config_budget_matches_cli_simple_defaults(self, isolated_web, monkeypatch):
         """真实 /api/config 的投入范围与 simple CLI 缺省一致（实测配置=用户入口）。
 
-        对齐契约锚定值：默认次数不限，600 秒总时限与 Web 相同。
+        对齐契约锚定值：默认次数不限，1200 秒总时限与 Web 相同。
         沿用同文件预算预览测试的 settings fixture 姿势：isolated_web 只替换了
         runtime_config 适配函数，current() 仍需可序列化替身。
         """
@@ -447,7 +447,7 @@ class TestSimpleBudgetPreview:
             budget["max_llm_calls"],
             budget["max_tool_calls"],
             budget["wall_timeout_s"],
-        ) == (None, None, 600.0)
+        ) == (None, None, 1200.0)
 
         # 显式极小值原样使用，不放大的行为同样适用 CLI。
         args = module.parser().parse_args(

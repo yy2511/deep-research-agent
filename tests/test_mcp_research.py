@@ -144,7 +144,7 @@ def test_child_uses_http_mcp_while_parent_continues_and_preserves_provenance(tmp
             'coverage': [{'requirement_id': 'goal', 'status': 'answered'}]}))
 
     result = sr.run_simple_research('Orchid', sr.requirements_from_query('Orchid'), run_dir=tmp_path,
-        config=sr.SimpleConfig(mcp_servers=[config(mcp_server[0])], max_llm_calls=15, wall_timeout_s=15), model_call=model)
+        config=sr.SimpleConfig(mcp_servers=[config(mcp_server[0])], max_llm_calls=15, wall_timeout_s=15, wrapup_reserve_s=0), model_call=model)
     assert result.stop_reason == 'finished', result
     assert child_turn == 3 and result.cards[0].quote == quote
     receipts = [json.loads(p.read_text()) for p in (tmp_path / 'mcp_results').glob('*.json')]

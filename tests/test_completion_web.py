@@ -47,7 +47,7 @@ def test_late_child_cards_and_full_traces_survive_web_finish_and_replay(isolated
     monkeypatch.setattr(sr, "_retrieve", lambda *a, **kw: [_doc(raw=QUOTE)])
     original = research.run_minimal_research
     def run(*args, **kwargs):
-        kwargs["config"] = kwargs["config"].model_copy(update={"max_llm_calls": 2, "wall_timeout_s": 20})
+        kwargs["config"] = kwargs["config"].model_copy(update={"max_llm_calls": 2, "wall_timeout_s": 20, "wrapup_reserve_s": 0})
         return original(*args, **kwargs)
     monkeypatch.setattr(research, "run_minimal_research", run)
 

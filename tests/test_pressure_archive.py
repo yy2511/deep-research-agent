@@ -73,9 +73,15 @@ def _save(ctx, source_ref, excerpt_no, claim):
 
 
 def _build(ctx, history):
-    return sr._build_messages(
+    messages = sr._build_messages(
         [{"role": "system", "content": "fixed rules"}, {"role": "user", "content": "goal"}],
         ctx, [], history, seconds_left=None)
+    if ctx.config.compaction_enabled:
+        from dra.context_compaction import compact_context
+        # This suite isolates archive-only behavior with no summary call budget.
+        budget = sr.Budget(ctx.config.model_copy(update={"max_llm_calls": 1}), None)
+        messages = compact_context(ctx, messages, [], budget)
+    return messages
 
 
 def _pressure_ctx(tmp_path, **overrides):
@@ -139,9 +145,10 @@ def _receipts_archived(messages):
     return out
 
 
-def test_pressure_keeps_full_text_below_trigger(tmp_path):
+@pytest.mark.parametrize("mode", ["pressure", "compaction"])
+def test_pressure_keeps_full_text_below_trigger(tmp_path, mode):
     """压力未到：新增工具交换、存证都不改写已有前缀，全文一直可见。"""
-    ctx = _pressure_ctx(tmp_path)
+    ctx = _pressure_ctx(tmp_path, **({"archive_mode": "immediate", "compaction_enabled": True} if mode == "compaction" else {}))
     _write(ctx, RAW_A, "a")
     history = [
         _exchange("read_source", _read(ctx, "s1"), "read1"),
@@ -155,9 +162,24 @@ def test_pressure_keeps_full_text_below_trigger(tmp_path):
     assert not _actions(ctx, "context_archive") and not _actions(ctx, "context_pressure_batch")
 
 
-def test_pressure_batch_collapses_once_records_events_and_freezes(tmp_path):
+def test_compaction_archive_pairs_reused_tool_ids_by_turn(tmp_path):
+    ctx = _pressure_ctx(tmp_path, compaction_enabled=True)
+    _write(ctx, RAW_A, 'a')
+    read = _read(ctx, 's1')
+    saved = _save(ctx, 's1', 1, 'fact')
+    history = [_exchange('read_source', read, 'same-id'),
+               _exchange('save_evidence', saved, 'same-id')]
+    _fit_window(ctx, history)
+    after = _build(ctx, history)
+    replies = [json.loads(m['content']) for m in after if m.get('role') == 'tool']
+    assert replies[0]['source_ref'] == 's1' and replies[0]['archived']
+    assert replies[1] == json.loads(saved)
+
+
+@pytest.mark.parametrize("mode", ["pressure", "compaction"])
+def test_pressure_batch_collapses_once_records_events_and_freezes(tmp_path, mode):
     """越线一批收起旧阅读回执：存证引文与协议配对不动，事件齐全，不重复处理。"""
-    ctx = _pressure_ctx(tmp_path)
+    ctx = _pressure_ctx(tmp_path, **({"archive_mode": "immediate", "compaction_enabled": True} if mode == "compaction" else {}))
     _write(ctx, RAW_A, "a")
     _write(ctx, RAW_B, "b")
     history = [
@@ -173,9 +195,14 @@ def test_pressure_batch_collapses_once_records_events_and_freezes(tmp_path):
     assert _visible_chars(_receipt_of(after, "read1")) < 200  # 全文退出
     assert _visible_chars(_receipt_of(after, "read2")) < 200
     assert {s["source_ref"] for s in _receipts_archived(after)} == {"s1", "s2"}
-    # 存证回执的完整引文不受影响
+    # 整理边界可收起较旧的成功存证副本；新回执仍完整，卡库没有改写。
     save_receipt = next(m["content"] for m in after if m.get("tool_call_id") == "save1")
-    assert "第一张" in save_receipt and "chars=" in save_receipt
+    assert "第一张" in save_receipt
+    if mode == "compaction":
+        assert json.loads(save_receipt)["results"][0]["read_back"]["card_id"] == "c1"
+    else:
+        assert "chars=" in save_receipt
+    assert "quotes" in _receipt_of(after, "save2")["results"][0]
     # 工具调用/回执配对完整（消息条数与 id 一一对应）
     assert _tool_ids(before) == _tool_ids(after)
     # 事件：一批摘要 + 每来源一笔，触发原因、估算依据与真实字符变化齐全
@@ -217,9 +244,11 @@ def test_pressure_second_batch_on_growth(tmp_path):
     assert batches[1]["collapsed_refs"] == ["s2"]
 
 
-def test_pressure_recent_receipts_and_rereads_protected(tmp_path):
+@pytest.mark.parametrize("mode", ["pressure", "compaction"])
+def test_pressure_recent_receipts_and_rereads_protected(tmp_path, mode):
     """同源新旧回执区别保护（最近 1 条不收）；重读正文保留至下一次成功存证。"""
-    ctx = _pressure_ctx(tmp_path, pressure_protect_recent_reads=1)
+    ctx = _pressure_ctx(tmp_path, pressure_protect_recent_reads=1,
+                        **({"archive_mode": "immediate", "compaction_enabled": True} if mode == "compaction" else {}))
     _write(ctx, RAW_A, "a")
     first = _read(ctx, "s1")
     second = ctx.read_source({"source_ref": "s1", "range": "0-800"})[0]
@@ -233,8 +262,12 @@ def test_pressure_recent_receipts_and_rereads_protected(tmp_path):
     assert _receipt_of(after, "read1").get("archived") is True   # 旧回执收起
     r2 = _receipt_of(after, "read2")
     assert r2.get("archived") is None and _visible_chars(r2) > 300  # 最近 1 条受保护
-    # 显式重读：归档来源照常读回，读回原文在下次成功存证前保持可见
-    third = ctx.read_source({"source_ref": "s1", "range": "0-1200"})[0]
+    # 给后续交互留够容量，本测试只验证归档保护；容量不足的收尾另有测试。
+    if mode == "compaction":
+        ctx.config.context_window_tokens = 1000000
+    # 不带定位参数也能重读全文，读回原文在下次成功存证前保持可见。
+    third = ctx.read_source({"source_ref": "s1"})[0]
+    assert json.loads(third)["shown_range"] == f"chars=0-{len(RAW_A)}"
     history.append(_exchange("read_source", third, "read3"))
     b = _build(ctx, history)
     r3 = _receipt_of(b, "read3")
@@ -250,9 +283,10 @@ def test_pressure_recent_receipts_and_rereads_protected(tmp_path):
     assert not _receipt_of(e, "read4").get("archived")
 
 
-def test_pressure_unsettled_sources_protect_and_unresolved_recorded(tmp_path):
+@pytest.mark.parametrize("mode", ["pressure", "compaction"])
+def test_pressure_unsettled_sources_protect_and_unresolved_recorded(tmp_path, mode):
     """同源拒收未了结不收；无候选时如实记录压力与原因，不偷删。"""
-    ctx = _pressure_ctx(tmp_path)
+    ctx = _pressure_ctx(tmp_path, **({"archive_mode": "immediate", "compaction_enabled": True} if mode == "compaction" else {}))
     _write(ctx, RAW_A, "a")
     read = _exchange("read_source", _read(ctx, "s1"), "read1")
     mixed, ok = ctx.save_evidence({"cards": [
@@ -298,9 +332,10 @@ def test_pressure_main_and_child_are_isolated(tmp_path):
     assert _build(ctx, history) == stable
 
 
-def test_pressure_mcp_rows_replace_only_selected_sources(tmp_path):
+@pytest.mark.parametrize("mode", ["pressure", "compaction"])
+def test_pressure_mcp_rows_replace_only_selected_sources(tmp_path, mode):
     """MCP 多来源嵌套回执只替换被收起的来源块，其他字段保持。"""
-    ctx = _pressure_ctx(tmp_path)
+    ctx = _pressure_ctx(tmp_path, **({"archive_mode": "immediate", "compaction_enabled": True} if mode == "compaction" else {}))
     _write(ctx, RAW_A, "a")
     _write(ctx, RAW_B, "b")
     row1, row2 = _read(ctx, "s1"), _read(ctx, "s2")
@@ -356,8 +391,9 @@ def test_keep_mode_never_batches_even_over_trigger(tmp_path):
     assert not _actions(ctx, "context_pressure_batch") and not _actions(ctx, "context_archive")
 
 
-def test_pressure_resave_below_threshold_does_not_authorize_new_receipts(tmp_path):
-    ctx = _pressure_ctx(tmp_path)
+@pytest.mark.parametrize("mode", ["pressure", "compaction"])
+def test_pressure_resave_below_threshold_does_not_authorize_new_receipts(tmp_path, mode):
+    ctx = _pressure_ctx(tmp_path, **({"archive_mode": "immediate", "compaction_enabled": True} if mode == "compaction" else {}))
     _write(ctx, RAW_A, "a")
     h = [_exchange("read_source", _read(ctx, "s1"), "r1"),
          _exchange("save_evidence", _save(ctx, "s1", 1, "first"), "save1")]

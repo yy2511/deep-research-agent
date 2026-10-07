@@ -75,7 +75,6 @@ def test_original_bytes_bom_crlf_quoted_commas_and_multiline_fields(monkeypatch)
     (Response(headers={'Content-Type': 'text/html'}), 'unexpected_html'),
     (Response(headers={'Content-Length': '999999999'}), 'incomplete_download'),
     (Response(headers={'Content-Length': '900'}), 'incomplete_download'),
-    (Response(data=b'\xffbad'), 'decode_failed'),
     (Response(data=b''), 'invalid_text'),
     (Response(headers={'Content-Encoding': 'gzip'}), 'unsupported_encoding'),
 ])
@@ -254,12 +253,14 @@ def test_network_disabled_or_library_cannot_advertise_or_download(tmp_path, monk
 
 def test_download_available_prompt_and_child_scope(tmp_path, monkeypatch):
     ctx = context(tmp_path)
+    fake_http(monkeypatch, [Response()])
     assert 'download_source' in {s['function']['name'] for s in et.schemas_for(ctx)}
     assert '执行环境无网络' not in et.instructions_for(ctx)
     assert 'urllib.request' in et.instructions_for(ctx)
     child = ctx.fork_for_subagent(ctx.config, budget=sr.Budget(ctx.config, None), delegation_id='sub1', parent_call_id='p')
     receipt, ok = child.execute('download_source', {'url': URL})
-    assert not ok and json.loads(receipt)['error_code'] == 'role_denied'
+    assert ok and child.execution is ctx.execution
+    assert ctx.execution.files[json.loads(receipt)['path']] == RAW
 
 
 def test_history_keeps_original_and_rejects_tampering(tmp_path, monkeypatch):

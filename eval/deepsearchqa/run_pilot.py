@@ -15,9 +15,11 @@ import subprocess
 import threading
 import time
 
-from dra import llm, research, runtime_config, simple_research, subagent
+from dra import llm, research, runtime_config, simple_research, subagent, file_sources
 from dra.durable import atomic_json
-from dra.execution import ExecutionConfig
+from dra.execution import ExecutionConfig, ExecutionError
+from dra.evidence_judge import JudgeConfig
+from dra.vision import VisionConfig
 from dra.paths import RUNS_DIR
 from dra.site_filter import provider_exclude_domains
 from dra.tools import UrlFetchError
@@ -51,7 +53,8 @@ def pick(rows, sample=5, seed=20261002, *, ids=None):
 
 def research_config(settings, seconds):
     return runtime_config.to_simple_config(
-        settings, wall_timeout_s=seconds, execution=ExecutionConfig(enabled=False),
+        settings, wall_timeout_s=seconds, execution=ExecutionConfig(enabled=False), vision=VisionConfig(enabled=False),
+        evidence_judge=JudgeConfig(enabled=False),
         blocked_sites=BLOCKED_SITES, source_mode="web", mcp_servers=[])
 
 
@@ -62,6 +65,7 @@ class WebSearch:
         self.config = config
         self.searches = 0
         self.blocked = []
+        self.blocked_originals = []
         self.lock = threading.Lock()
 
     def leaked(self, url, *texts):
@@ -86,6 +90,11 @@ class WebSearch:
             return result
         return fetch
 
+    def block_original(self, url, **kwargs):
+        with self.lock:
+            self.blocked_originals.append(url)
+        raise ExecutionError('benchmark_download_disabled', '本评测仅使用受泄题过滤保护的文字阅读；原件下载未启用。')
+
 
 def delivered_answer(result):
     return "" if result.draft_rejected else result.draft.strip()
@@ -94,12 +103,15 @@ def delivered_answer(result):
 def run_one(question, out, config, *, run_fn=None):
     """question 只含 id/problem/category，标准答案与答案类型不进入研究进程。"""
     run_fn = run_fn or research.run_minimal_research
+    config = config.model_copy(update={'vision': config.vision.model_copy(update={'enabled': False})})
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     run_id = f"dsqa-{question['id']}-{datetime.now():%Y%m%d-%H%M%S-%f}"
     guard = WebSearch(config)
     old_fetch = simple_research.fetch_url_content
+    old_download = file_sources.fetch_original
     simple_research.fetch_url_content = guard.wrap_fetch(old_fetch)
+    file_sources.fetch_original = guard.block_original
     trace_token = llm.set_trace_full_io(True)
     started = time.monotonic()
     record = {**question, "run_id": run_id, "response": "", "status": "error",
@@ -122,9 +134,10 @@ def run_one(question, out, config, *, run_fn=None):
         record.update(error=type(exc).__name__, http_status=getattr(exc, "status_code", None))
     finally:
         simple_research.fetch_url_content = old_fetch
+        file_sources.fetch_original = old_download
         llm.reset_trace_full_io(trace_token)
     record.update(wall_seconds=round(time.monotonic() - started, 2), searches=guard.searches,
-                  blocked_benchmark_pages=guard.blocked)
+                  blocked_benchmark_pages=guard.blocked, blocked_original_downloads=guard.blocked_originals)
     atomic_json(out / "result.json", record)
     atomic_json(out / "progress.json", record)
     return record

@@ -15,6 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from dra.paths import RUNTIME_CONFIG_PATH
 from dra.subagent import SubAgentConfig
 from dra.evidence_judge import JudgeConfig
+from dra.vision import VisionConfig
+from dra.browser import BrowserConfig
 
 _CONFIG_PATH = RUNTIME_CONFIG_PATH
 _CONFIG_SCHEMA_VERSION = 4
@@ -54,14 +56,30 @@ class RuntimeModelSettings(BaseModel):
     planner: PlannerModelConfig
     subagent: NodeModelConfig
     call_limits_enabled: bool = False
+    vision: VisionConfig = Field(default_factory=VisionConfig)
+    browser: BrowserConfig = Field(default_factory=lambda: BrowserConfig(enabled=True))
     evidence_judge: JudgeConfig = Field(default_factory=JudgeConfig)
+    wall_timeout_s: float | None = Field(default=1200.0, gt=0)
+    wrapup_reserve_s: float = Field(default=120.0, ge=0)
+    summary_timeout_s: float = Field(default=120.0, gt=0)
+    summary_max_retries: int = Field(default=1, ge=0)
     compaction_enabled: bool = False
-    context_window_tokens: int | None = Field(default=None, gt=12000)
+    context_window_mode: Literal["manual", "auto"] = "manual"
+    context_window_tokens: int | None = Field(default=None, gt=0)
+    max_output_tokens: int = Field(default=32768, ge=512)
+    summary_max_output_tokens: int | None = Field(default=None, ge=512)
+    wrapup_max_output_tokens: int | None = Field(default=None, ge=512)
+    execution_enabled: bool | None = None
+    """网页研究是否提供 Bash/Docker 执行；None 沿用 ``ExecutionConfig.from_env()``，旧配置不改变执行权限。"""
 
     @model_validator(mode="after")
     def validate_compaction(self):
-        if self.compaction_enabled and self.context_window_tokens is None:
-            raise ValueError("启用会话整理必须填写模型上下文容量（token）")
+        if self.compaction_enabled:
+            from dra.provider_registry import capacity_snapshot
+            caps = capacity_snapshot(self.subagent.provider, self.subagent.model)
+            window = self.context_window_tokens if self.context_window_mode == "manual" else caps.get("context_window")
+            if window is None and caps.get("max_input_tokens") is None:
+                raise ValueError("该连接容量未知：请填写工作窗口，或先确认该连接的模型容量")
         return self
 
 
@@ -129,19 +147,49 @@ def to_subagent_config(settings: RuntimeModelSettings) -> SubAgentConfig:
     )
 
 
+def execution_config(settings: RuntimeModelSettings):
+    """网页研究与执行状态共用的有效执行配置。
+
+    只覆盖开关；镜像、网络、时限与资源边界始终来自 ``ExecutionConfig.from_env()``。
+    """
+    from dra.execution import ExecutionConfig
+    base = ExecutionConfig.from_env()
+    if settings.execution_enabled is None:
+        return base
+    return base.model_copy(update={"enabled": settings.execution_enabled})
+
+
+def research_retry_policy(settings: RuntimeModelSettings) -> dict:
+    """设置页只读展示的重试策略；数字取自实际调用参数，不在前端另写。"""
+    from dra.simple_research import _CALL_MAX_RETRIES
+    return {
+        "research": {"max_retries": _CALL_MAX_RETRIES, "max_attempts": _CALL_MAX_RETRIES + 1},
+        "summary": {"max_retries": settings.summary_max_retries, "max_attempts": settings.summary_max_retries + 1,
+                    "timeout_s": settings.summary_timeout_s},
+    }
+
+
 def to_simple_config(settings: RuntimeModelSettings, **overrides):
     """现役研究的统一配置入口；次数开关不影响模型选择和整轮时限。"""
     from dra.simple_research import SimpleConfig
-    from dra.execution import ExecutionConfig
     base = dict(adapter=to_subagent_config(settings),
-                execution=ExecutionConfig.from_env(),
+                execution=execution_config(settings),
                 evidence_judge=settings.evidence_judge,
+                vision=settings.vision,
+                browser=settings.browser,
+                wall_timeout_s=settings.wall_timeout_s,
+                wrapup_reserve_s=settings.wrapup_reserve_s,
+                summary_timeout_s=settings.summary_timeout_s,
+                summary_max_retries=settings.summary_max_retries,
                 compaction_enabled=settings.compaction_enabled,
+                context_window_mode=settings.context_window_mode,
                 context_window_tokens=settings.context_window_tokens,
+                summary_max_output_tokens=settings.summary_max_output_tokens,
+                wrapup_max_output_tokens=settings.wrapup_max_output_tokens,
                 max_llm_calls=20 if settings.call_limits_enabled else None,
                 max_tool_calls=20 if settings.call_limits_enabled else None,
                 # 显式给输出上限：不带 max_tokens 时，部分上游会按自己的默认值在 8192 截断，
                 # 长交稿因此被截成半截；显式值会被照办。32768 足够一两万字的报告。
-                max_output_tokens=32768)
+                max_output_tokens=settings.max_output_tokens)
     base.update(overrides)
     return SimpleConfig(**base)

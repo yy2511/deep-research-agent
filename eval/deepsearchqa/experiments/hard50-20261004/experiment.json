@@ -1,0 +1,112 @@
+{
+  "created_at": "2026-10-04T10:07:56.526132+00:00",
+  "size": 50,
+  "workers": 4,
+  "research_config": {
+    "adapter": {
+      "search_top_k": 6,
+      "model": "deepseek-v4.1-flash",
+      "provider": "custom_781f04cba39a466e",
+      "reasoning": true,
+      "effort": "low",
+      "temperature": null,
+      "search_top_k_per_source": 4,
+      "wall_timeout_s": 900.0,
+      "enable_search_fallback": true,
+      "max_tool_calls": 12,
+      "max_invalid_calls": 3,
+      "save_reserve_calls": 2
+    },
+    "evidence_judge": {
+      "enabled": true
+    },
+    "execution": {
+      "enabled": false,
+      "image": "dra-sandbox:local",
+      "memory_mb": 2048,
+      "pids": 128,
+      "command_timeout_s": 30.0,
+      "max_commands": 20,
+      "idle_timeout_s": 600.0,
+      "idle_check_s": 60.0,
+      "max_containers": 3
+    },
+    "source_mode": "web",
+    "library_selection": {},
+    "library_rerank": false,
+    "max_llm_calls": null,
+    "max_tool_calls": null,
+    "max_invalid_turns": 3,
+    "wall_timeout_s": 600.0,
+    "max_cards_per_call": 50,
+    "max_output_tokens": 32768,
+    "reserve_wrapup_calls": 1,
+    "tool_reserve_calls": 2,
+    "search_snippet_chars": 600,
+    "storage_max_chars": null,
+    "read_window_chars": null,
+    "archive_mode": "immediate",
+    "compaction_enabled": false,
+    "context_window_tokens": 1048576,
+    "pressure_reserve_tokens": 12000,
+    "pressure_trigger_ratio": 0.85,
+    "pressure_low_ratio": 0.6,
+    "pressure_protect_recent_reads": 2,
+    "estimate_chars_per_token": 2.0,
+    "delegation_enabled": true,
+    "condense_over_chars": 40000,
+    "skill_bundle": {},
+    "mcp_servers": [],
+    "blocked_sites": [
+      "huggingface.co/datasets/google/deepsearchqa",
+      "kaggle.com/benchmarks/google/dsqa",
+      "kaggle.com/code/andrewmingwang/deepsearchqa-starter-code"
+    ],
+    "prompt_profile": "product"
+  },
+  "research_connection": {
+    "name": "custom_781f04cba39a466e",
+    "label": "itkk",
+    "base_url": "https://itkk.lol/v1",
+    "reasoning_format": "thinking"
+  },
+  "judge": {
+    "model": "gemini-2.5-flash",
+    "provider": "custom_5fe20433022349ba",
+    "provider_label": "gemini",
+    "endpoint": "https://api.quickrouter.ai/v1beta/models/gemini-2.5-flash:generateContent",
+    "transport": "Gemini generateContent",
+    "normalization": "none",
+    "source_field": "result.json:response (complete delivered answer)",
+    "generation_config": "omitted, as in the official notebook",
+    "model_identity": "requested model ID; upstream identity is provider-reported",
+    "notebook_sha256": "aa1ace0a1e0023a5cad5e662968bcf18c6b4f5c0666cbad78a46ba5f813559b2",
+    "request_timeout_seconds": 90,
+    "attempts_per_invocation": 2
+  },
+  "arms": {
+    "original": {
+      "profile": "product",
+      "prompt_sha256": "c9e137bf1dd9a928552c2ea648e993b29efaa8e6464a93f8fc8d961f556d0e11",
+      "source": "runs/concise-v2-20261003/code-snapshots/20261002T165256Z/src/dra/simple_research.py"
+    },
+    "claude": {
+      "profile": "product",
+      "prompt_sha256": "0b224afae4d79fa3a28cd22670dc967eb3b8c3ae57abef7f3fbbbbf4367be950",
+      "source": "82b755ea67c221dac5979bdbeccfe59305768f81"
+    },
+    "v2": {
+      "profile": "concise_qa_v2",
+      "prompt_sha256": "a9fb4ef286c37c4a5bf4417b6045e362b450b811252b61258b4b81e2b891f612",
+      "source": "runs/concise-v2-20261003/code-snapshots/20261002T165256Z/src/dra/simple_research.py"
+    }
+  },
+  "scope": "System prompts (lead/subagent/normal/wrapup) and tool schemas vary. Engine, receipts, mission rendering, evidence judge, model and budgets are shared. Not a full historical-engine replay.",
+  "preflight_planning": "none",
+  "answer_preprocessing": "none",
+  "reuse_historical_answers": false,
+  "runtime_manifest": "/Users/yy2511/projects/research-workbench-clean/eval/deepsearchqa/runs/prompt-comparison50-20261004/manifest.json",
+  "experimental_questions_per_arm": 50,
+  "total_fresh_research_runs": 150,
+  "setup_note": "Initial three-arm preflight invalid: frozen dra.tools .env path. Preserved separately and rerun same first question after fixing evaluator path; costs excluded from research comparison but retained."
+}

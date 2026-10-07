@@ -43,6 +43,38 @@ def test_settings_save_updates_current_roles(tmp_path, monkeypatch):
     assert client.put("/api/config", json={**body, "unknown_option": True}).status_code == 400
 
 
+def test_old_settings_client_preserves_visual_connection(tmp_path, monkeypatch):
+    from dra import provider_registry
+    from dra.vision import VisionConfig
+    monkeypatch.setattr(rc, '_CONFIG_PATH', tmp_path / 'runtime_config.json')
+    monkeypatch.setattr(rc, '_cache', None)
+    current = rc.current()
+    monkeypatch.setattr(rc, '_cache', current.model_copy(update={'vision': VisionConfig(provider='openai')}))
+    with TestClient(web.app) as client:
+        before = client.get('/api/config').json()
+        body = {k: before[k] for k in rc.RuntimeModelSettings.model_fields if k != 'vision'}
+        response = client.put('/api/config', json=body)
+        assert response.status_code == 200 and response.json()['vision'] == before['vision']
+        body['vision'] = {**before['vision'], 'provider': 'missing-vision-provider'}
+        monkeypatch.setattr(provider_registry, 'exists', lambda p: False)
+        assert client.put('/api/config', json=body).status_code == 400
+
+
+def test_browser_setting_roundtrip_and_old_client_preserves_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(rc, '_CONFIG_PATH', tmp_path / 'runtime_config.json')
+    monkeypatch.setattr(rc, '_cache', None)
+    with TestClient(web.app) as client:
+        before = client.get('/api/config').json()
+        assert before['browser'] == {'enabled': True}
+        body = {k: before[k] for k in rc.RuntimeModelSettings.model_fields}
+        body['browser'] = {'enabled': False}
+        assert client.put('/api/config', json=body).status_code == 200
+        del body['browser']
+        assert client.put('/api/config', json=body).json()['browser'] == {'enabled': False}
+        monkeypatch.setattr(rc, '_cache', None)
+        assert not rc.to_simple_config(rc.current()).browser.enabled
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_call_limit_switch_saved_and_applied_to_new_research(tmp_path, monkeypatch, enabled):
     monkeypatch.setattr(rc, "_CONFIG_PATH", tmp_path / "runtime_config.json")
@@ -66,4 +98,4 @@ def test_call_limit_switch_saved_and_applied_to_new_research(tmp_path, monkeypat
         assert after["subagent"] == before["subagent"]
         assert client.post("/api/research", json={"query": "q", "mode": "simple"}).status_code == 200
     assert captured[0].max_llm_calls == captured[0].max_tool_calls == (20 if enabled else None)
-    assert captured[0].wall_timeout_s == 600
+    assert captured[0].wall_timeout_s == 1200

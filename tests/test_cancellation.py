@@ -298,7 +298,7 @@ class TestBoundsAreActuallyEnforced:
     """上界确实有界：模型/工具/来源/卡片都不会被突破。"""
 
     def test_model_and_tool_call_counts_stay_within_config(self):
-        config = sr.SimpleConfig(max_llm_calls=6, max_tool_calls=4, wall_timeout_s=60.0)
+        config = sr.SimpleConfig(max_llm_calls=6, max_tool_calls=4, wall_timeout_s=60.0, wrapup_reserve_s=0)
         script = Script(_TIRE_SEQUENCE, wrapup_text="收尾")
         result = sr.run_simple_research(
             QUERY,
@@ -327,7 +327,7 @@ class TestBoundsAreActuallyEnforced:
         docs = [
             _doc(id=f"d{i}", url=f"https://e.org/{i}", raw="s" * 200 + str(i)) for i in range(4)
         ]
-        config = sr.SimpleConfig(max_llm_calls=10, max_tool_calls=10, wall_timeout_s=60.0)
+        config = sr.SimpleConfig(max_llm_calls=10, max_tool_calls=10, wall_timeout_s=60.0, wrapup_reserve_s=0)
         script = Script(
             [
                 _turn(("search_sources", {"query": "q"})),
@@ -365,7 +365,7 @@ class TestBoundsAreActuallyEnforced:
         主线已经读到原文的材料连存都存不进去，覆盖因此缺了厂商。
         """
         config = sr.SimpleConfig(
-            max_llm_calls=10, max_tool_calls=10, max_cards_per_call=1, wall_timeout_s=60.0
+            max_llm_calls=10, max_tool_calls=10, max_cards_per_call=1, wall_timeout_s=60.0, wrapup_reserve_s=0
         )
         script = Script(
             [
@@ -426,7 +426,7 @@ class TestBoundsAreActuallyEnforced:
         JSON 对象，`draft` 读成空串 → `finished=True` 而 draft 为空 → 走收尾回合、标
         `no_draft+wrapup`、覆盖记 `unanswered`，还额外花掉预留的收尾调用。
         """
-        config = sr.SimpleConfig(max_llm_calls=10, max_tool_calls=10, wall_timeout_s=60.0)
+        config = sr.SimpleConfig(max_llm_calls=10, max_tool_calls=10, wall_timeout_s=60.0, wrapup_reserve_s=0)
         script = Script(
             [
                 _turn(("search_sources", {"query": "q"})),
@@ -466,7 +466,7 @@ class TestBoundsAreActuallyEnforced:
         空流/连接重试有没有触发，此前只能靠翻日志猜；``attempts`` 让它变成可核对的事实，
         同时也把"一次预算调用最多两次 HTTP 尝试"这条边界写进账本。
         """
-        config = sr.SimpleConfig(max_llm_calls=10, max_tool_calls=10, wall_timeout_s=60.0)
+        config = sr.SimpleConfig(max_llm_calls=10, max_tool_calls=10, wall_timeout_s=60.0, wrapup_reserve_s=0)
         retried = _turn(("search_sources", {"query": "q"}))
         retried.attempts = 2  # 模拟：第一次空流 → 换连接重发成功
         result = sr.run_simple_research(

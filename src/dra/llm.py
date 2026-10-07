@@ -371,6 +371,7 @@ class ProviderStatus(BaseModel):
 # ---------------------------------------------------------------------------
 _TRACE_STEP_PREFIXES = (
     "condense",
+    "vision_observation",
     "lead_research",
     "lead_wrapup",
     "subagent_research",
@@ -663,32 +664,38 @@ def chat(
                 parts: list[str] = []
                 usage = None
                 finish = None
-                for chunk in _observed_create(client, request_kwargs, provider=provider, model=model, attempt=attempt + 1):
-                    u = getattr(chunk, "usage", None)
-                    if u:
-                        usage = u
-                    if cancellation_requested():
-                        # 与 call_tools 一致：取消后不再读流，立即结束这次调用。
-                        raise LLMDeadlineExceeded("LLM 流式输出已中止：当前运行已取消")
-                    choices = getattr(chunk, "choices", None)
-                    if not choices:
-                        continue
-                    finish = getattr(choices[0], "finish_reason", None) or finish
-                    delta = choices[0].delta
-                    thought = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
-                    if thought and on_reasoning is not None and isinstance(thought, str):
-                        try:
-                            on_reasoning(thought)
-                        except Exception:  # noqa: BLE001 — 展示层回调绝不能弄崩主流程
-                            pass
-                    piece = getattr(delta, "content", None) or ""
-                    if piece:
-                        parts.append(piece)
-                        if on_chunk is not None:
+                stream = _observed_create(client, request_kwargs, provider=provider, model=model, attempt=attempt + 1)
+                try:
+                    for chunk in stream:
+                        u = getattr(chunk, "usage", None)
+                        if u:
+                            usage = u
+                        if cancellation_requested():
+                            # 与 call_tools 一致：取消后不再读流，立即结束这次调用。
+                            raise LLMDeadlineExceeded("LLM 流式输出已中止：当前运行已取消")
+                        choices = getattr(chunk, "choices", None)
+                        if not choices:
+                            continue
+                        finish = getattr(choices[0], "finish_reason", None) or finish
+                        delta = choices[0].delta
+                        thought = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                        if thought and on_reasoning is not None and isinstance(thought, str):
                             try:
-                                on_chunk(piece)
+                                on_reasoning(thought)
                             except Exception:  # noqa: BLE001 — 展示层回调绝不能弄崩主流程
                                 pass
+                        piece = getattr(delta, "content", None) or ""
+                        if piece:
+                            parts.append(piece)
+                            if on_chunk is not None:
+                                try:
+                                    on_chunk(piece)
+                                except Exception:  # noqa: BLE001 — 展示层回调绝不能弄崩主流程
+                                    pass
+                finally:
+                    close = getattr(stream, "close", None)
+                    if close is not None:
+                        close()
                 _record_usage(usage)
                 if finish is None:
                     # 流在结束标记之前就断了：内容不完整，按传输故障重试，不当作“模型返回了空内容”。

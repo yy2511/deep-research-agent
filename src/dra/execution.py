@@ -107,7 +107,7 @@ def availability(config):
         client=docker_client(config)
         client.ping()
         image=client.images.get(config.image)
-        if image.labels.get('dra.sandbox.protocol')!='2': raise ExecutionError('image_incompatible')
+        if image.labels.get('dra.sandbox.protocol')!='3': raise ExecutionError('image_incompatible')
         return {'enabled':True,'available':True,'image_id':image.id}
     except docker.errors.ImageNotFound: reason='image_missing'
     except ExecutionError as exc: reason=exc.code
@@ -187,7 +187,7 @@ class ExecutionSession:
                     self.container_name=entry.name
                 else: self.client=docker_client(self.config)
                 image=self.client.images.get(self.config.image)
-                if image.labels.get('dra.sandbox.protocol')!='2': raise ExecutionError('image_incompatible')
+                if image.labels.get('dra.sandbox.protocol')!='3': raise ExecutionError('image_incompatible')
                 self.image_id=image.id
                 self.workspace.prepare()
                 self.workspace.reset_input()
@@ -221,8 +221,7 @@ class ExecutionSession:
                     labels={'dra.managed':'1','dra.instance':instance_id(self.run_dir.parent),'dra.run':self.run_id,
                             'dra.conversation':self.workspace.key,
                             'dra.expires':str(time.time()+self.deadline-time.monotonic())},
-                    ulimits=[docker.types.Ulimit(name='core',soft=0,hard=0),
-                             docker.types.Ulimit(name='fsize',soft=64*MiB,hard=64*MiB)],
+                    ulimits=[docker.types.Ulimit(name='core',soft=0,hard=0)],
                     log_config=docker.types.LogConfig(type='json-file',config={'max-size':'1m','max-file':'1'}),
                     use_config_proxy=False)
                 self._persist(); self.container.start(); self.state='ready'
@@ -302,8 +301,6 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
                 self._check(end)
                 if logs and time.monotonic()-self._last_quota_check>=1:
                     self._last_quota_check=time.monotonic()
-                    if self.workspace.describe()['over_quota']:
-                        raise ExecutionError('workspace_quota','会话目录超出容量限制，已停止执行；文件保留供清理')
                 readable,writable,_=select.select([raw],[] if input_closed else [raw],[],0.1)
                 if writable:
                     if sent<len(stdin):
@@ -339,8 +336,6 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
                 if not info['Running']: break
                 time.sleep(.05)
             code=info['ExitCode']
-            if logs and self.workspace.describe()['over_quota']:
-                raise ExecutionError('workspace_quota','会话目录超出容量限制，已停止执行；文件保留供清理')
             if code==137:
                 raise ExecutionError('process_killed', '进程被强制终止（退出 137，可能达到内存限制）')
             return {'ok':code==0,'error_code':None if code==0 else 'process_exit','exit_code':code,
@@ -408,21 +403,11 @@ print(json.dumps({'memory':(p/'memory.max').read_text().strip(),'pids':(p/'pids.
             except OSError as exc: raise LLMPersistenceError('导入材料或清单无法落盘') from exc
             return '/workspace/input/'+filename
 
-    def snapshot(self, paths: dict[str,int]):
+    def snapshot(self, paths: dict[str, int | None]):
         with self.lock:
-            self.start(); self._check()
-            if len(paths)>9: raise ExecutionError('quota_exceeded')
-            for path,maximum in paths.items():
-                workspace_path(path,write=True,direct=True)
-                if not 0<maximum<=20*MiB: raise ExecutionError('quota_exceeded')
-            encoded=base64.b64encode(json.dumps({'op':'export','paths':paths}).encode()).decode()
-            # 文件内容通过受限 exec 流返回；SDK archive 无法访问当前引擎的 tmpfs。
-            receipt=self._exec(['python','-I','/opt/dra-tools/helper.py',encoded],10,
-                               capture=2*(4*((min(sum(paths.values()),50*MiB+256*1024)+2)//3)+16384),logs=False)
-            if not receipt['ok'] or receipt['truncated']: raise ExecutionError('export_failed')
-            try: payload=json.loads(receipt['stdout'])
-            except ValueError as exc: raise ExecutionError('invalid_export') from exc
-            return decode_snapshot(payload,paths)
+            # 交稿只读已存在文件，允许在预留交稿时间中使用；不续启执行容器。
+            if self.cancelled():raise ExecutionError('cancelled')
+            return self.workspace.snapshot(paths)
 
     def close(self):
         with self.lock:

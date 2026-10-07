@@ -12,29 +12,20 @@
 
 from __future__ import annotations
 
-_MAX_INPUT_CHARS = 120_000
-"""送去压缩的正文上限：压缩本身也必须是有界输入，不能把 20 万字整份塞进提示词。"""
-
-_MAX_EXCERPTS = 8
-"""最多要几条片段。多要无用：这些片段是要进模型上下文的，不是越全越好。"""
-
-_MAX_EXCERPT_CHARS = 1_400
-"""单条片段上限（比阅读片段 700 宽一倍）：超过就丢弃——长片段会把压缩视图撑成又一份全文。
-
-长度上限靠**丢弃**而不是截断实现：截断出来的片段仍然是原文子串、可以引用，但它会让
-"这条片段为什么只有一半"变得不可解释。宁缺勿滥。"""
+_CHUNK_CHARS = 120_000
+"""未配置模型窗口时沿用的单块大小；全文分块覆盖，不丢弃后文。"""
 
 _CONDENSE_SYSTEM = """你要把一份**很长的网页正文**压成给研究 agent 用的材料。
 你只做压缩，不回答问题、不补充原文里没有的事实。
 
 输出 JSON，两个字段：
 
-1. `summary`：3–6 句，说清这份材料讲什么、由哪几部分组成、与研究问题的关系。
+1. `summary`：说清本块材料讲什么、与研究问题的关系、未覆盖的条件；保留相关名单、数字、日期和限制。
    只写原文支持的内容；原文没说的不要推断。
 
-2. `excerpts`：3–8 条**逐字摘录**，每条是原文里**连续的一段**，不得改写、拼接、
+2. `excerpts`：与问题相关的**逐字摘录**，每条是原文里**连续的一段**，不得改写、拼接、
    补字或省略中间部分（省略号也不行）。优先挑与研究问题直接相关、信息密度高的段落
-   （结论、数字、限制条件、对比表）。每条 100–700 字符。
+   （结论、数字、限制条件、对比表）。按完整信息选择长度和数量，不为缩短而丢掉限定条件或名单条目。
 
 硬要求：
 - `excerpts` 里的每一条都必须能在原文里**一字不差**地找到；找不到的会被丢弃。
@@ -48,45 +39,69 @@ def condense_text(
     text: str,
     *,
     call_json,
-    max_input_chars: int = _MAX_INPUT_CHARS,
+    max_input_chars: int = _CHUNK_CHARS,
+    fits_request=None,
     **chat_kwargs,
 ) -> dict:
     """把长正文压成 ``{"summary": str, "excerpts": [str], "error": str}``。
 
-    失败一律**如实返回 error**（调用方据此降级为代码切片），绝不抛异常打断研究：
+    失败一律**如实返回 error**（调用方据容量返回原文或阅读入口），绝不抛异常打断研究：
     压缩是"省上下文"的优化，不是阅读的前置条件。
     """
-    body = text[:max_input_chars]
-    coverage = {
-        "condense_input_range": f"chars=0-{len(body)}",
-        "condense_input_truncated": len(body) < len(text),
-    }
-    messages = [
-        {"role": "system", "content": _CONDENSE_SYSTEM},
-        {"role": "user", "content": f"【研究问题】{query}\n\n【网页正文】\n{body}"},
-    ]
-    try:
-        data = call_json(messages, expect_keys=("summary",), **chat_kwargs)
-    except Exception as exc:  # 压缩失败不阻断阅读，如实记原因
-        return {**coverage, "summary": "", "excerpts": [], "error": f"{type(exc).__name__}"}
-    if not isinstance(data, dict):
-        return {**coverage, "summary": "", "excerpts": [], "error": "回执不是 JSON 对象"}
-    summary = data.get("summary") if isinstance(data.get("summary"), str) else ""
-    raw_excerpts = data.get("excerpts")
-    if not isinstance(raw_excerpts, list):  # 护栏：字符串会被逐字符遍历成单字"摘录"
-        raw_excerpts = []
-    excerpts: list[str] = []
-    for item in raw_excerpts:
-        if not isinstance(item, str):
-            continue
-        piece = item.strip()
-        if not piece or len(piece) > _MAX_EXCERPT_CHARS:
-            continue
-        if piece not in excerpts:
-            excerpts.append(piece)
-        if len(excerpts) >= _MAX_EXCERPTS:
+    summaries, excerpts, errors, ranges, completed = [], [], [], [], []
+    start = end = 0
+    if max_input_chars <= 0:
+        return {"summary": "", "excerpts": [], "error": "模型窗口不足以容纳网页压缩输入",
+                "condense_input_range": None, "condense_input_ranges": [], "condense_input_truncated": True}
+    def request(end):
+        return [
+            {"role": "system", "content": _CONDENSE_SYSTEM},
+            {"role": "user", "content": f"【研究问题】{query}\n【本块范围】chars={start}-{end}；全文 {len(text)} 字符\n\n【网页正文】\n{text[start:end]}"},
+        ]
+    while start < len(text):
+        end = min(start + max_input_chars, len(text)) if fits_request is None else len(text)
+        if fits_request is not None and not fits_request(request(end)):
+            lo, hi = start, end
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if fits_request(request(mid)):
+                    lo = mid
+                else:
+                    hi = mid - 1
+            end = lo
+            if end == start:
+                errors.append("当前模型窗口不足以容纳网页压缩请求")
+                break
+        if end < len(text):
+            boundary = text.rfind("\n", start, end)
+            if boundary > start:
+                end = boundary + 1
+        messages = request(end)
+        ranges.append(f"chars={start}-{end}")
+        try:
+            data = call_json(messages, expect_keys=("summary",), **chat_kwargs)
+        except Exception as exc:
+            errors.append(type(exc).__name__)
             break
-    if not summary and not excerpts:
-        # 注入的边界可能自己带 error（如离线替身）；有就如实透传，别覆盖成"空回执"。
-        return {**coverage, "summary": "", "excerpts": [], "error": str(data.get("error") or "空回执")}
-    return {**coverage, "summary": summary.strip(), "excerpts": excerpts, "error": ""}
+        if not isinstance(data, dict):
+            errors.append("回执不是 JSON 对象")
+            break
+        summary = data.get("summary") if isinstance(data.get("summary"), str) else ""
+        raw_excerpts = data.get("excerpts")
+        pieces = [piece.strip() for piece in raw_excerpts if isinstance(piece, str) and piece.strip()] if isinstance(raw_excerpts, list) else []
+        if not summary and not pieces:
+            errors.append(str(data.get("error") or "空回执"))
+            break
+        if summary:
+            summaries.append(summary.strip() if len(text) <= max_input_chars else f"[chars={start}-{end}] {summary.strip()}")
+        for piece in pieces:
+            if piece not in excerpts:
+                excerpts.append(piece)
+        completed.append(f"chars={start}-{end}")
+        start = end
+    return {"condense_input_range": f"chars=0-{end}",
+            "condense_input_ranges": ranges,
+            "condense_completed_ranges": completed,
+            "condense_input_truncated": end < len(text),
+            "summary": "\n\n".join(summaries), "excerpts": excerpts,
+            "error": "; ".join(errors)}

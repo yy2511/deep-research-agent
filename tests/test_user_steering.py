@@ -137,7 +137,7 @@ def test_wait_wakes_for_user_and_lead_can_message_one_child_without_stopping_sib
     try:
         with patch.object(DelegationManager, 'wait', wait), ThreadPoolExecutor(max_workers=1) as pool:
             job = pool.submit(sr.run_simple_research, '异步改向', user_input=inbox,
-                config=sr.SimpleConfig(max_llm_calls=12, max_invalid_turns=6, wall_timeout_s=15),
+                config=sr.SimpleConfig(max_llm_calls=12, max_invalid_turns=6, wall_timeout_s=15, wrapup_reserve_s=0),
                 run_dir=tmp_path/'run', model_call=model)
             assert waiting.wait(3)
             inbox.accept('u1', TEXT)

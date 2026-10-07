@@ -50,6 +50,19 @@ def test_find_accepts_a_or_style_candidates(tmp_path):
     assert lines == [2, 3]
 
 
+def test_find_long_query_keeps_more_surrounding_evidence(tmp_path):
+    needle = "needle-" + "A" * 493
+    condition = "IMPORTANT CONDITION"
+    raw = "p" * 1500 + needle + "m" * 800 + condition + "q" * 1500
+    _store, ctx, ref = _ctx(tmp_path, raw)
+    text, ok = ctx.read_source({"source_ref": ref, "find": needle})
+    assert ok, text
+    excerpt = json.loads(text)["excerpts"][0]
+    assert needle in excerpt["quote"] and condition in excerpt["quote"]
+    start, end = map(int, excerpt["location"].removeprefix("chars=").split("-"))
+    assert excerpt["quote"] == raw[start:end]
+
+
 def test_find_falls_back_to_case_insensitive_and_says_so(tmp_path):
     """大小写不同时按不区分大小写再试一次，并在回执里说明。"""
     _store, ctx, ref = _ctx(tmp_path, TEXT)

@@ -39,9 +39,11 @@ from pathlib import Path
 
 import requests
 
-from dra import research, runtime_config, simple_research
+from dra import research, runtime_config, simple_research, file_sources
 from dra.research_brief import build_research_brief, render_brief_context
-from dra.execution import ExecutionConfig
+from dra.execution import ExecutionConfig, ExecutionError
+from dra.evidence_judge import JudgeConfig
+from dra.vision import VisionConfig
 from dra.models import RetrievedDoc
 from dra.paths import RUNS_DIR
 from dra.tools import UrlFetchError
@@ -155,6 +157,10 @@ class FetchBlock:
         self.attempts.append(url)
         raise UrlFetchError("评测环境不能读取网页；只能用 search_sources 检索文档库，再用 source_ref 阅读。")
 
+    def original(self, url, **_kw):
+        self.attempts.append(url)
+        raise ExecutionError('benchmark_download_disabled', '固定文档库评测不允许原件联网下载。')
+
 
 def eval_config(model: str = MODEL, provider: str = PROVIDER, *, subagents: bool = False, condense: bool = False,
                 thinking: bool = True, temperature: float | None = None, **overrides) -> simple_research.SimpleConfig:
@@ -164,9 +170,10 @@ def eval_config(model: str = MODEL, provider: str = PROVIDER, *, subagents: bool
     if not thinking:
         node.update(reasoning=False, effort=None)  # 产品对 opencode 关思考时发 thinking=disabled
     adapter_overrides = {"temperature": temperature} if temperature is not None else {}
-    settings = settings.model_copy(update={"subagent": settings.subagent.model_copy(update=node)})
+    settings = settings.model_copy(update={"subagent": settings.subagent.model_copy(update=node),
+                                           "evidence_judge": JudgeConfig(enabled=False)})
     config = runtime_config.to_simple_config(
-        settings, execution=ExecutionConfig(enabled=False), wall_timeout_s=WALL_TIMEOUT_S,
+        settings, execution=ExecutionConfig(enabled=False), vision=VisionConfig(enabled=False), wall_timeout_s=WALL_TIMEOUT_S,
         search_snippet_chars=SNIPPET_CHARS, delegation_enabled=subagents,
         **({} if condense else {"condense_over_chars": None}), **overrides)
     if adapter_overrides:
@@ -195,12 +202,15 @@ def run_one(question: dict, out: Path, *, corpus: Corpus | None = None, model_ca
     """plan＝(规划模型, 服务商) 时先生成计划再研究；plan_call 只用于离线测试替换规划调用。"""
     corpus = corpus or Corpus()
     config = config or eval_config()
+    config = config.model_copy(update={'vision': config.vision.model_copy(update={'enabled': False})})
     block = FetchBlock()
     run_id = f"bcp-{question['query_id']}-{datetime.now():%Y%m%d-%H%M%S}"
     query = QUERY_TEMPLATE.format(Question=question["query"])
     plan_kwargs, plan_record = make_plan(query, *plan, model_call=plan_call) if plan else ({}, None)
     original_fetch = simple_research.fetch_url_content
+    original_download = file_sources.fetch_original
     simple_research.fetch_url_content = block
+    file_sources.fetch_original = block.original
     started = time.monotonic()
     try:
         result = research.run_minimal_research(
@@ -208,6 +218,7 @@ def run_one(question: dict, out: Path, *, corpus: Corpus | None = None, model_ca
             search_fn=corpus.search, model_call=model_call, **plan_kwargs)
     finally:
         simple_research.fetch_url_content = original_fetch
+        file_sources.fetch_original = original_download
     read_docids = sorted({d for s in result.sources if s.snapshot_kind == "full" and (d := docid_of(s.url))},
                          key=int)
     cited_docids = sorted({d for c in result.cards for q in c.evidence_quotes() if (d := docid_of(q.source_url))},

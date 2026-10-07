@@ -54,7 +54,7 @@ def test_research_pins_selection_and_refuses_unready_or_empty(library_web, monke
 
 def test_reject_bad_upload_and_unknown_version(library_web):
     client, _, _ = library_web
-    assert client.post("/api/library/documents?name=x.exe", content=b"abc").status_code == 400
+    assert client.post("/api/library/documents?name=x.exe", content=b"abc").status_code == 202
     assert client.get("/api/library/versions/vmissing/text").status_code == 404
 
 

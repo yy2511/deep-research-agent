@@ -174,12 +174,8 @@ class LibraryStore:
         suffix = Path(name).suffix.lower()
         if name != Path(name).name or "\\" in name or len(name) > 180 or any(ord(c) < 32 for c in name):
             raise LibraryError("文件名非法")
-        if suffix not in {".txt", ".md", ".pdf"}:
-            raise LibraryError("仅支持 TXT、Markdown 和文本 PDF")
         if not body or len(body) > MAX_BYTES:
             raise LibraryError("文件不能为空，且不能超过 10 MiB")
-        if suffix != ".pdf" and b"\x00" in body:
-            raise LibraryError("文件含二进制内容")
         digest = _hash(body)
         with self.lock:
             if replace and (replace not in self.state["documents"] or self.state["documents"][replace]["removed"]):
@@ -187,13 +183,15 @@ class LibraryStore:
             for version in self.state["versions"].values():
                 doc = self.state["documents"][version["document_id"]]
                 if (version["original_sha256"] == digest and version["suffix"] == suffix
-                        and version["status"] in {"ready", "queued", "parsing", "indexing"}
+                        and version["status"] in {"ready", "original", "queued", "parsing", "indexing"}
                         and not doc["removed"] and (not replace or version["document_id"] == replace)
                         and version["version_id"] == doc["latest_version"]):
+                    if version["status"] == "original" and suffix == ".pdf":
+                        continue  # A preserved PDF may become parsable after the user fixes its environment.
                     if version["status"] != "ready" or (
                         version.get("encoder") == self.encoder.signature
                         and version.get("chunk_config") == CHUNK_CONFIG
-                        and version.get("parser") == ("pypdf-text-v1" if suffix == ".pdf" else "utf8-verbatim-v1")
+                        and version.get("parser") == ("pypdf-text-v1" if suffix == ".pdf" else "utf8-verbatim-v1" if suffix in (".txt", ".md") else "verbatim-v1")
                     ):
                         return dict(version)
             if not self.slots.acquire(blocking=False):
@@ -228,65 +226,103 @@ class LibraryStore:
 
     def _ingest(self, version_id):
         directory = self.root / "versions" / version_id
+        parsed_ok = False
         try:
             self._status(version_id, status="parsing")
             version = self._version(version_id)
-            with subprocess.Popen([sys.executable, "-m", "dra.document_parse", str(directory / "original"),
-                                   version["suffix"], str(directory / "parsed.json")],
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as process:
-                deadline = time.monotonic() + 45
-                try:
-                    while process.poll() is None:
-                        if time.monotonic() > deadline:
-                            raise LibraryError("解析超过 45 秒，请拆分文件")
-                        if sys.platform == "darwin":
-                            rss = subprocess.run(["/bin/ps", "-o", "rss=", "-p", str(process.pid)],
-                                                 capture_output=True, text=True, timeout=2).stdout.strip()
-                            if rss.isdigit() and int(rss) > 1024 * 1024:
-                                raise LibraryError("解析内存超过 1 GiB，请拆分文件")
-                        time.sleep(0.1)
-                finally:
-                    if process.poll() is None:
-                        process.kill()
-                        process.wait()
-                if process.returncode:
-                    raise LibraryError("解析进程退出：文件损坏或超过内存/时间限制")
-            parsed = json.loads((directory / "parsed.json").read_text())
-            if parsed.get("error"):
-                raise LibraryError(parsed["error"])
-            text = parsed.pop("text")
-            (directory / "text.txt").write_bytes(text.encode("utf-8"))
-            self._status(version_id, status="indexing")
-            encoder = self.encoder
-            ranges = chunk_ranges(text, encoder.offsets(text), **{k: CHUNK_CONFIG[k] for k in ("window", "overlap")})
-            chunks = [{"id": _hash(f"{version_id}:{a}:{b}:{CHUNK_CONFIG}".encode()), "start": a, "end": b} for a, b in ranges]
-            import numpy as np
-            vectors = np.asarray(encoder.encode([text[a:b] for a, b in ranges]), dtype=np.float32)
-            if vectors.ndim != 2 or len(vectors) != len(chunks) or not np.isfinite(vectors).all():
-                raise LibraryError("向量生成不完整，未发布索引")
-            vectors /= np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-12)
-            np.save(directory / "vectors.npy", vectors, allow_pickle=False)
-            _json(directory / "chunks.json", chunks)
-            with self.lock:
-                previous_current = self.state["documents"][version["document_id"]]["current_version"]
-                previous_generation = self.state["generation"]
-                self.state["versions"][version_id].update(status="ready", error=None, raw_chars=len(text),
-                    text_sha256=_hash(text.encode()), encoder=encoder.signature, chunks=len(chunks),
-                    chunk_config=CHUNK_CONFIG, **parsed)
-                doc = self.state["documents"][version["document_id"]]
-                doc["current_version"] = version_id
-                self.state["generation"] += 1
-                try:
-                    self._commit()
-                except Exception:
-                    doc["current_version"] = previous_current
-                    self.state["generation"] = previous_generation
-                    raise
+            if version['suffix'] != '.pdf':
+                from dra.file_content import file_type, verbatim_text
+                import mimetypes
+                data = self.original(version_id)
+                mime = mimetypes.guess_type(version['file_name'])[0] or 'application/octet-stream'
+                text, encoding = verbatim_text(data, mime)
+                if text is None:
+                    self._publish_original(version, mime, file_type(data, mime), '原件已保存，尚未建立文字索引；可用看图或Bash解析。')
+                    return
+                if version['suffix'] in ('.txt', '.md'):
+                    self._parse_document(directory, version)
+                else:
+                    parsed = {'text': text, 'pages': [], 'warnings': [], 'parser': 'verbatim-v1', 'encoding': encoding}
+                    _json(directory / 'parsed.json', parsed)
+            else:
+                self._parse_document(directory, version)
+            parsed = json.loads((directory / 'parsed.json').read_text())
+            if parsed.get('error'):
+                raise LibraryError(parsed['error'])
+            parsed_ok = True
+            self._index_document(directory, version, parsed)
         except Exception as exc:
             message = str(exc) if isinstance(exc, LibraryError) else f"导入失败（{type(exc).__name__}），请检查本地模型和文件后重试"
-            self._status(version_id, status="failed", error=message)
+            version = self._version(version_id)
+            if not parsed_ok and version['suffix'] == '.pdf' and self.original(version_id).startswith(b'%PDF-'):
+                self._publish_original(version, 'application/pdf', 'application/pdf',
+                    'PDF文字解析未完成：' + message + '；原件已保存，可按页view_image或交给Bash处理。')
+            else:
+                self._status(version_id, status="failed", error=message)
         finally:
             self.slots.release()
+
+    def _publish_original(self, version, content_type, detected_type, note):
+        with self.lock:
+            self.state['versions'][version['version_id']].update(status='original', raw_chars=0,
+                content_type=content_type, detected_type=detected_type, pages=[], warnings=[],
+                parser=None, error=None, note=note)
+            self.state['documents'][version['document_id']]['current_version'] = version['version_id']
+            self.state['generation'] += 1
+            self._commit()
+
+    def _parse_document(self, directory, version):
+        with subprocess.Popen([sys.executable, "-m", "dra.document_parse", str(directory / "original"),
+                               version["suffix"], str(directory / "parsed.json")],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as process:
+            deadline = time.monotonic() + 45
+            try:
+                while process.poll() is None:
+                    if time.monotonic() > deadline:
+                        raise LibraryError("解析超过 45 秒，请拆分文件")
+                    if sys.platform == "darwin":
+                        rss = subprocess.run(["/bin/ps", "-o", "rss=", "-p", str(process.pid)],
+                                             capture_output=True, text=True, timeout=2).stdout.strip()
+                        if rss.isdigit() and int(rss) > 1024 * 1024:
+                            raise LibraryError("解析内存超过 1 GiB，请拆分文件")
+                    time.sleep(0.1)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+            if process.returncode:
+                raise LibraryError("解析进程退出：文件损坏或超过内存/时间限制")
+
+    def _index_document(self, directory, version, parsed):
+        version_id = version['version_id']
+        text = parsed.pop("text")
+        (directory / "text.txt").write_bytes(text.encode("utf-8"))
+        self._status(version_id, status="indexing")
+        encoder = self.encoder
+        ranges = chunk_ranges(text, encoder.offsets(text), **{k: CHUNK_CONFIG[k] for k in ("window", "overlap")})
+        chunks = [{"id": _hash(f"{version_id}:{a}:{b}:{CHUNK_CONFIG}".encode()), "start": a, "end": b} for a, b in ranges]
+        import numpy as np
+        vectors = np.asarray(encoder.encode([text[a:b] for a, b in ranges]), dtype=np.float32)
+        if vectors.ndim != 2 or len(vectors) != len(chunks) or not np.isfinite(vectors).all():
+            raise LibraryError("向量生成不完整，未发布索引")
+        vectors /= np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-12)
+        np.save(directory / "vectors.npy", vectors, allow_pickle=False)
+        _json(directory / "chunks.json", chunks)
+        with self.lock:
+            previous_current = self.state["documents"][version["document_id"]]["current_version"]
+            previous_generation = self.state["generation"]
+            self.state["versions"][version_id].update(status="ready", error=None, raw_chars=len(text),
+                text_sha256=_hash(text.encode()), encoder=encoder.signature, chunks=len(chunks),
+                chunk_config=CHUNK_CONFIG, **parsed)
+            doc = self.state["documents"][version["document_id"]]
+            doc["current_version"] = version_id
+            self.state["generation"] += 1
+            try:
+                self._commit()
+            except Exception:
+                doc["current_version"] = previous_current
+                self.state["generation"] = previous_generation
+                raise
 
     def remove(self, document_id):
         with self.lock:
@@ -308,10 +344,13 @@ class LibraryStore:
                     raise LibraryError("所选资料不可用，请刷新资料列表")
                 versions.append(doc["current_version"])
             return {"generation": self.state["generation"], "version_ids": versions,
-                    "files": [self._version(v)["file_name"] for v in versions]}
+                    "files": [self._version(v)["file_name"] for v in versions],
+                    "original_version_ids": [v for v in versions if self._version(v)["status"] == "original"]}
 
     def read_version(self, version_id):
         version = self._version(version_id)
+        if version["status"] == "original":
+            return {**version, "text": ""}
         if version["status"] != "ready":
             raise LibraryError("该资料尚未完成索引")
         data = (self.root / "versions" / version_id / "text.txt").read_bytes()
@@ -331,6 +370,8 @@ class LibraryStore:
                 if not doc or doc.get("removed"):
                     raise LibraryError("本次研究的资料已移出资料库，请新建研究选择可用资料")
                 self.original(version_id)
+                if version["status"] == "original":
+                    continue
                 directory = self.root / "versions" / version_id
                 if any(not (directory/name).exists() for name in ("chunks.json","vectors.npy")):
                     raise LibraryError("固定版本索引缺失，请新建研究选择可用资料")
@@ -353,9 +394,12 @@ class LibraryStore:
 
         candidates, vectors = [], []
         versions = {}
-        encoder = self.encoder
+        encoder = None
         for version_id in selection.get("version_ids", []):
             version = self.read_version(version_id)
+            if version["status"] == "original":
+                continue
+            encoder = self.encoder
             if version["encoder"] != encoder.signature:
                 raise LibraryError("索引模型与当前模型不一致，请重新导入资料")
             versions[version_id] = version

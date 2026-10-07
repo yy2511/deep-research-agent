@@ -109,6 +109,6 @@ def test_plan_rules_are_not_repeated_in_every_status_update(tmp_path):
 
 def test_jev_knows_what_computation_evidence_can_support():
     instructions = ej.QUESTIONS["relation"]["instructions"]
-    assert ej.PROMPT_VERSION == "evidence-support-v3"
+    assert ej.PROMPT_VERSION == "evidence-support-v4"
     assert "source_kind=computation" in instructions and "不是资料原文" in instructions
     assert "参赛" not in instructions

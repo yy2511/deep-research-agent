@@ -65,7 +65,7 @@ class SubAgentConfig(BaseModel):
 
 def _retrieve(
     query: str, config: SubAgentConfig, *, verbose: bool = False,
-    exclude_domains: list[str] | None = None, on_provider_event=None,
+    exclude_domains: list[str] | None = None, on_provider_event=None, deadline: float | None = None,
 ) -> list[RetrievedDoc]:
     """Tavily + Exa 双源 Web 检索，合并后按 URL 与片段精确去重。
 
@@ -91,6 +91,8 @@ def _retrieve(
         with SearchCall(on_provider_event, name, query, top_k).scope() as trace:
             try:
                 extra = {"exclude_domains": exclude_domains} if exclude_domains and name != "ddg" else {}
+                if deadline is not None:
+                    extra["deadline"] = deadline
                 result = fn(query, top_k=top_k, **extra)
                 dt = time.monotonic() - t0
                 trace.finish(result_count=len(result))
@@ -119,7 +121,7 @@ def _retrieve(
     if not docs and errors and len(errors) == len(tasks):
         from dra.llm import cancellation_requested
 
-        if config.enable_search_fallback and not cancellation_requested():
+        if config.enable_search_fallback and not cancellation_requested() and (deadline is None or time.monotonic() < deadline):
             _, fallback_docs, _, e = _run_one("ddg", ddg_search, config.search_top_k)
             if e is not None:
                 errors["ddg"] = e

@@ -87,8 +87,16 @@ def _is_conn_error(e: Exception) -> bool:
     return any(m in text for m in _CONN_ERROR_MARKERS)
 
 
+def _search_timeout(default, deadline):
+    remaining = default if deadline is None else min(default, deadline - time.monotonic())
+    if remaining <= 0:
+        raise TimeoutError("研究时间已到，不再发起搜索或重试")
+    return remaining
+
+
 def web_search(
-    query: str, top_k: int = 5, *, max_retries: int = 3, exclude_domains: list[str] | None = None
+    query: str, top_k: int = 5, *, max_retries: int = 3, exclude_domains: list[str] | None = None,
+    deadline: float | None = None,
 ) -> list[RetrievedDoc]:
     """联网检索，返回粗排后的文档列表（已映射为 RetrievedDoc）。
 
@@ -102,6 +110,7 @@ def web_search(
     resp = None
     for attempt in range(max_retries + 1):
         # 缺配置无需重试；连接级故障后下一轮仍会取得全新 client。
+        timeout = _search_timeout(60, deadline)
         client = _get_client()
         try:
             with request_attempt(attempt + 1) as observation:
@@ -113,6 +122,7 @@ def web_search(
                     # search_depth 仍用 basic（最省 1 credit）；advanced（2 credit，更狠的
                     # 正文抽取）是另一档成本旋钮，效果不够再上，不进叉 a。
                     include_raw_content=True,
+                    **({"timeout": timeout} if deadline is not None else {}),
                     **({"exclude_domains": exclude_domains} if exclude_domains else {}),
                 )
                 observation.received()  # SDK 不暴露 HTTP 状态码，不能猜成 200。
@@ -130,7 +140,7 @@ def web_search(
                 status is not None and 400 <= status < 500 and status not in (408, 429)
             )
             if not permanent and attempt < max_retries:
-                time.sleep(2 ** attempt)
+                time.sleep(_search_timeout(2 ** attempt, deadline))
                 continue
             raise RuntimeError(f"web_search 失败（已重试 {attempt} 次）: {e}") from e
 
@@ -163,11 +173,11 @@ def web_search(
 # ---------------------------------------------------------------------------
 
 _EXA_ENDPOINT = "https://api.exa.ai/search"
-_EXA_HIGHLIGHT_MAX_CHARS = 600
 
 
 def exa_search(
-    query: str, top_k: int = 5, *, max_retries: int = 3, exclude_domains: list[str] | None = None
+    query: str, top_k: int = 5, *, max_retries: int = 3, exclude_domains: list[str] | None = None,
+    deadline: float | None = None,
 ) -> list[RetrievedDoc]:
     """Exa neural search → list[RetrievedDoc]，镜像 web_search 签名。
 
@@ -186,6 +196,7 @@ def exa_search(
 
     resp = None
     for attempt in range(max_retries + 1):
+        timeout = _search_timeout(30, deadline)
         try:
             with request_attempt(attempt + 1) as observation:
                 r = requests.post(
@@ -201,12 +212,11 @@ def exa_search(
                             "text": True,
                             "highlights": {
                                 "query": query,
-                                "maxCharacters": _EXA_HIGHLIGHT_MAX_CHARS,
                             },
                         },
                         **({"excludeDomains": exclude_domains} if exclude_domains else {}),
                     },
-                    timeout=30,
+                    timeout=timeout,
                 )
                 observation.received(r.status_code)
                 if r.status_code != 200:
@@ -217,7 +227,7 @@ def exa_search(
             status = e.response.status_code if isinstance(e, requests.HTTPError) and e.response is not None else None
             permanent = status is not None and 400 <= status < 500 and status not in (408, 429)
             if not permanent and attempt < max_retries:
-                time.sleep(2 ** attempt)
+                time.sleep(_search_timeout(2 ** attempt, deadline))
                 continue
             raise RuntimeError(f"exa_search 失败（已重试 {attempt} 次）: {e}") from e
 
@@ -240,8 +250,8 @@ def exa_search(
                 source_url=item.get("url"),
                 title=item.get("title") or "",
                 # highlights 是 query-related extractive content；旧实现取 text[:300]
-                # 会把正文开头误当相关摘要。老响应没有 highlights 时有界回退全文头部。
-                snippet=(highlight_text or text)[:_EXA_HIGHLIGHT_MAX_CHARS],
+                # 会把正文开头误当相关摘要。没有 highlights 时沿用 text，不按长度裁剪。
+                snippet=highlight_text or text,
                 raw_content=text,  # 全文,grounding 门核验依赖
                 score=float(item.get("score") or 0.0),
                 published_at=published_at,
@@ -517,22 +527,19 @@ def _time_weight(published_at: str | None, tau: int) -> float:
     return math.exp(-delta_days / tau)
 
 
-def ddg_search(query: str, top_k: int = 5) -> list[RetrievedDoc]:
+def ddg_search(query: str, top_k: int = 5, *, deadline: float | None = None) -> list[RetrievedDoc]:
     """DuckDuckGo 兜底检索（第三级 fallback）。
 
     定位：免 key 免配置的保底源，仅在 Tavily+Exa 双源全挂时使用。只有 snippet 无
     raw_content——供 tool-loop 的按需精读与可引用摘录注册使用，
     证据质量降档但保住「有证据可写」。
 
-    未受墙钟 deadline 约束：`_retrieve` 的协作式 deadline 只在轮次边界检查（见
-    subagent._run_subagent_sync），本调用是一次同步网络请求，若恰好在双源全挂后、
-    deadline 已过期时触发，仍会跑完这一次 DDGS().text() 才被下一次边界检查捕获——
-    这是协作式 deadline 设计的既有特性（Task 1），不是本函数的缺陷；只在双源全挂
-    这条罕见路径上才可能发生，超时幅度上限是一次 DDG 请求的耗时。"""
+    受同一研究截止时间约束，过期时不启动兜底。"""
     from ddgs import DDGS  # 惰性 import：主路径不依赖它
 
     with request_attempt(1) as observation:
-        with DDGS() as d:
+        timeout = _search_timeout(5, deadline)
+        with DDGS(**({"timeout": timeout} if deadline is not None else {})) as d:
             results = list(d.text(query, max_results=top_k))
         observation.received()
     return [

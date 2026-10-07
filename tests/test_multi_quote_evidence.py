@@ -39,7 +39,7 @@ def test_distant_and_cross_source_spans_are_one_card_one_judgment(tmp_path, monk
     row = json.loads(text)["results"][0]
     assert row["accepted"] and len(ctx.store.cards()) == len(seen) == 1
     assert len(row["quotes"]) == len(seen[0]["state"]["evidence"]) == 3
-    assert ctx.store.cards()[0].judgment.prompt_version == "evidence-support-v3"
+    assert ctx.store.cards()[0].judgment.prompt_version == "evidence-support-v4"
     saved = ctx.store.cards()[0].model_dump()
     assert sr._card_payload(ctx.store.cards()[0])["quotes"] == row["quotes"]
     assert [(q["quote"], q["location"]) for q in saved["quotes"]] == [(q["quote"], q["location"]) for q in row["quotes"]]
@@ -82,7 +82,7 @@ def test_context_is_snapshot_text_deduplicated_bounded_and_returned(tmp_path):
             assert not any(a < d and c < b for c, d in ranges)
             ranges.append((a, b))
         total += sum(len(c["text"]) for c in span["context"])
-    assert 0 < total <= 6000
+    assert 0 < total <= 12000
     assert any("最终成绩" in c["text"] for span in spans for c in span["context"])
 
 
@@ -95,6 +95,27 @@ def test_legacy_submission_gains_context_but_keeps_full_submitted_quote(tmp_path
     # 回执不再重复模型提交的原文；保存的卡片仍保留它供界面展示。
     assert ctx.store.cards()[0].quotes[0].submitted_quote == "Uzi  属于 Team Ice。"
     assert row["quotes"][0]["context"]
+
+
+def test_expanded_context_retains_distant_conditions_for_multiple_quotes(tmp_path):
+    ctx = sr.ToolContext(sr.RunStore(tmp_path, run_id="expanded-context", query="q"),
+                         sr.SimpleConfig())
+    blocks = ["x" * 190 + f"CONDITION-{i}" + "x" * 800 + f"CLAIM-{i}" + "x" * 2000
+              for i in range(4)]
+    raw = "".join(blocks)
+    source, _ = ctx.store.write_source(RetrievedDoc(title="Conditions", snippet="",
+        source_url="https://example.com/conditions", raw_content=raw))
+    ctx.read_source({"source_ref": source.ref})
+    text, ok = ctx.save_evidence({"cards": [{"claim": "Claims with their conditions", "quotes": [
+        {"source_ref": source.ref, "quote": f"CLAIM-{i}"} for i in range(4)]}]})
+    assert ok, text
+    spans = json.loads(text)["results"][0]["quotes"]
+    assert sum(len(block["text"]) for span in spans for block in span["context"]) > 6000
+    for i, span in enumerate(spans):
+        assert any(f"CONDITION-{i}" in block["text"] for block in span["context"])
+        for block in [{"text": span["quote"], "location": span["location"]}, *span["context"]]:
+            a, b = map(int, re.fullmatch(r"chars=(\d+)-(\d+)", block["location"]).groups())
+            assert raw[a:b] == block["text"]
 
 
 def test_context_exposure_only_after_receipt_and_never_shared_with_other_agent(tmp_path):

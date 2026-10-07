@@ -167,7 +167,7 @@ def test_result_normalization_does_not_join_unrelated_blocks_or_treat_binary_as_
                           {'type': 'image', 'data': 'binary', 'mimeType': 'image/png'}]}
     parts, warnings = source_parts(result)
     assert [p['text'] for p in parts] == ['one\r\n', 'two']
-    assert warnings
+    assert not warnings  # images are handled by the pixel pipeline
     with pytest.raises(MCPError, match='上限'):
         source_parts({'content': [{'type': 'text', 'text': 'x' * 200001}]})
 

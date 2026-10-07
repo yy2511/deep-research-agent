@@ -11,6 +11,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@playwright/mcp": "0.0.83",
     "lucide-react": "^1.29.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

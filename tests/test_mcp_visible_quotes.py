@@ -120,14 +120,20 @@ def test_sdk_duplicate_json_representation_is_not_a_second_source(wrapped):
     assert len(parts) == 1 and parts[0]['text'] == text
 
 
-def test_wrapup_hints_include_visible_mcp_return_and_keep_actor_isolation(tmp_path, monkeypatch):
+def test_mcp_return_remains_in_history_without_shared_read_previews(tmp_path, monkeypatch):
     visible = 'Visible facts remain available during wrapup.'
     hidden = 'This second part has not been shown.'
     ctx, name = context(tmp_path, monkeypatch, {'content': [
         {'type': 'text', 'text': visible}, {'type': 'text', 'text': hidden}]}, read_window_chars=len(visible))
     result, ok = ctx.execute(name, {})
     ctx.receipts.append({'tool': name, 'payload': result, 'ok': ok})
-    hints = '\n'.join(sr._recent_read_hints(ctx))
-    assert visible in hints and hidden not in hints
+    exchange = [{'role': 'assistant', 'tool_calls': [{'id': 't1', 'function': {'name': name}}]},
+                {'role': 'tool', 'tool_call_id': 't1', 'content': result}]
+    messages = sr._build_messages([], ctx, [], [exchange], seconds_left=None)
+    content = json.dumps(messages, ensure_ascii=False)
+    assert visible in content and hidden not in content
+    assert '【最近已读、可直接存证的片段】' not in content
     child = ctx.fork_for_subagent(ctx.config, budget=sr.Budget(ctx.config, None))
-    assert not sr._recent_read_hints(child)
+    child_messages = sr._build_messages([], child, [], [], seconds_left=None)
+    assert visible not in json.dumps(child_messages, ensure_ascii=False)
+    assert not accepted(child, visible)

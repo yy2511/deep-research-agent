@@ -71,8 +71,7 @@ def test_failed_replacement_preserves_ready_version(library):
     assert library.list_documents()["documents"][0]["latest"]["status"] == "failed"
 
 
-@pytest.mark.parametrize("name,body", [("bad.exe", b"x"), ("../x.md", b"x"),
-                                        ("x.txt", b""), ("x.txt", b"\x00abc")])
+@pytest.mark.parametrize("name,body", [("../x.md", b"x"), ("x.txt", b"")])
 def test_bad_uploads_are_rejected(library, name, body):
     with pytest.raises(LibraryError):
         library.import_bytes(name, body, wait=True)
@@ -132,10 +131,10 @@ def test_pdf_pages_encrypted_and_no_text(library):
     writer = PdfWriter(); writer.add_blank_page(width=200, height=200)
     buffer = io.BytesIO(); writer.write(buffer)
     blank = library.import_bytes("blank.pdf", buffer.getvalue(), wait=True)
-    assert blank["status"] == "failed" and "OCR" in blank["error"]
+    assert blank["status"] == "original" and "view_image" in blank["note"]
     writer.encrypt("secret"); buffer = io.BytesIO(); writer.write(buffer)
     encrypted = library.import_bytes("encrypted.pdf", buffer.getvalue(), wait=True)
-    assert encrypted["status"] == "failed" and "加密" in encrypted["error"]
+    assert encrypted["status"] == "original" and "加密" in encrypted["note"]
 
 
 def test_half_built_index_is_never_selected(library):

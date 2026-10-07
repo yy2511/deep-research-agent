@@ -101,14 +101,15 @@ def test_mixed_search_preserves_local_hits_and_reports_web_failure(setup, monkey
     assert data["results"] and data["warnings"]
 
 
-def test_archived_local_default_read_still_returns_stub(setup):
+def test_archived_local_default_read_returns_saved_original(setup):
     _, _, _, ctx = setup
     receipt, _ = ctx.search_sources({"query":"日志"})
     ref = json.loads(receipt)["results"][0]["source_ref"]
     ctx.read_source({"source_ref":ref})
     ctx.save_evidence({"cards":[{"claim":"保留43天","quote":"日志保留 43 天，编号 ZQ-719。"}]})
     receipt, ok = ctx.read_source({"source_ref":ref})
-    assert ok and json.loads(receipt)["archived"]
+    assert ok and not json.loads(receipt).get("archived")
+    assert "日志保留 43 天，编号 ZQ-719。" in receipt
 
 
 def test_full_loop_delivers_file_citation_with_scripted_model(setup, tmp_path):

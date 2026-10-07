@@ -32,6 +32,71 @@ def test_compaction_requires_explicit_capacity():
     with pytest.raises(ValueError): sr.SimpleConfig(compaction_enabled=True)
 
 
+def test_reduces_recent_tail_and_reuses_notes_instead_of_squeezing_again(tmp_path):
+    from dra.context_compaction import compact_context
+    cfg = sr.SimpleConfig(compaction_enabled=True, context_window_tokens=20000,
+        pressure_reserve_tokens=0, estimate_chars_per_token=1, archive_mode='keep', max_llm_calls=4)
+    ctx = sr.ToolContext(sr.RunStore(tmp_path, run_id='tail', query='goal'), cfg)
+    history = [exchange(0, 'OLD_PREFIX ' + 'o' * 12000),
+               exchange(1, 'RECENT_A ' + 'a' * 4000), exchange(2, 'RECENT_B ' + 'b' * 4000)]
+    messages = sr._build_messages([{'role':'system','content':'rules'}, {'role':'user','content':'goal'}],
+                                 ctx, [], history, seconds_left=None)
+    requests = []
+    def model(messages, **kwargs):
+        requests.append(json.dumps(messages))
+        return SimpleNamespace(content=json.dumps({'findings':[], 'decisions':['d' * 8500 if len(requests)==1 else 'extra'],
+            'open_questions':[], 'next_steps':[]}), tool_calls=[], incomplete=False)
+    budget = sr.Budget(cfg, None)
+    result = compact_context(ctx, messages, [], budget, call_model=model)
+    doc = json.loads((ctx.store.dir/'context'/'lead'/(ctx.compaction_checkpoints[0]+'.json')).read_text())
+    assert doc['retained_rounds'] == 1 and len(requests) == 2
+    assert 'OLD_PREFIX' in requests[0] and 'OLD_PREFIX' not in requests[1]
+    assert 'RECENT_A' in requests[1]
+    assert doc['target_reached'] is False  # soft target: no extra call just to reach 60%
+    assert budget.remaining_calls() == 2
+    assert result[-2:] == history[-1]
+
+
+def test_single_map_plus_reserved_delivery_is_enough(tmp_path):
+    from dra.context_compaction import compact_context
+    ctx, h, base, _, _ = setup_context(tmp_path)
+    ctx.config.max_llm_calls = 2
+    h[:] = [exchange(1, 'one complete round ' * 750)]
+    messages = sr._build_messages(base, ctx, [], h, seconds_left=None)
+    # A fresh view is needed because this is a new independent fixture history.
+    ctx.message_view = None
+    messages = sr._build_messages(base, ctx, [], h, seconds_left=None)
+    budget = sr.Budget(ctx.config, None)
+    compact_context(ctx, messages, [], budget, call_model=summary, force=True)
+    assert len(ctx.compaction_checkpoints) == 1 and budget.calls_used == 1
+    assert budget.remaining_calls() == 1
+
+
+def test_failed_attempt_notes_are_reused_when_history_grows(tmp_path):
+    from dra.context_compaction import compact_context, ContextLimit
+    ctx, _, base, _, budget = setup_context(tmp_path)
+    ctx.message_view = None
+    history = [exchange(0, 'PREFIX_ONE ' + 'a'*10000), exchange(1, 'PREFIX_TWO ' + 'b'*10000),
+               exchange(2, 'recent 1'), exchange(3, 'recent 2')]
+    messages = sr._build_messages(base, ctx, [], history, seconds_left=None)
+    requests = []
+    def model(messages, **kwargs):
+        requests.append(json.dumps(messages))
+        if len(requests) == 2:
+            raise RuntimeError('summary service interrupted')
+        return SimpleNamespace(content=json.dumps({'findings':[], 'decisions':['keep decision'],
+            'open_questions':[], 'next_steps':[]}), tool_calls=[], incomplete=False)
+    with pytest.raises(ContextLimit):
+        compact_context(ctx, messages, [], budget, call_model=model)
+    assert ctx.latest_work_notes['decisions'] == ['keep decision']
+    history.append(exchange(4, 'new recent turn'))
+    messages = sr._build_messages(base, ctx, [], history, seconds_left=None)
+    compact_context(ctx, messages, [], budget, call_model=model)
+    assert sum('PREFIX_ONE' in r for r in requests) == 1
+    doc = json.loads((ctx.store.dir/'context'/'lead'/(ctx.compaction_checkpoints[0]+'.json')).read_text())
+    assert any(note['reused'] for note in doc['notes'])
+
+
 def test_compaction_keeps_tail_and_does_not_reinflate(tmp_path):
     from dra.context_compaction import compact_context
     ctx,h,base,m,b=setup_context(tmp_path); original=deepcopy(h)
@@ -42,7 +107,7 @@ def test_compaction_keeps_tail_and_does_not_reinflate(tmp_path):
     assert h==original
     next_request=sr._build_messages(base,ctx,[],h,seconds_left=None)
     assert next_request==result
-    assert b.calls_used==1 and ctx.tool_calls==0
+    assert b.calls_used>=1 and ctx.tool_calls==0
     assert ctx.store.calls()[0].role=='compact'
     checkpoint=ctx.compaction_checkpoints[-1]
     body,ok=ctx.execute('read_context_history',{'checkpoint_id':checkpoint})
@@ -83,6 +148,32 @@ def test_new_messages_append_after_summary_and_second_compaction(tmp_path):
     assert len(ctx.compaction_checkpoints)==2
 
 
+def test_compacted_prefix_survives_read_save_and_countdown(tmp_path):
+    from dra.context_compaction import compact_context
+    from dra.models import RetrievedDoc
+    from test_context_stability import exchange as tool_exchange
+    ctx,h,base,m,b=setup_context(tmp_path)
+    ctx.config.archive_mode='immediate'
+    compacted=compact_context(ctx,m,[],b,call_model=summary)
+    frozen=deepcopy(compacted)
+    ctx.store.write_source(RetrievedDoc(title='New source',source_url='https://example.com/new',
+        snippet='',raw_content='New verified fact.\n\nException applies.'))
+    receipt,ok=ctx.read_source({'source_ref':'s1'})
+    assert ok
+    h.append(tool_exchange('read_source',receipt,'read-new'))
+    read_view=sr._build_messages(base,ctx,[],h,seconds_left=90,budget=b)
+    assert read_view[:len(compacted)]==compacted==frozen
+    saved,ok=ctx.save_evidence({'cards':[{'claim':'New verified fact.','quote':'New verified fact.'}]})
+    assert ok
+    h.append(tool_exchange('save_evidence',saved,'save-new'))
+    next_view=sr._build_messages(base,ctx,[],h,seconds_left=80,budget=b)
+    # Compare the actual serialized prefix, including tool IDs and provider reasoning fields.
+    assert json.dumps(next_view[:len(read_view)],ensure_ascii=False)==json.dumps(read_view,ensure_ascii=False)
+    assert sr._build_messages(base,ctx,[],h,seconds_left=80,budget=b)==next_view
+    assert json.loads(next(m['content'] for m in next_view if m.get('tool_call_id')=='read-new'))['excerpts']
+    assert not any(a['action']=='context_view_archive' for a in ctx.store.state['actions'])
+
+
 def test_disabled_and_below_threshold_do_not_call(tmp_path):
     from dra.context_compaction import compact_context
     ctx,h,base,m,b=setup_context(tmp_path);ctx.config.compaction_enabled=False
@@ -110,7 +201,7 @@ def test_failed_candidate_never_changes_view(tmp_path, monkeypatch, failure):
         if failure=='cancel':monkeypatch.setattr(cc.llm,'cancellation_requested',lambda:True)
         if failure=='incomplete':t.incomplete=True
         if failure=='stopped':t.stopped=True
-        if failure=='large':t.content=json.dumps({'findings':[],'decisions':['x'*7000],'open_questions':[],'next_steps':[]})
+        if failure=='large':t.content=json.dumps({'findings':[],'decisions':['x'*18000],'open_questions':[],'next_steps':[]})
         return t
     if failure=='disk':
         orig=cc.atomic_json
@@ -179,14 +270,18 @@ def test_budget_reserves_research_and_wrapup(tmp_path):
     assert b.calls_used==0
 
 
-def test_oversized_recent_round_is_not_cut(tmp_path):
+def test_oversized_completed_round_is_fully_summarized_and_archived(tmp_path):
     from dra.context_compaction import compact_context,ContextLimit
     ctx,h,base,m,b=setup_context(tmp_path)
     h.append(exchange(5,'x'*30000))
     m=sr._build_messages(base,ctx,[],h,seconds_left=None)
     before=deepcopy(ctx.message_view.chunks)
-    with pytest.raises(ContextLimit):compact_context(ctx,m,[],b,call_model=summary)
-    assert ctx.message_view.chunks==before
+    result=compact_context(ctx,m,[],b,call_model=summary)
+    checkpoint=ctx.store.dir/"context"/"lead"/(ctx.compaction_checkpoints[-1]+".json")
+    stored=json.loads(checkpoint.read_text())
+    assert stored["retained_rounds"] == 0
+    assert stored["raw_exchanges"][-1] == h[-1]
+    assert not any(m.get("role") == "tool" for m in result)
 
 
 @pytest.mark.parametrize("overflow", [False, True])
@@ -285,3 +380,85 @@ def test_child_compacts_independently_and_does_not_consume_parent_mailbox(tmp_pa
     checkpoint=child.compaction_checkpoints[0]
     assert not ctx.execute('read_context_history',{'checkpoint_id':checkpoint})[1]
     assert child.execute('read_context_history',{'checkpoint_id':checkpoint})[1]
+
+
+def test_full_tool_result_is_chunked_without_losing_tail(tmp_path):
+    from dra.context_compaction import compact_context
+    ctx,h,base,m,b=setup_context(tmp_path)
+    h[0][1]['content'] = 'p'*25000 + 'IMPORTANT_TAIL_CONDITION'
+    ctx.message_view = None
+    m=sr._build_messages(base,ctx,[],h,seconds_left=None)
+    seen=[]
+    def model(messages, **kwargs):
+        seen.extend(json.loads(messages[1]['content'])['process'])
+        return summary()
+    compact_context(ctx,m,[],b,call_model=model)
+    fragments=[x for x in seen if isinstance(x,dict) and x.get('fragment') and x['block']==0]
+    restored=''.join(x['text'] for x in fragments)
+    assert json.loads(restored)==h[0]
+    assert 'IMPORTANT_TAIL_CONDITION' in restored
+    assert len(fragments)>1
+    path=ctx.store.dir/'context'/'lead'/(ctx.compaction_checkpoints[0]+'.json')
+    record=json.loads(path.read_text())
+    assert len(record['calls'])==b.calls_used
+    notes,ok=ctx.execute('read_context_history',{'checkpoint_id':ctx.compaction_checkpoints[0],'section':'notes'})
+    assert ok and 'Excluded old candidate' in notes
+
+
+def test_summary_over_6000_chars_fits_dynamic_capacity(tmp_path):
+    from dra.context_compaction import compact_context
+    ctx,h,base,m,b=setup_context(tmp_path)
+    ctx.config.context_window_tokens = 50000
+    def longer(*args, **kwargs):
+        t=summary();d=json.loads(t.content);d['decisions']=['decision '*800];t.content=json.dumps(d);return t
+    result=compact_context(ctx,m,[],b,call_model=longer)
+    assert 'decision '*800 in json.dumps(result)
+    assert ctx.compaction_checkpoints
+
+
+def test_compaction_restores_catalogs_without_replaying_full_quotes(tmp_path):
+    from dra.context_compaction import compact_context
+    from dra.models import RetrievedDoc
+    ctx,h,base,m,b=setup_context(tmp_path)
+    quote='UNIQUE_QUOTE_BEGIN ' + 'exact evidence '*600
+    ctx.store.write_source(RetrievedDoc(title='Archived document',source_url='https://example.com/doc',snippet='',raw_content=quote))
+    ctx.read_source({'source_ref':'s1'})
+    ctx.save_evidence({'cards':[{'claim':'Recorded fact','quote':quote}]})
+    m=sr._build_messages(base,ctx,[],h,seconds_left=None)
+    compact_context(ctx,m,[],b,call_model=summary)
+    result=sr._build_messages(base,ctx,[],h,seconds_left=None)
+    text=json.dumps(result,ensure_ascii=False)
+    assert 'Archived document' in text and 'Recorded fact' in text
+    assert 's1' in text and 'c1' in text and 'read_source' in text
+    assert quote not in text
+    cards,ok=ctx.inspect_research({'view':'cards','card_id':'c1'})
+    assert ok and json.loads(cards)["quotes"][0]["quote"] == quote.strip()
+
+
+def test_one_large_completed_batch_can_compact_again(tmp_path):
+    from dra.context_compaction import compact_context
+    ctx,h,base,m,b=setup_context(tmp_path)
+    compact_context(ctx,m,[],b,call_model=summary)
+    h.append(exchange(5,'new single batch '*3000))
+    m=sr._build_messages(base,ctx,[],h,seconds_left=None)
+    result=compact_context(ctx,m,[],b,call_model=summary)
+    assert len(ctx.compaction_checkpoints)==2
+    assert not any(message.get('role')=='tool' for message in result)
+    assert sr._build_messages(base,ctx,[],h,seconds_left=None)==result
+
+
+def test_summary_can_retain_discovered_leads_and_extra_work_notes(tmp_path):
+    from dra.context_compaction import compact_context
+    from dra.models import RetrievedDoc
+    ctx,h,base,m,b=setup_context(tmp_path)
+    ctx.store.register_summary(RetrievedDoc(title='Unread lead',source_url='https://example.com/lead',snippet='candidate dates'))
+    assert not ctx.read_exposures
+    def model(*args,**kwargs):
+        t=summary();d=json.loads(t.content)
+        d['process_summary']='Search result only: must read before citing.'
+        d['findings']=[{'text':'Unverified search lead','card_ids':[],'source_refs':['s1'],'confidence':'unverified'}]
+        t.content=json.dumps(d);return t
+    compact_context(ctx,m,[],b,call_model=model)
+    assert not ctx.read_exposures
+    text=json.dumps(sr._build_messages(base,ctx,[],h,seconds_left=None))
+    assert 'Unverified search lead' in text and 'must read before citing' in text

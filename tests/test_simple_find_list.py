@@ -3,7 +3,7 @@
 形状是照 coding agent 的 grep 学的：先给"地址清单"，模型看完再决定读哪儿。
 覆盖点：
 1. 清单本身（多条命中、每条带位置/行号/可引用上下文）；
-2. 有界与翻页（上限 10 条 + next_cursor，两页不重叠）；
+2. 有界与翻页（上限 20 条 + next_cursor，两页不重叠）；
 3. 清单里的片段可直接存证；
 4. 行号与正文的真实行号一致（行号是可读坐标，字符区间仍是权威坐标）；
 5. 没命中时的错误文案保持不变；
@@ -73,7 +73,7 @@ def test_find_returns_address_list_with_lines_and_citable_context():
 
 
 def test_find_list_is_capped_and_paginated_without_overlap():
-    """密集命中：只列前 10 条 + 游标翻页，两页不重叠、不丢内容。"""
+    """密集命中：只列前 20 条 + 游标翻页，两页不重叠、不丢内容。"""
     raw = "".join(f"第{i}行 needle\n" for i in range(1, 26))
     turns = [
         _turn(("search_sources", {"query": "q"})),

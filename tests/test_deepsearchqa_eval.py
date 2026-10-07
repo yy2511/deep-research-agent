@@ -28,6 +28,17 @@ def verdict(details, extras=()):
                                    "Excessive Answers": list(extras)}}
 
 
+def test_new_research_config_disables_jev_even_if_web_enabled(modules):
+    from dra import runtime_config
+    settings = runtime_config.RuntimeModelSettings(planner={'provider': 'fixture', 'model': 'fixture'},
+        subagent={'provider': 'fixture', 'model': 'fixture'}, evidence_judge={'enabled': True})
+    config = modules[1].research_config(settings, 1200)
+    assert not config.evidence_judge.enabled
+    assert settings.evidence_judge.enabled  # evaluator must not rewrite Web settings
+    assert config.wall_timeout_s == 1200
+
+
+
 @pytest.mark.parametrize("details,extras,expected", [
     ({"A": True, "B": True}, [], (1, 1, 1, "fully_correct")),
     ({"A": True, "B": False}, [], (1, .5, 2/3, "partially_correct")),
@@ -110,6 +121,30 @@ def test_benchmark_source_is_filtered(modules, monkeypatch):
     guard = runner.WebSearch(SimpleConfig())
     assert [d.title for d in guard.search("question")] == ["Original statistics"]
     assert guard.blocked == ["https://example.org/leak"]
+
+
+def test_runner_closes_new_download_route_and_keeps_vision_off(modules, monkeypatch, tmp_path):
+    runner = modules[1]
+    from dra import file_sources
+    from dra.simple_research import RunStore, ToolContext, SimpleConfig
+    from dra.vision import VisionConfig
+    original = file_sources.fetch_original
+    seen = []
+    def research(query, **kwargs):
+        config = kwargs['config']
+        seen.append(config.vision.enabled)
+        ctx = ToolContext(RunStore(tmp_path / 'isolated', run_id='guard', query=query), config)
+        receipt, ok = ctx.execute('read_source', {'url': 'https://example.org/chart.png', 'original': True})
+        assert not ok and '原件下载未启用' in receipt
+        assert not ctx.store.state['sources']
+        return SimpleNamespace(draft='', draft_rejected=False, delivery_status='limited',
+            stop_reason='finished', cards=[], sources=[], calls=[], usage={}, warnings=[])
+    monkeypatch.setattr(runner.simple_research, 'render_markdown', lambda *a: '')
+    result = runner.run_one({'id': 1, 'problem': 'offline question'}, tmp_path / 'out',
+        SimpleConfig(vision=VisionConfig(enabled=True)), run_fn=research)
+    assert seen == [False]
+    assert result['blocked_original_downloads'] == ['https://example.org/chart.png']
+    assert file_sources.fetch_original is original
 
 
 def test_prompt_extraction_does_not_execute_notebook(modules):

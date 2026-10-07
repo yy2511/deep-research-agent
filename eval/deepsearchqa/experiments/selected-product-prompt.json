@@ -1,0 +1,19 @@
+{
+  "selected_at": "2026-10-06T10:34:12.346946+00:00",
+  "default_profile": "product",
+  "baseline_arm": "original-plus-claude",
+  "source_commit": "82b755ea67c221dac5979bdbeccfe59305768f81",
+  "experiment": "hard50-20261004",
+  "system_sha256": {
+    "lead": {
+      "normal": "b982d72e9d954bd6b9684851beefa2ff5bfc56c2cf13b427f98eeeff1685da00",
+      "wrapup": "8ce8d6ed60e6101295b28eb551479fdcc160198848d6fcf41b7860ae4ecf5503"
+    },
+    "subagent": {
+      "normal": "9e66cfee694ef206cf82865d09d4ea65e4e908d25131fd020a2496b461799db2",
+      "wrapup": "ae6953aa5a95ba9471c9a7c1c87e326402a9f13f9830a940e57b9d78e1ac63f3"
+    }
+  },
+  "historical_bundle_sha256": "0b224afae4d79fa3a28cd22670dc967eb3b8c3ae57abef7f3fbbbbf4367be950",
+  "scope": "Exact winning research/wrapup system prompts. Current tool schemas and engine fixes retained. original/v1/v2 snapshots remain available."
+}

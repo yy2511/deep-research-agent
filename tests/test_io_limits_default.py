@@ -45,7 +45,7 @@ def test_config_rejects_invalid_limits_and_retired_options():
 def test_read_source_without_window_covers_whole_saved_body(tmp_path):
     """read_window_chars=None：一次 read_source 就能覆盖整份已保存正文。"""
     raw = "这是用于撑长正文的段落。" * 20_000  # 超过原来的 20 万字符保存上限
-    config = sr.SimpleConfig(max_llm_calls=6, max_tool_calls=6, wall_timeout_s=60.0,
+    config = sr.SimpleConfig(max_llm_calls=6, max_tool_calls=6, wall_timeout_s=60.0, wrapup_reserve_s=0,
                              condense_over_chars=None)
     _result, script = _run(
         [

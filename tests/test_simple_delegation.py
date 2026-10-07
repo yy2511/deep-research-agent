@@ -31,7 +31,7 @@ def _ledger_actions(run_dir: Path) -> list[dict]:
 
 
 def _run(tmp_path, script, **overrides):
-    settings = {"max_llm_calls": 12, "max_tool_calls": 12, "wall_timeout_s": 60.0}
+    settings = {"max_llm_calls": 12, "max_tool_calls": 12, "wall_timeout_s": 60.0, "wrapup_reserve_s": 0}
     settings.update(overrides)
     config = sr.SimpleConfig(**settings)
     run_dir = tmp_path / "run"

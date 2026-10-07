@@ -3,8 +3,8 @@
 覆盖的是**真实行为**：
 1. 短正文（≤ 阈值）照旧整篇直读——压缩在短页上必须是隐形的（零额外调用）；
 2. 超阈值首读给压缩视图（摘要 + 逐字片段），片段可引用；
-3. 压缩产出的片段必须逐字命中原文，改写的剔除；全被剔除 → 降级代码切片并说明；
-4. 压缩失败/无额度 → 降级切片，阅读不中断；
+3. 压缩产出的片段必须逐字命中原文，改写的剔除；全被剔除 → 返回原文或阅读入口并说明；
+4. 压缩失败/无额度 → 返回原文或阅读入口，阅读不中断；
 5. 显式 range/find 不触发压缩；
 6. 压缩调用进同一份预算、有账本记录，但不占收尾预留；同一来源只压缩一次。
 """
@@ -142,8 +142,46 @@ def test_condensed_excerpt_can_be_saved_as_card():
     assert result.cards[0].quote == first_excerpt
 
 
+@pytest.mark.parametrize("args", [
+    {"source_ref": "s1"},
+    {"source_ref": "s2"},
+    {"url": "https://sqlite.org/rsync.html"},
+])
+def test_archived_long_source_reread_reuses_condensed_view_and_can_find_tail(args):
+    """归档后无参数重读复用压缩结果，遗漏的末尾仍能定位阅读并存证。"""
+    raw = HEAD + MID * 50 + TAIL
+    assert len(raw) > 120_000
+    turns = [
+        _turn(("search_sources", {"query": "q"})),
+        _turn(("read_source", {"source_ref": "s1"})),
+        _turn(("save_evidence", {"cards": [{"claim": "首段", "quote": HEAD.strip()}]})),
+        _turn(("read_source", args)),
+        _turn(("inspect_research", {"view": "summary"})),
+        _turn(("read_source", {"source_ref": "s2", "find": TAIL.strip()})),
+        _turn(("save_evidence", {"cards": [{"claim": "末尾限制", "quote": TAIL.strip()}]})),
+    ]
+    result, script, calls = _run(turns, raw=raw, recipe=_recipe(HEAD.strip()))
+    first = _read_receipts(script, 2)[-1]
+    assert len(calls) == len(first["condense_input_ranges"])  # 首读分块，重读复用缓存
+    assert first["view"] == "condensed"
+    assert TAIL.strip() not in json.dumps(first, ensure_ascii=False)
+    for turn in (4, 5):
+        reread = _read_receipts(script, turn)[-1]
+        assert reread["view"] == "condensed" and not reread.get("archived")
+        assert reread["summary"] == first["summary"]
+        assert reread["excerpts"] == first["excerpts"]
+        assert TAIL.strip() not in json.dumps(reread, ensure_ascii=False)
+    tail_read = _read_receipts(script, 6)[-1]
+    assert tail_read["view"] == "matches"
+    assert any(TAIL.strip() in e["quote"] for e in tail_read["excerpts"])
+    card = result.cards[-1]
+    assert card.quote == TAIL.strip()
+    lo, hi = sr._chars_of(card.location)
+    assert lo > 120_000 and raw[lo:hi] == card.quote
+
+
 def test_verbatim_gate_drops_rewritten_excerpts():
-    """改写过的"摘录"进不了可引用集合；全被剔除时降级为代码切片。"""
+    """改写过的"摘录"进不了可引用集合；全被剔除时返回原文。"""
     turns = [
         _turn(("search_sources", {"query": "q"})),
         _turn(("read_source", {"source_ref": "s1"})),
@@ -152,9 +190,27 @@ def test_verbatim_gate_drops_rewritten_excerpts():
         turns, raw=LONG_BODY, recipe=_recipe("原文里根本没有这句话。")
     )
     payload = _read_receipts(script, 2)[-1]
-    assert payload["view"] == "slice", "全都过不了逐字门时必须如实降级"
-    assert "代码切片" in payload["note"]
+    assert payload["view"] == "original", "全都过不了逐字门时必须如实降级"
+    assert "直接返回快照原文" in payload["note"]
     assert all(row["quote"] in LONG_BODY for row in payload["excerpts"])
+
+
+def test_long_condensed_excerpt_keeps_its_tail_and_can_be_saved():
+    piece = MID + TAIL
+    assert len(piece) > 1400
+    turns = [
+        _turn(("search_sources", {"query": "q"})),
+        _turn(("read_source", {"source_ref": "s1"})),
+        _turn(("save_evidence", {"cards": [{
+            "claim": "包含完整限制条件", "source_ref": "s2", "quote": piece.strip(),
+        }]})),
+    ]
+    result, script, _calls = _run(turns, raw=LONG_BODY, recipe=_recipe(piece))
+    payload = _read_receipts(script, 2)[-1]
+    assert payload["view"] == "condensed"
+    assert payload["excerpts"][0]["quote"] == piece.strip()
+    assert result.cards[0].quote == piece.strip()
+    assert result.cards[0].quote.endswith("这里写着限制条件：只支持 SSH。")
 
 
 def test_partial_verbatim_keeps_the_real_one():
@@ -172,8 +228,8 @@ def test_partial_verbatim_keeps_the_real_one():
     assert quotes == [TAIL.strip()]
 
 
-def test_condense_failure_degrades_to_slice():
-    """压缩报错不阻断阅读：降级成代码切片，照样能存证。"""
+def test_condense_failure_returns_complete_original():
+    """压缩报错不阻断阅读：返回原文，照样能存证。"""
     turns = [
         _turn(("search_sources", {"query": "q"})),
         _turn(("read_source", {"source_ref": "s1"})),
@@ -181,13 +237,13 @@ def test_condense_failure_degrades_to_slice():
     ]
     result, script, _calls = _run(turns, raw=LONG_BODY, recipe=_recipe(TimeoutError("boom")))
     payload = _read_receipts(script, 2)[-1]
-    assert payload["view"] == "slice"
+    assert payload["view"] == "original"
     assert "TimeoutError" in payload["note"]
     assert len(result.cards) == 1, "降级不等于读不到"
 
 
 def test_no_budget_degrades_without_calling_model():
-    """额度不够时连压缩调用都不发，直接降级切片。"""
+    """额度不够时连压缩调用都不发，直接返回原文或阅读入口。"""
     turns = [
         _turn(("search_sources", {"query": "q"})),
         _turn(("read_source", {"source_ref": "s1"})),
@@ -198,7 +254,7 @@ def test_no_budget_degrades_without_calling_model():
     assert calls == [], "没有额度就不该发起压缩调用"
     # 额度刚好用尽：这一轮之后没有下一轮，所以从账本回执读，而不是从后续输入读。
     payload = _receipt_by_tool(script, "read_source")
-    assert payload["view"] == "slice"
+    assert payload["view"] == "original"
     assert "额度" in payload["note"]
 
 
@@ -267,3 +323,26 @@ def test_condense_output_cap_and_call_identity_are_explicit(tmp_path, output_cap
     row = next(c for c in stats['rounds'] if c['role'] == 'condense')
     assert row['call_id'] == ctx['call_id']
     assert row['agent_id'] == 'lead' and row['tool_calls'] == 0
+
+
+def test_chunked_condense_covers_full_text_and_keeps_more_than_eight_excerpts():
+    from dra.condense import condense_text
+    pieces=[f'candidate-{i}: condition-{i}.' for i in range(12)]
+    text='\n'.join(pieces)
+    seen=[]
+    def model(messages,**kwargs):
+        body=messages[-1]['content'].split('【网页正文】\n')[1]
+        seen.append(body)
+        return {'summary':'Candidate conditions','excerpts':[p for p in pieces if p in body]}
+    data=condense_text('all candidates',text,call_json=model,max_input_chars=100)
+    assert ''.join(seen)==text
+    assert data['excerpts']==pieces and not data['condense_input_truncated']
+
+
+def test_register_keeps_all_verbatim_excerpts(tmp_path):
+    from dra.models import RetrievedDoc
+    pieces=[f'candidate-{i}: condition-{i}.' for i in range(12)]
+    ctx=sr.ToolContext(sr.RunStore(tmp_path,run_id='many',query='all'),sr.SimpleConfig())
+    ctx.store.write_source(RetrievedDoc(title='All candidates',source_url='https://example.com/candidates',snippet='',raw_content='\n'.join(pieces)))
+    ctx.read_source({'source_ref':'s1'})
+    assert len(ctx._register_verbatim(ctx.readings['s1'],pieces))==12

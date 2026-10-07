@@ -72,7 +72,7 @@ class ConversationWorkspace:
 
     def describe(self):
         """只列有界路径与大小；不读模型文件内容，不跟随任何链接。"""
-        from dra.execution import ExecutionError, MiB
+        from dra.execution import ExecutionError
         self._validate()
         files, sizes, count, listing_chars = [], {'work':0,'output':0}, 0, 0
         def scan(fd, relative, bucket, depth=0):
@@ -107,7 +107,7 @@ class ConversationWorkspace:
         previous = json.loads(metadata.read_text()) if metadata.exists() else {}
         return {'conversation_id':self.conversation_id, 'persistent':True, 'files':files,
                 'listing_truncated':count>len(files), 'bytes':sizes,
-                'over_quota':sizes['work']>256*MiB or sizes['output']>64*MiB,
+                'over_quota':False,
                 'previous_run_id':previous.get('last_run_id')}
 
     def record(self):
@@ -120,3 +120,34 @@ class ConversationWorkspace:
                         'last_run_id':self.run_id})
         except OSError as exc:
             raise LLMPersistenceError('会话工作区身份无法落盘') from exc
+
+    def snapshot(self, paths):
+        """读取同一工作区的实际文件；不经过容器 stdout/base64 的大小配额。"""
+        from dra.execution import ExecutionError, workspace_path
+        self._validate()
+        result = {}
+        for path, maximum in paths.items():
+            workspace_path(path)
+            parts = PurePosixPath(path).parts[2:]
+            fd = os.open(self.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                for part in parts[:-1]:
+                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                    os.close(fd)
+                    fd = child
+                with os.fdopen(os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd), 'rb') as handle:
+                    before = os.fstat(handle.fileno())
+                    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                        raise ExecutionError('path_denied', '只能读取工作区的普通文件')
+                    data = handle.read() if maximum is None else handle.read(maximum + 1)
+                    after = os.fstat(handle.fileno())
+                    if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                        raise ExecutionError('file_changed', '读取期间文件发生变化，请停止后台写入后重试')
+                if maximum is not None and len(data) > maximum:
+                    raise ExecutionError('quota_exceeded', '文件超过本操作的大小上限')
+                result[path] = data
+            except OSError as exc:
+                raise ExecutionError('file_error', f'无法读取工作区文件：{path}') from exc
+            finally:
+                os.close(fd)
+        return result

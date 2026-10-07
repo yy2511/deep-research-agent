@@ -27,10 +27,17 @@ def _close_execution_pools():
 
 
 @pytest.fixture(autouse=True)
-def _execution_requires_explicit_test_opt_in(monkeypatch):
-    """个人 .env 开启执行，不应把全部离线 Web 测试变成真实 Docker 测试。"""
+def _execution_requires_explicit_test_opt_in(monkeypatch, tmp_path, request):
+    """个人 .env 开启执行，不应把全部离线 Web 测试变成真实 Docker 测试。
+
+    网页设置里的执行开关会覆盖环境默认，所以离线测试同时隔离 runtime_config.json：
+    不读取本机设置，也不在数据目录生成默认文件。
+    """
     monkeypatch.setenv('DRA_EXECUTION_ENABLED', 'false')
     monkeypatch.setenv('DRA_EXECUTION_NETWORK_MODE', 'none')
+    if "live" not in request.keywords:
+        monkeypatch.setattr("dra.runtime_config._CONFIG_PATH", tmp_path / "runtime_config.json")
+        monkeypatch.setattr("dra.runtime_config._cache", None)
 
 
 @pytest.fixture(autouse=True)
@@ -72,6 +79,7 @@ def _block_real_exa(monkeypatch, request):
 
 
 def pytest_addoption(parser):
+    parser.addoption('--run-browser', action='store_true', default=False, help='真实本机浏览器，测试页面仅在本机，不调用模型或外部网站')
     parser.addoption("--run-docker", action="store_true", default=False, help="运行真实本机 Docker 验收（不调用 LLM）")
     parser.addoption(
         "--run-live",
@@ -89,6 +97,9 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
+    if not config.getoption('--run-browser'):
+        for item in items:
+            if 'browser' in item.keywords:item.add_marker(pytest.mark.skip(reason='需要 --run-browser 才跑'))
     """没传 --run-live 时，给所有 live 测试动态加 skip 标记。"""
     if not config.getoption("--run-docker"):
         for item in items:

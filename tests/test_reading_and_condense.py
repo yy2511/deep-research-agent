@@ -119,13 +119,14 @@ def test_condense_receipt_discloses_actual_input(tmp_path, length, fail):
     data = json.loads(payload)
     assert ok
     assert data["condense_attempted"] is True
-    assert data["condense_input_range"] == f"chars=0-{len(captured[0])}"
-    assert data["condense_input_truncated"] == (length > 120000)
-    if length > 120000:
-        assert "TAILMARKER" not in captured[0]
-        assert "120000" in data["note"]
+    covered = sum(map(len, captured))
+    assert data["condense_input_range"] == f"chars=0-{covered}"
+    assert data["condense_input_truncated"] == (covered < len(raw))
+    if not fail:
+        assert "".join(captured) == raw
+        assert "TAILMARKER" in captured[-1]
     if fail:
-        assert data["view"] == "slice"
+        assert data["view"] == "original"
 
 
 def test_no_budget_does_not_claim_condense_coverage(tmp_path):
@@ -137,7 +138,7 @@ def test_no_budget_does_not_claim_condense_coverage(tmp_path):
     ctx.search_sources({"query": "q"})
     payload, ok = ctx.read_source({"source_ref": "s1"})
     data = json.loads(payload)
-    assert ok and data["view"] == "slice"
+    assert ok and data["view"] == "original"
     assert data["condense_attempted"] is False
     assert data["condense_input_range"] is None
 

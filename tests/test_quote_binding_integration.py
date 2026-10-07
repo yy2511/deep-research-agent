@@ -88,13 +88,14 @@ def test_candidate_context_cannot_leak_unread_text(tmp_path):
     assert '机密' not in json.dumps(body, ensure_ascii=False)
 
 
-def test_parent_read_does_not_grant_child_or_shared_hints(tmp_path):
+def test_parent_read_does_not_grant_child_or_inject_source_text(tmp_path):
     ctx = make(tmp_path, ['父任务秘密原文'])
     result, ok = ctx.read_source({'source_ref': 's1'})
     ctx.receipts.append({'tool': 'read_source', 'ok': ok, 'payload': result})
     child = ctx.fork_for_subagent(ctx.config, budget=None, delegation_id='sub1')
     assert not save(child, '父任务秘密原文')[1]
-    assert sr._recent_read_hints(child) == []
+    messages = sr._build_messages([], child, [], [], seconds_left=None)
+    assert '父任务秘密原文' not in json.dumps(messages, ensure_ascii=False)
 
 
 def test_candidates_are_bounded_and_count_is_honest(tmp_path):

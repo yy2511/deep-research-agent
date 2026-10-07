@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 
-# 前端只在构建阶段需要 Node；最终运行镜像不包含 Node/npm。
+# Node 构建前端，并在运行阶段提供按需使用的 Playwright MCP。
 FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS web-builder
 
 WORKDIR /build/web
@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY web/index.html web/tsconfig*.json web/vite.config.ts ./
 COPY web/public/ ./public/
 COPY web/src/ ./src/
-RUN npm run build
+RUN npm run build && npm prune --omit=dev
 
 
 # Python 依赖单独构建；锁文件变化前都可复用这一层。
@@ -29,7 +29,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project
 
 
-# 运行阶段只带 Python 生产依赖、业务源码和已编译前端。
+# 运行阶段包含 Python 业务、前端，以及浏览器工具所需的 Node 和 Chromium。
 FROM python:3.12-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
@@ -38,6 +38,7 @@ ENV PYTHONUNBUFFERED=1 \
     PATH=/app/.venv/bin:$PATH \
     HOME=/home/dra \
     DRA_DATA_DIR=/data \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers \
     DRA_MAX_ACTIVE_RUNS=1
 
 WORKDIR /app
@@ -49,6 +50,9 @@ RUN groupadd --system dra \
 COPY --from=python-builder --chown=dra:dra /app/.venv /app/.venv
 COPY --chown=dra:dra src/ /app/src/
 COPY --from=web-builder --chown=dra:dra /build/web/dist /app/web/dist
+COPY --from=web-builder /usr/local/bin/node /usr/local/bin/node
+COPY --from=web-builder /build/web/node_modules /app/web/node_modules
+RUN node /app/web/node_modules/playwright/cli.js install --with-deps chromium
 COPY --chown=dra:dra fixtures/demo_run/events.jsonl /app/fixtures/demo_run/events.jsonl
 
 USER dra

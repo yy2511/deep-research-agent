@@ -409,7 +409,9 @@ def api_run_skills(run_id: str):
         bundle = json.loads(snapshot.read_text()) if snapshot.exists() else {"skills": {}, "selected": []}
         ledger = directory / "run.json"
         state = json.loads(ledger.read_text()) if ledger.exists() else {}
-        return {"catalog": bundle, "loaded": state.get("skills", {}).get("loaded", [])}
+        # catalog_recorded=False：开始时没有可用技能，或是早于技能记录的运行；不等于“目录为空”。
+        return {"catalog": bundle, "catalog_recorded": snapshot.exists(),
+                "loaded": state.get("skills", {}).get("loaded", [])}
     except (OSError, ValueError):
         raise HTTPException(503, "本轮技能记录读取失败") from None
 
@@ -472,6 +474,7 @@ def api_config() -> dict:
     settings = runtime_config.current()
     simple = runtime_config.to_simple_config(settings)
     from dra.evidence_judge import readiness
+    from dra.context_budget import capacity
     return {
         **settings.model_dump(),
         "evidence_judge_status": readiness(),
@@ -483,9 +486,20 @@ def api_config() -> dict:
             "reserve_wrapup_calls": simple.reserve_wrapup_calls if simple.max_llm_calls is not None else 0,
             "storage_max_chars": simple.storage_max_chars,
         },
+        "context_budgets": {phase: capacity(simple, phase) for phase in ("research", "compact", "condense", "wrapup")},
         "simple_model": {"model": simple.adapter.model, "provider": simple.adapter.provider,
                           "reasoning": simple.adapter.reasoning},
+        # 只读：开关的实际取值与来源（不探测 Docker）；可用性见 /api/execution/status。
+        "execution_effective": _execution_effective(settings, simple.execution),
+        "retry_policy": runtime_config.research_retry_policy(settings),
     }
+
+
+def _execution_effective(settings, config) -> dict:
+    from dra.execution import ExecutionConfig
+    return {"enabled": config.enabled, "network_mode": config.network_mode,
+            "source": "environment" if settings.execution_enabled is None else "settings",
+            "default_enabled": ExecutionConfig.from_env().enabled}
 
 
 @app.get("/api/mcp/config")
@@ -535,9 +549,19 @@ def api_config_put(body: dict) -> dict:
     from dra import runtime_config
 
     try:
+        if 'browser' not in body:
+            body = {**body, 'browser': runtime_config.current().browser.model_dump()}
+        if 'vision' not in body:
+            body = {**body, 'vision': runtime_config.current().vision.model_dump()}
+        if 'execution_enabled' not in body:
+            # 不认识此字段的旧客户端保存别的设置时，不改变当前执行权限。
+            body = {**body, 'execution_enabled': runtime_config.current().execution_enabled}
         settings = runtime_config.RuntimeModelSettings(**body)
-        runtime_config.to_subagent_config(settings)
-    except ValidationError as e:
+        from dra import provider_registry
+        if settings.vision.provider and not provider_registry.exists(settings.vision.provider):
+            raise ValueError('备用视觉连接不存在，请选择已保存的连接')
+        runtime_config.to_simple_config(settings)
+    except (ValidationError, ValueError) as e:
         raise HTTPException(400, str(e))
     runtime_config.save(settings)
     return api_config()
@@ -651,7 +675,7 @@ def api_provider_update(provider: str, body: dict):
 def api_provider_delete(provider: str):
     from dra import provider_registry as pr, runtime_config
     _provider_edit_guard()
-    used=[name for name in ('planner','subagent') if getattr(runtime_config.current(),name).provider==provider]
+    used=[name for name in ('planner','subagent','vision') if getattr(runtime_config.current(),name).provider==provider]
     if used:raise HTTPException(409,'该连接仍被模型设置使用（'+', '.join(used)+'），请先更换并保存模型设置。')
     try:pr.delete_connection(provider)
     except ValueError as exc:raise HTTPException(400,str(exc))
@@ -1240,11 +1264,13 @@ async def _lifespan(_app: FastAPI):
         if execution_config.enabled:
             for handle in REGISTRY.runs.values():
                 if handle.cancel_event is not None: handle.cancel_event.set()
-            try:
-                await asyncio.to_thread(shutdown_pools, STORE.root)
+        try:
+            # 设置页可在运行期间开关执行，池可能在启动后才创建；按实际存在的池清理，没有池时不访问 Docker。
+            await asyncio.to_thread(shutdown_pools, STORE.root)
+            if execution_config.enabled:
                 await asyncio.to_thread(reap_orphans, STORE.root, execution_config)
-            except Exception:
-                print("执行工作区清理未确认，将在下次启动重试")
+        except Exception:
+            print("执行工作区清理未确认，将在下次启动重试")
 
 
 app.router.lifespan_context = _lifespan
@@ -1401,15 +1427,19 @@ def api_library_remove(document_id: str):
 @app.get("/api/library/versions/{version_id}/text", response_class=PlainTextResponse)
 def api_library_text(version_id: str):
     try:
-        return get_library().read_version(version_id)["text"]
+        version = get_library().read_version(version_id)
+        if version["status"] == "original":
+            raise HTTPException(409, "原件尚无文字索引，请读取原件")
+        return version["text"]
     except (LibraryError, OSError) as exc:
         raise HTTPException(404, "资料版本不存在、未就绪或校验失败") from exc
 
 
 def _original_response(data: bytes, document: dict):
     is_pdf = document.get("suffix") == ".pdf"
-    return Response(data, media_type="application/pdf" if is_pdf else "text/plain; charset=utf-8",
-                    headers={"Content-Disposition": "inline; filename*=UTF-8''" + quote(document["file_name"]),
+    binary = document.get("status") == "original" or document.get("suffix") not in (".pdf", ".txt", ".md")
+    return Response(data, media_type="application/pdf" if is_pdf else "application/octet-stream" if binary else "text/plain; charset=utf-8",
+                    headers={"Content-Disposition": ("attachment" if binary and not is_pdf else "inline") + "; filename*=UTF-8''" + quote(document["file_name"]),
                              "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"})
 
 
@@ -1452,6 +1482,20 @@ def api_mcp_receipt(run_id: str, receipt_id: str):
         raise HTTPException(503, "MCP 回执读取失败") from None
 
 
+@app.get("/api/runs/{run_id}/images/{sha256}")
+def api_run_image(run_id: str, sha256: str):
+    _require_valid_run_id(run_id)
+    if not re.fullmatch(r"[a-f0-9]{64}", sha256) or STORE.get_meta(run_id) is None:
+        raise HTTPException(404, "图片不存在")
+    try:
+        data = (STORE._dir(run_id) / "images" / (sha256 + ".png")).read_bytes()
+        if hashlib.sha256(data).hexdigest() != sha256:
+            raise ValueError("hash mismatch")
+        return Response(data, media_type="image/png", headers={"X-Content-Type-Options": "nosniff"})
+    except (OSError, ValueError) as exc:
+        raise HTTPException(404, "图片缺失或校验失败") from exc
+
+
 @app.get("/api/runs/{run_id}/sources/{ref}/original")
 def api_run_original(run_id: str, ref: str):
     _require_valid_run_id(run_id)
@@ -1460,7 +1504,7 @@ def api_run_original(run_id: str, ref: str):
     try:
         directory = STORE.root / run_id
         ledger = json.loads((directory / "run.json").read_text())
-        source = next(s for s in ledger["sources"] if s["ref"] == ref and s["snapshot_kind"] == "full")
+        source = next(s for s in ledger["sources"] if s["ref"] == ref and s["snapshot_kind"] in ("full", "original"))
         document = source.get("document") or source.get("download")
         path = directory / "sources" / f"{ref}.original"
         if path.resolve().parent != (directory / "sources").resolve():
@@ -1499,9 +1543,12 @@ def api_run_detail(run_id: str) -> dict:
 
 @app.get("/api/execution/status")
 def api_execution_status():
-    from dra.execution import ExecutionConfig, availability
-    config = ExecutionConfig.from_env()
-    return {**availability(config), "network_mode": config.network_mode}
+    """新研究将使用的执行配置及其可用性；与 ``POST /api/research`` 同一解析入口。"""
+    from dra import runtime_config
+    from dra.execution import availability
+    settings = runtime_config.current()
+    config = runtime_config.execution_config(settings)
+    return {**availability(config), **_execution_effective(settings, config), "image": config.image}
 
 
 @app.get("/api/runs/{run_id}/artifacts")
@@ -1513,7 +1560,7 @@ def api_artifact_list(run_id: str):
 
 
 def _artifact_response(run_id, artifact_id, preview=False):
-    from dra.artifacts import committed_records, read_committed_file, ExecutionError
+    from dra.artifacts import committed_records, read_committed_file, previewable, ExecutionError
     from fastapi.responses import Response
     from urllib.parse import quote
     _require_valid_run_id(run_id)
@@ -1524,10 +1571,10 @@ def _artifact_response(run_id, artifact_id, preview=False):
     except ExecutionError as exc: raise HTTPException(409,str(exc)) from exc
     # 个人 demo：按文件本身的浏览器能力预览，不额外封锁脚本和外部资源。
     headers={"X-Content-Type-Options":"nosniff", "Cache-Control":"private, no-store"}
-    if preview and item['format']=='pdf': raise HTTPException(415,"PDF is download only")
+    if preview and not previewable(item): raise HTTPException(415,"此格式请下载后打开")
     disposition='inline' if preview else 'attachment'
     headers['Content-Disposition']=disposition+"; filename*=UTF-8''"+quote(item['filename'],safe='')
-    media=item['mime'] if not preview or item['format'] in ('html','svg','png') else 'text/plain'
+    media=item['mime'] if not preview or item['format'] in ('html','pdf','svg','png','jpeg','webp','gif') else 'text/plain'
     return Response(data,media_type=media,headers=headers)
 
 

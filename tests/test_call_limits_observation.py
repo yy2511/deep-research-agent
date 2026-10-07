@@ -49,7 +49,7 @@ def test_runtime_toggle_preserves_models_and_resolves_caps(tmp_path, monkeypatch
         config = rc.to_simple_config(loaded)
         assert config.max_llm_calls == (20 if enabled else None)
         assert config.max_tool_calls == (20 if enabled else None)
-        assert config.wall_timeout_s == 600
+        assert config.wall_timeout_s == 1200
         assert loaded.call_limits_enabled is enabled
 
 

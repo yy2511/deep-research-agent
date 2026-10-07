@@ -26,9 +26,8 @@ def test_total_chars_is_capped_at_what_reading_can_store(tmp_path):
     assert rows[0]["total_chars"] == 100
 
 
-def test_snippet_limit_is_configurable_and_defaults_to_600(tmp_path):
+def test_snippet_is_complete_by_default_and_explicit_limits_remain_configurable(tmp_path):
     doc = _doc(raw="r")
-    doc.snippet = "s" * 3000
-    assert len(_rows(tmp_path / "a", [doc])[0]["snippet"]) == 600
+    doc.snippet = "s" * 3000 + "末尾的关键限定条件。"
+    assert _rows(tmp_path / "a", [doc])[0]["snippet"] == doc.snippet
     assert len(_rows(tmp_path / "b", [doc], search_snippet_chars=2500)[0]["snippet"]) == 2500
-

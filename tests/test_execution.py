@@ -24,6 +24,18 @@ def test_execution_disabled_never_connects(tmp_path, monkeypatch):
         session.start()
 
 
+def test_pre_file_parser_image_requires_rebuild(monkeypatch):
+    from types import SimpleNamespace as N
+    from dra import execution as ex
+    monkeypatch.setattr(ex, '_PENDING', set())
+    image = N(id='sha256:old', labels={'dra.sandbox.protocol': '2'})
+    client = N(ping=lambda: None, images=N(get=lambda *a: image), close=lambda: None)
+    monkeypatch.setattr(ex, 'docker_client', lambda config: client)
+    assert ex.availability(ex.ExecutionConfig(enabled=True))['reason'] == 'image_incompatible'
+    image.labels['dra.sandbox.protocol'] = '3'
+    assert ex.availability(ex.ExecutionConfig(enabled=True))['image_id'] == 'sha256:old'
+
+
 @pytest.mark.parametrize('path', ['/etc/passwd', '/workspace/work/../input/a', '/workspace/work/a\x00', '/workspace/work//a'])
 def test_paths_reject_escape(path):
     from dra.execution import workspace_path, ExecutionError
@@ -81,7 +93,7 @@ def test_ambiguous_container_creation_quarantines_execution(tmp_path,monkeypatch
     from types import SimpleNamespace
     from dra import execution as ex
     def ambiguous(*a,**kw): raise docker.errors.DockerException('connection lost after create')
-    client=SimpleNamespace(images=SimpleNamespace(get=lambda image:SimpleNamespace(id='sha256:test',labels={'dra.sandbox.protocol':'2'})),
+    client=SimpleNamespace(images=SimpleNamespace(get=lambda image:SimpleNamespace(id='sha256:test',labels={'dra.sandbox.protocol':'3'})),
         info=lambda:{'OSType':'linux','MemoryLimit':True,'CpuCfsQuota':True,'PidsLimit':True},
         containers=SimpleNamespace(create=ambiguous),close=lambda:None)
     monkeypatch.setattr(ex,'docker_client',lambda config:client)

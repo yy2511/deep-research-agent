@@ -1,4 +1,4 @@
-"""Download public text data without a page extractor or newline conversion.
+"""Download public originals independently of text decoding or format support.
 
 The controller owns retrieval and provenance; generated workspace files cannot
 register themselves as external evidence. No credentials or cookies from the
@@ -6,7 +6,6 @@ controller environment are sent to a source website.
 """
 from __future__ import annotations
 
-import codecs
 import hashlib
 import http.client
 import ipaddress
@@ -17,6 +16,7 @@ from pathlib import PurePosixPath
 from urllib.parse import unquote, urljoin, urlsplit
 from urllib.request import getproxies
 
+from dra.file_content import file_type
 from dra.execution import ExecutionError
 from dra.site_filter import is_blocked
 from dra.tools import validate_public_url
@@ -57,27 +57,15 @@ def _connection(url, timeout):
 
 
 def _decode(data, content_type, filename):
-    kind = content_type.split(';', 1)[0].strip().lower()
+    from dra.file_content import verbatim_text
+    if not data:
+        raise ExecutionError('invalid_text', '下载结果为空')
+    text, encoding = verbatim_text(data, content_type)
     suffix = PurePosixPath(filename).suffix.lower()
-    textual = (kind.startswith('text/') or kind in ('application/json', 'application/xml', 'application/csv')
-               or kind.endswith(('+json', '+xml')))
-    if not textual and suffix not in ('.csv', '.tsv', '.txt', '.json', '.xml', '.md'):
-        raise ExecutionError('unsupported_file_type', '目前原件存证支持 CSV、TSV 和文本数据；二进制文件请使用其他读取工具')
-    charset = re.search(r'charset\s*=\s*["\']?([\w.-]+)', content_type, re.I)
-    encoding = charset.group(1) if charset else 'utf-8'
-    if data.startswith(codecs.BOM_UTF8):
-        encoding = 'utf-8-sig'
-    elif data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
-        encoding = 'utf-16'
-    try:
-        text = data.decode(encoding, errors='strict')
-    except (UnicodeError, LookupError) as exc:
-        raise ExecutionError('decode_failed', '原件不能按声明的编码解码；未用替换字符或猜测内容登记来源') from exc
-    if not text.strip() or '\x00' in text:
-        raise ExecutionError('invalid_text', '下载结果为空或不是可读取的文本数据')
-    if suffix in ('.csv', '.tsv') and (kind in ('text/html', 'application/xhtml+xml')
+    kind = content_type.split(';', 1)[0].strip().lower()
+    if text is not None and suffix in ('.csv', '.tsv') and (kind in ('text/html', 'application/xhtml+xml')
             or re.match(r'\s*<(?:!doctype\s+html|html|head|body)\b', text, re.I)):
-        raise ExecutionError('unexpected_html', '数据文件链接返回了 HTML 网页，可能是登录页或访问拦截页；不能当作 CSV')
+        raise ExecutionError('unexpected_html', '数据文件链接返回了 HTML 网页，不能当作 CSV')
     return text, encoding
 
 
@@ -147,6 +135,7 @@ def fetch(url, *, deadline=None, cancelled=lambda: False, blocked_sites=()):
             return data, text, {
                 'requested_url': original_url, 'final_url': url, 'redirects': redirects,
                 'filename': filename, 'content_type': content_type, 'encoding': text_encoding,
+                'detected_type': file_type(data, content_type),
                 'original_sha256': hashlib.sha256(data).hexdigest(), 'size': len(data),
                 'fetched_at': time.time(), 'etag': response.getheader('ETag'),
                 'last_modified': response.getheader('Last-Modified'),

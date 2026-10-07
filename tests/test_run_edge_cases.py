@@ -1,4 +1,4 @@
-"""真实运行中遇到过的边界情况：用量未知的失败请求、较早的阅读记录在上下文收起后仍有提示、回读不能占用存证的保留额度。
+"""真实运行中遇到过的边界情况：用量未知的失败请求、来源目录不重复推送原文、回读不能占用存证的保留额度。
 
 只验证确定的规则，不评价研究策略好坏。"""
 import json
@@ -15,7 +15,7 @@ def test_failed_attempt_without_usage_is_explicitly_unknown(tmp_path):
     saved = store.state['calls'][0]
     assert saved['usage_unknown'] is True
     assert saved['input_tokens'] is None and saved['output_tokens'] is None
-def test_recent_read_hints_survive_exchange_eviction_without_unread_text(tmp_path):
+def test_source_catalog_does_not_inject_read_previews_or_unread_text(tmp_path):
     cfg = sr.SimpleConfig()
     store = sr.open_run(tmp_path / 'run', query='q', run_id='r')
     context = sr.ToolContext(store, cfg, search_fn=lambda _: [_doc(raw='READABLE ' * 150 + 'HIDDEN_TAIL ' * 700)])
@@ -23,13 +23,11 @@ def test_recent_read_hints_survive_exchange_eviction_without_unread_text(tmp_pat
     result, ok = context.read_source({'source_ref':'s1', 'range':'0-1000'})
     assert ok
     context.receipts.append({'tool':'read_source','ok':True,'payload':result})
-    hints = sr._recent_read_hints(context)
-    assert hints and len(hints) <= 6
-    assert '完整连续quote' in '\n'.join(hints)
-    assert 'HIDDEN_TAIL' not in '\n'.join(hints)
     messages = sr._build_messages([],context,[],[],seconds_left=20)
-    assert all(hint in messages[-1]['content'] for hint in hints)
-    assert len('\n'.join(hints)) < 2000
+    content = json.dumps(messages, ensure_ascii=False)
+    assert '【可引用来源】' in content and 's2' in content
+    assert 'READABLE' not in content and 'HIDDEN_TAIL' not in content
+    assert '【最近已读、可直接存证的片段】' not in content
 
 
 def test_inspection_cannot_consume_reserved_saving_slots(tmp_path):

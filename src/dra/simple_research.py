@@ -25,12 +25,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from dra import events, llm, timing, research_prompts
 from dra import evidence_judge
-from dra.execution import ExecutionConfig
+from dra.execution import ExecutionConfig, ExecutionError
 from dra import execution_tools
+from dra import browser
+from dra.browser import BrowserConfig
 from dra import artifacts as artifact_store
 from dra.evidence_judge import JudgeConfig
 from dra.quote_binding import bind_quote
-from dra.evidence_quotes import EvidenceQuote, add_context, MAX_QUOTES, MAX_QUOTE_CHARS
+from dra.evidence_quotes import EvidenceQuote, add_context, MAX_QUOTES, MAX_QUOTE_CHARS, MAX_CONTEXT_CHARS
 from dra.research_delegation import DelegationManager
 from dra.prompt_time import current_research_time, time_hint
 from dra.condense import condense_text
@@ -51,13 +53,13 @@ from dra.tools import UrlFetchError, fetch_url_content, validate_public_url
 
 
 _EXCERPT_CHARS = 700  # 历史基础编号的粒度；新阅读窗口不再按它拆开展示
-_MAX_FIND_CHARS = 200  # find 查询串上限：长查询要显式拒绝，不能靠放大窗口来容纳
+_MAX_FIND_CHARS = 1000  # find 查询串上限：长查询要显式拒绝，不能靠放大窗口来容纳
 _MCP_VISIBLE_CHARS = 8000  # 单次 MCP 回执的原文展示总量；余下内容可按来源继续读取。
 
-_FIND_MAX_MATCHES = 10
+_FIND_MAX_MATCHES = 20
 """一次 find 最多列几条命中："地址清单"必须是有界的——常见词在长文里能有几千次命中。"""
 
-_FIND_CONTEXT_CHARS = 1200
+_FIND_CONTEXT_CHARS = 3000
 """每条命中的上下文上限：优先完整短段落，否则取邻近行并围绕命中裁剪。
 
 这段上下文会登记为**可引用区间**（展示什么就授权什么），所以它同时是"能引多少"的边界。
@@ -90,17 +92,22 @@ _SUBAGENT_MAX_PARALLEL = 3
 常见的 3–5 个子问题；再高收益递减，且第三方接口本身有限流。
 """
 
-_CALL_MAX_RETRIES = 1
+_CALL_MAX_RETRIES = 10
 """一次账本调用允许的 HTTP 重试次数（研究回合、收尾、修稿、核查共用）。
 
-**为什么不是 0**：模型接口偶尔在连接阶段断开（约 5 秒后 SSL EOF，没有任何回执）。
-不重试的话，一次瞬时抖动就会让整项研究失败。llm 层自己的默认也是 1（`DEFAULT_MAX_RETRIES`）。
+用户于 2026-10-06 将研究模型的重试上限由 1 次提高到 10 次：
+首次请求加失败后最多 10 次重试，共最多 11 次 HTTP 尝试。
+这里显式传给研究模型，不改变搜索、网页摘要、会话压缩及视觉等独立重试配置。
 
-**语义边界（不放松记账）**：这里的意思是"一次预算调用最多两次 HTTP 尝试"，不是
+**语义边界（不放松记账）**：这里的意思是"一次预算调用最多 11 次 HTTP 尝试"，不是
 "重试不记账"——账本仍按一次调用记录。连接阶段失败的代价上限是一次重复请求；用它换
 整轮不因一次抖动归零。429/5xx 与超时也走同一条退避重试，仍受 request_timeout 与
 整轮 deadline 截断。
 """
+
+
+from dra import vision
+from dra.vision import VisionConfig
 
 
 class SimpleConfig(BaseModel):
@@ -117,8 +124,10 @@ class SimpleConfig(BaseModel):
 
     # 复用现有适配层：模型、provider、检索源与 top_k 都从 worker 档取。
     adapter: SubAgentConfig = Field(default_factory=SubAgentConfig)
+    vision: VisionConfig = Field(default_factory=lambda: VisionConfig(enabled=False))
     evidence_judge: JudgeConfig = Field(default_factory=JudgeConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    browser: BrowserConfig = Field(default_factory=BrowserConfig)
     source_mode: Literal["web", "library", "mixed"] = "web"
     library_selection: dict = Field(default_factory=dict)
     library_rerank: bool = False
@@ -128,8 +137,12 @@ class SimpleConfig(BaseModel):
     """本 Agent 计次工具的上限；None 不限制次数，也不启用存证预留区。"""
     max_invalid_turns: int = 3
     """连续全无效回合熔断阈值。"""
-    wall_timeout_s: float | None = 600.0
+    wall_timeout_s: float | None = 1200.0
     """整个研究的墙钟预算。None = 不限，由外层 deadline 控制。"""
+    wrapup_reserve_s: float = Field(default=120.0, ge=0)
+    """总墙钟内预留的交稿时间；0 关闭预留，不延长总预算。"""
+    summary_timeout_s: float = Field(default=120.0, gt=0)
+    summary_max_retries: int = Field(default=1, ge=0)
     max_cards_per_call: int = 50
     """**单次** ``save_evidence`` 最多登记的卡片数，不是运行总量上限。
 
@@ -149,6 +162,8 @@ class SimpleConfig(BaseModel):
     传整数则照常作为该次调用的硬上限（下限 512，不设人为上限）。
     Web 与脚本经 ``runtime_config.to_simple_config`` 使用 32768，原因见该处注释。
     """
+    summary_max_output_tokens: int | None = None
+    wrapup_max_output_tokens: int | None = None
     reserve_wrapup_calls: int = 1
     """为「预算收尾回合」预留的模型调用数。
 
@@ -163,11 +178,11 @@ class SimpleConfig(BaseModel):
     把最后几手用在**存证与收尾**上。0 = 关闭。
     """
 
-    search_snippet_chars: int = 600
-    """search_sources 每条结果展示给模型的摘要上限（字符）。
+    search_snippet_chars: int | None = None
+    """search_sources 每条结果展示给模型的摘要上限（字符）；默认不按长度截断。
 
-    网页检索的摘要多是服务商挑出的相关片段，600 字符够判断要不要读；评测里文档库只给
-    开头一段时可调大，与评测的官方设置对齐。
+    保留服务商选出的摘要内容；显式配置数值时仍按该值展示，用于沿用固定评测配置。
+    服务商或检索适配器自身的摘要长度限制由对应路径控制。
     """
 
     storage_max_chars: int | None = None
@@ -184,30 +199,36 @@ class SimpleConfig(BaseModel):
     对不带参数、``cursor``、``range`` 三条路径一视同仁。
     传整数则照常按该窗口分页，并给出准确的 ``next_cursor`` / ``has_more``。
 
-    注意：关掉它意味着大页面可能被整份灌进上下文并被服务端以超窗拒绝——这是刻意
-    接受的代价，限额回归时按实测重新收紧。
+    开启会话整理时，另由请求容量协调器按剩余空间分页完整回执；不新增固定字符上限。
     """
 
     archive_mode: Literal["immediate", "keep", "pressure"] = "immediate"
-    """原文回执什么时候退出工作上下文（三态；产品默认仍为 ``immediate``，行为不变）。
+    """原文回执什么时候退出工作上下文（三态；未开启会话压缩时默认立即归档）。
 
     - ``immediate``（默认）＝现状**语义淘汰**：来源成功产出证据卡且本次无拒收，下一轮
       装配把它的原文回执换成一行固定存根；
     - ``keep`` ＝不收起：已投递阅读回执保持全文（对照：稳定前缀与输入增长的代价）；
     - ``pressure`` ＝平时保留；请求快装不下时（见下方 ``pressure_*``）一批收起旧阅读回执。
 
+    开启会话压缩后，``immediate`` 按 ``pressure`` 执行：到容量边界才批量改写历史，
+    避免每次存证都破坏已发送请求的稳定前缀。``keep`` 的原文保留选择不变。
+
     三者共用同一套存根/代次机制，区别只有"谁按收起按钮"：看这份材料是否已产出
     证据（immediate），或上下文是否快满（pressure）。
 
-    原文没有消失：磁盘快照、已读区间（``read_ranges``）与卡片都不受影响，显式
-    ``range``/``find`` 仍可读回；被拦的只有"不带参数把整篇重新灌回来"。
+    原文没有消失：磁盘快照、已读区间（``read_ranges``）与卡片都不受影响。
+    主动重读已归档来源时，无定位参数复用已有压缩视图，其余从头读取原文；``range``/``find`` 读原文局部。
+    新回执保持可见至下一次符合归档条件，旧回执仍保持收起。
     """
     compaction_enabled: bool = False
+    context_window_mode: Literal["manual", "auto"] = "manual"
+    context_capabilities: dict = Field(default_factory=dict)
     context_window_tokens: int | None = None
-    """模型输入容量（``pressure`` 必须显式配置；``None`` ＝未配置）。
+    """手动总工作窗口（含输出）；None 表示没有设置手动工作目标。
 
-    不猜通用阈值：容量未知就显式给并披露依据（运行配置既有 ``agentic.context_window=64000``）。
-    可用空间 ＝ 本值 − ``pressure_reserve_tokens``；容量估算不是输出/次数限制。
+    自动模式须有连接能力声明；未知时显式填写并披露依据。
+    manual 模式的工作窗口；auto 使用连接确认的容量。可用输入空间扣除本次实际输出额度。
+    另有路由总窗口/独立输入上限时取更小值；不按型号名字猜容量。
     """
     pressure_reserve_tokens: int = 12_000
     """回复与推理链预留（初值，实验可调）。``max_output_tokens`` 关闭时输出不设上限，
@@ -295,11 +316,19 @@ class SimpleConfig(BaseModel):
             raise ValueError("pressure_protect_recent_reads 不能为负")
         if self.estimate_chars_per_token <= 0:
             raise ValueError("estimate_chars_per_token 必须大于 0")
+        if (self.context_capabilities.get("provider"), self.context_capabilities.get("model")) != (self.adapter.provider, self.adapter.model):
+            from dra.provider_registry import capacity_snapshot
+            self.context_capabilities = capacity_snapshot(self.adapter.provider, self.adapter.model)
         if self.archive_mode == "pressure" or self.compaction_enabled:
-            if self.context_window_tokens is None:
-                raise ValueError("pressure / 会话整理必须显式配置 context_window_tokens（容量未知不猜默认）")
-            if self.context_window_tokens <= self.pressure_reserve_tokens:
-                raise ValueError("context_window_tokens 必须大于 pressure_reserve_tokens")
+            from dra.context_budget import capacity
+            if capacity(self)["input_budget_tokens"] is None:
+                raise ValueError("该连接容量未知：请显式配置工作窗口，或填写已确认的模型能力")
+        for phase in ("research", "compact", "condense", "wrapup"):
+            from dra.context_budget import capacity
+            capacity(self, phase)
+        for value in (self.summary_max_output_tokens, self.wrapup_max_output_tokens):
+            if value is not None and value < 512:
+                raise ValueError("各阶段输出额度至少为 512 或留空继承研究额度")
         for name in ("storage_max_chars", "read_window_chars"):
             value = getattr(self, name)
             if value is not None and value < 1:
@@ -309,6 +338,12 @@ class SimpleConfig(BaseModel):
         if self.max_output_tokens is not None and self.max_output_tokens < 512:
             raise ValueError("max_output_tokens 至少为 512 或 None（不设上限）")
         return self
+
+    def effective_archive_mode(self) -> Literal["immediate", "keep", "pressure"]:
+        """会话压缩与原文归档共用容量边界，平时只追加历史。"""
+        if self.compaction_enabled and self.archive_mode == "immediate":
+            return "pressure"
+        return self.archive_mode
 
     def effective_tool_reserve(self) -> int:
         """实际生效的工具保留区。
@@ -387,6 +422,7 @@ class SourceSnapshot(BaseModel):
     mcp: dict | None = None
     download: dict | None = None
     computation: dict | None = None
+    observation: dict | None = None
     origin: dict | None = None
     revalidated_at: float | None = None
     """取得范围未覆盖来源末尾时为 True；不得把「读到这里」说成全文结束。"""
@@ -409,6 +445,7 @@ class EvidenceCard(BaseModel):
     source_url: str
     source_title: str = ""
     source_kind: str = "original"
+    observation: dict | None = None
     published_at: str | None = None
     location: str = ""
     """定位描述，如 ``chars=120-380``；属于该快照的已读范围。"""
@@ -550,7 +587,7 @@ class RunStore:
 
     def write_source(self, doc: RetrievedDoc, *, original_bytes: bytes | None = None,
                      mcp: dict | None = None, download: dict | None = None,
-                     computation: dict | None = None) -> tuple[SourceSnapshot, str]:
+                     computation: dict | None = None, observation: dict | None = None) -> tuple[SourceSnapshot, str]:
         """先落盘再登记。返回 (快照, 全文)。
 
         默认完整保存上游正文；显式配置 ``storage_max_chars`` 时才截断，
@@ -598,11 +635,33 @@ class RunStore:
             mcp=mcp,
             download=download,
             computation=computation,
+            observation=observation,
         )
         with self._lock:
             self.state["sources"].append(snapshot.model_dump())
             self.commit()
         return snapshot, raw
+
+    def write_original(self, doc: RetrievedDoc, data: bytes, *, download: dict | None = None, mcp: dict | None = None):
+        """An immutable original with no invented quotable text."""
+        self.check_open()
+        metadata = doc.document or download
+        if metadata is None or hashlib.sha256(data).hexdigest() != metadata['original_sha256']:
+            raise ValueError('原件缺失或哈希不符')
+        from dra.durable import atomic_bytes
+        with self._lock:
+            ref = f"s{self._next_source}"
+            self._next_source += 1
+            atomic_bytes(self.sources_dir / f"{ref}.original", data)
+            snapshot = SourceSnapshot(ref=ref, url=doc.source_url or '', title=doc.title or '',
+                snapshot_kind='original', fetched_at=time.time(), document=doc.document, download=download, mcp=mcp)
+            self.state['sources'].append(snapshot.model_dump())
+            self.commit()
+        return snapshot
+
+    def original_source(self, ref: str) -> SourceSnapshot | None:
+        return next((SourceSnapshot.model_validate(s) for s in self.state['sources']
+                     if s['ref'] == ref and s['snapshot_kind'] in ('full', 'original')), None)
 
     def register_summary(self, doc: RetrievedDoc) -> SourceSnapshot:
         """登记检索摘要快照。它不是引用真相源，只能当线索。"""
@@ -649,6 +708,8 @@ class RunStore:
             return None
         for item in reversed(self.state["sources"]):
             if (item["snapshot_kind"] == "full" and normalize_url(item["url"]) == target
+                    and not item.get("observation") and not item.get("computation")
+                    and (item.get("download") or {}).get("detected_type") != "text/html"
                     and (not item.get("origin") or item.get("revalidated_at"))):
                 return item["ref"]
         return None
@@ -1207,7 +1268,7 @@ UPDATE_PLAN_SCHEMA: dict = {
                             "type": "object", "properties": {
                                 "id": {"type": "string"}, "text": {"type": "string"},
                                 "kind": {"type": "string", "enum": ["goal", "constraint", "delivery"]},
-                                "output_formats": {"type": "array", "items": {"type": "string", "enum": list(artifact_store.OutputFormat.__args__)}, "maxItems": 10}},
+                                "output_formats": {"type": "array", "items": {"type": "string"}, "maxItems": 10}},
                             "required": ["id", "text", "kind"]}},
                         "reason": {"type": "string"},
                     },
@@ -1250,15 +1311,17 @@ TOOL_SCHEMAS: list[dict] = [
                 "search_sources 返回的编号；url 用于**用户直接给出的链接**或只有摘要的来源，"
                 "不需要先搜索。range 与 find 二选一：range 如 \"0-2000\" 或 "
                 "\"2000-\"（支持负数表示末尾，如 \"-2000-\"）；find 按原文子串定位，"
-                "返回**命中清单**：默认最多 10 条，每条给出字符位置、行号与一小段上下文"
+                f"返回**命中清单**：默认最多 {_FIND_MAX_MATCHES} 条，每条给出字符位置、行号与最多 {_FIND_CONTEXT_CHARS} 字符上下文"
                 "（上下文可直接引用）；还有更多命中时回执给 next_cursor，用 find+cursor 翻页。"
                 "返回带 excerpt_no 的可引用片段。"
-                "单次回执只展示有限窗口（超出会被截断并给出 next_cursor），"
+                "若配置了单次阅读窗口，超出窗口会给出 next_cursor，"
                 "用 cursor=next_cursor 或 range 继续读后文。"
                 "长文整篇读入会占用大量上下文（开启压缩时，超过阈值的长文不带 range/find/cursor "
                 "首读先给压缩视图，要多花一次模型调用）；已知要找什么时，长文优先用 find 或 range "
                 "直接定位，短文可整篇读。"
                 "首次读取会把正文落盘为可引用快照；同一 ref 或同一 URL 重复读取不会重新抓取。"
+                "已归档来源仍可主动重读：只给 source_ref 或 url 时，已压缩的长文返回缓存的压缩视图，"
+                "其余来源从头读取原文；可给 find/range 查看压缩未覆盖的原文或其他局部。"
                 "取得的是**这次取回的这份内容**，不保证覆盖整站或原页面全量。"
             ),
             "parameters": {
@@ -1287,7 +1350,7 @@ TOOL_SCHEMAS: list[dict] = [
                         "description": (
                             "按原文**逐字**子串列出命中清单（字符位置、行号、邻近段落/行上下文）；"
                             "支持 a|b|c 多候选（任一命中都算），不支持正则；"
-                            "最多 10 条，还有更多时用 find+cursor 翻页；"
+                            f"查询串最多 {_MAX_FIND_CHARS} 字符；最多 {_FIND_MAX_MATCHES} 条命中，还有更多时用 find+cursor 翻页；"
                             "每条 context_next_cursor 可不带 find 继续读后文，截断处不要当完整句子"
                         ),
                     },
@@ -1312,7 +1375,7 @@ TOOL_SCHEMAS: list[dict] = [
                 "系统从你实际读过的快照逐段定位并补有限附近上下文，交给 Jev（自动引文核验模型）联合判断。"
                 "跨段/跨来源依据分别提交，不拼接成一段；远处论据须主动补读后提交。"
                 "任一段匹配失败整卡不保存。多处匹配在对应段用相同 quote + candidate_id 重交全部依据。"
-                "最多 8 段、原话合计 24000 字符，程序自动上下文最多 6000 字符。"
+                f"最多 {MAX_QUOTES} 段、原话合计 {MAX_QUOTE_CHARS} 字符，程序自动上下文最多 {MAX_CONTEXT_CHARS} 字符。"
             ),
             "parameters": {
                 "type": "object",
@@ -1493,7 +1556,9 @@ SEND_RESEARCH_SCHEMA = _collaboration_schema("send_research_message",
     "向运行中的直属子任务追加信息，或子任务向 parent 回报重要进展。消息在下次模型请求生效；结束任务不可续聊。",
     {"target":{"type":"string"}, "message":{"type":"string", "maxLength":6000}}, ("target","message"))
 WAIT_RESEARCH_SCHEMA = _collaboration_schema("wait_research",
-    "没有独立工作时等待子任务新消息或完成，最多30秒；不要重复短轮询。",
+    "没有独立工作时等待子任务新消息或完成，最多30秒；不要重复短轮询。"
+    "只返回所选任务的 ID、状态和能否接收消息；不指定编号则返回所有任务状态。"
+    "完整结论会自动通知，需要回查时用 inspect_research(view=delegations, delegation_id=子任务编号)。",
     {"delegation_ids":{"type":"array","items":{"type":"string"}}, "timeout_s":{"type":"number","minimum":0,"maximum":30}})
 CANCEL_RESEARCH_SCHEMA = _collaboration_schema("cancel_research",
     "取消不再需要的直属子任务，说明原因；取消请求不等于线程已经结束。",
@@ -1555,8 +1620,9 @@ EXECUTION_FINISH_SCHEMA = deepcopy(LEAD_FINISH_SCHEMA)
 _file_finish = EXECUTION_FINISH_SCHEMA["function"]["parameters"]
 _file_finish["required"] = [key for key in _file_finish["required"] if key != "draft"]
 _file_finish["properties"].update({
-    "draft_file": {"type": "string", "description": "与 draft 二选一：/workspace/work 下已存在的直接 Markdown 文件，最多 256 KiB。"},
-    "artifacts": {"type": "array", "maxItems": 8, "items": artifact_store.ArtifactRequest.model_json_schema()},
+    "draft_file": {"type": "string", "description": "与 draft 二选一：/workspace/work 下已存在的直接 Markdown 文件。"},
+    "artifacts": {"type": "array", "items": artifact_store.ArtifactRequest.model_json_schema(),
+                  "description": "交付文件列表；path 可为 /workspace/output/ 下路径、output/相对路径或文件名。"},
 })
 EXECUTION_FINISH_SCHEMA["function"]["description"] += (
     " 可用 draft_file 交站内正文。交付文件须先生成，再声明 output 文件；不能只交文件省略完整正文。"
@@ -1601,6 +1667,47 @@ _EVIDENCE_WRAPUP = """研究已结束，卡片不能再修正：Jev 判为依据
 # 研究阶段：怎么存证 + 怎么用证据；收尾阶段不能再存证，只给后者和收尾规则。
 _EVIDENCE_USE_INSTRUCTIONS = _EVIDENCE_HEADER + _EVIDENCE_SAVE + _EVIDENCE_USE + "\n"
 _WRAPUP_EVIDENCE_INSTRUCTIONS = _EVIDENCE_HEADER + _EVIDENCE_USE + _EVIDENCE_WRAPUP + "\n"
+
+def _evidence_mode_prompt(prompt: str, *, enabled: bool) -> str:
+    """Adapt the actual request after profile/frozen hooks; keep base prompts intact."""
+    if enabled:
+        return prompt
+    prompt = prompt.replace(_EVIDENCE_HEADER, "【存证与引用核对】\n")
+    prompt = prompt.replace(_EVIDENCE_USE, _EVIDENCE_USE[_EVIDENCE_USE.index("写作时"):])
+    prompt = prompt.replace(_EVIDENCE_WRAPUP,
+        "研究已结束，卡片不能再修正；只写引文真正能支撑的部分，缺失依据在 gaps 中说明。\n")
+    prompt = prompt.replace("补充有限附近上下文后交给 Jev 联合判断。", "并补充附近上下文供你核对。")
+    # Judge paragraphs in current and historical frozen profiles. Keep all other
+    # evidence, format and strategy instructions exactly as supplied.
+    judge_paragraphs = (
+        "Jev 判为 insufficient（依据不足）或 contradicted（矛盾）时，补读、补齐必要引文或修正结论后重新 save_evidence，\n"
+        "再看新卡的 Jev 结果；交稿引用修正后的卡号。不要反复原样重存。\n",
+        "开启 Jev 时，judgment 判断 claim 是否被全部 quotes 及其 context 联合支持；accepted 仅表示原话已存档。\n"
+        "insufficient（依据不足）或 contradicted（矛盾）须补读、补齐必要引文或修正结论后重新 save_evidence，\n"
+        "再看新卡的 Jev 结果；交稿引用修正后的卡号。不要反复原样重存，不要用自己的解释替代 Jev 判定。\n"
+        "只有 status=complete 且 relation=supported 表示引文支持；其他状态是未核验，不代表通过或证据错误。\n",
+        "Jev 暂时故障由系统在同次存证内对原卡有界补判；最终仍未核验时保留该状态，不因服务故障改写结论或原样重存。\n",
+        "Jev 不判断来源真伪/时效，不返回原因文字；不要编造它的解释。\n",
+    )
+    for paragraph in judge_paragraphs:
+        prompt = prompt.replace(paragraph, "")
+    return prompt + ("\n【本轮存证模式】JEV 核验已关闭，不会自动调用核验模型；无需等待 judgment。"
+        "accepted=true 表示原话已匹配并存档，不表示结论已被核验。你须对照全部引文核对事实和限定，"
+        "只用实际支撑答案的证据；原文匹配、出处绑定和卡号引用检查仍执行。\n")
+
+
+def _evidence_mode_schemas(schemas: list[dict], *, enabled: bool) -> list[dict]:
+    if enabled:
+        return schemas
+    schemas = deepcopy(schemas)
+    for item in schemas:
+        function = item["function"]
+        if function["name"] == "save_evidence":
+            function["description"] = function["description"].replace(
+                "交给 Jev（自动引文核验模型）联合判断。", "供你核对；本轮不调用 JEV 核验模型。"
+            ).replace("交给 Jev 联合判断。", "供你核对；本轮不调用 JEV 核验模型。")
+    return schemas
+
 
 _HARD_RULES_HEAD = (
     "硬规则（必须遵守。其中引文是否逐字出自已读内容由系统在存证时检查，不符合整卡拒收；"
@@ -1689,8 +1796,10 @@ def _judgment_for_model(judgment) -> dict | None:
 def _quote_for_model(quote) -> dict:
     row = {"quote": quote.quote, "source_ref": quote.source_ref, "source_title": quote.source_title,
            "location": quote.location}
-    if quote.source_kind == "computation":
-        row["source_kind"] = "computation"
+    if quote.source_kind != "original":
+        row["source_kind"] = quote.source_kind
+    if quote.observation:
+        row["observation"] = quote.observation
     if quote.published_at:
         row["published_at"] = quote.published_at
     row["context"] = [block.model_dump() for block in quote.context]
@@ -1747,10 +1856,18 @@ class ToolContext:
         condense_fn=None,
     ):  # noqa: D417
         self.store = store
+        # model_copy may select a different child adapter without running validators.
+        if (config.context_capabilities.get("provider"), config.context_capabilities.get("model")) != (config.adapter.provider, config.adapter.model):
+            config = SimpleConfig.model_validate(config.model_dump())
         self.config = config
+        self.image_exposures = {}
+        self.image_assets = {}
+        self.browser = None
+        self.pending_image_messages = []
         self.pending_artifacts = []
         self.pending_artifact_errors = []
         self.accepted_artifacts = False
+        self.artifact_repair_draft = None
         self.execution = None
         self.execution_capability = {}
         self.execution_materials = []
@@ -1790,6 +1907,7 @@ class ToolContext:
         """每个 Agent 独立的保留区单卡回读记录；普通阶段的计费回读不消耗它。"""
         self.saved_card_ids: list[str] = []  # 本上下文实际保存的卡；fork 不共享归属。
         self.last_rejections: list[str] = []
+        self.rejection_items: dict[str, dict] = {}
         self.receipts: list[dict] = []
         """每次工具调用的回执（tool/ok/args/payload），供诊断与脚本化测试读取。"""
         self.read_receipt_seq = 0
@@ -1801,8 +1919,15 @@ class ToolContext:
         self.unsettled_rejected_refs: set[str] = set()
         """上次存证同源有拒收且尚无后续干净存证的来源：压力收起不碰它。"""
         self.usage_anchor: tuple[int, int] | None = None
+        self.token_calibration: dict[str, dict] = {}
+        self.summary_note_cache: dict[str, dict] = {}
+        self.summary_note_inputs: dict[str, dict] = {}
+        self.latest_work_notes: dict = {}
         """上一次真实请求的 (input_tokens, request_chars)；token 估算优先按它换算。"""
         self.compaction_checkpoints: list[str] = []
+        self.context_history_ids: set[str] = set()
+        self.tool_result_pages: dict[str, list[tuple[int, int]]] = {}
+        self.tool_page_request = None
         self.compaction_attempts: set[str] = set()
         self.pressure_batch_count = 0
         """压力收起批次数（每装配最多一批）；用于事件与 action_id 去重。"""
@@ -1839,9 +1964,9 @@ class ToolContext:
         self.archived: set[str] = set()
         """已归档的来源 ref：原文已退出**工作上下文**（不是删除）。
 
-        语义淘汰，不是机械淘汰：某来源成功产出证据卡后，它的原文不再每轮重复投喂，
-        换成一行存根。磁盘快照、已读区间、卡片都不受影响，显式 ``range``/``find``
-        仍可随时读回。**每份上下文各有一份**——子 Agent 的归档不影响主线。
+        某来源成功产出证据卡后，历史原文回执不再每轮重复投喂，换成存根。
+        磁盘快照、已读区间、卡片都不受影响，仍可主动读回全文或局部。
+        **每份上下文各有一份**——子 Agent 的归档不影响主线。
         """
         self.archive_generations: dict[str, int] = {}
         """每次成功归档推进代次，只收起此前回执；显式重读留到下一次成功存证。"""
@@ -1849,8 +1974,7 @@ class ToolContext:
         """本 Agent 每次归档当时的固定存根；以后共享账本变化不回写历史。"""
         self.message_view = None
         self.saved_excerpts: set[tuple[str, int]] = set()
-        """已被卡片用掉的 ``(正文 ref, excerpt_no)``。卡片是共享账本，所以这份也共享
-        （子 Agent 存过的片段，主线不该再把它当"未用片段"推荐一次）。"""
+        """已被卡片引用的 ``(正文 ref, excerpt_no)``；随共享证据账本记录。"""
         # 共享账本字典（readings / aliases / sessions / body_cache / queries）会被并行
         # 子 Agent 访问：fork 之间共享**同一把**锁（见 fork_for_subagent），只护住
         # "查—改—写"那几行，不护住网络 I/O，否则并行就没有意义了。
@@ -1886,7 +2010,10 @@ class ToolContext:
                                       "library_rerank": self.config.library_rerank,
                                       "mcp_servers": self.config.mcp_servers,
                                       "blocked_sites": self.config.blocked_sites,
-                                      "skill_bundle": self.config.skill_bundle}),
+                                      "skill_bundle": self.config.skill_bundle,
+                                      "execution": self.config.execution,
+                                      "vision": self.config.vision,
+                                      "browser": self.config.browser}),
             search_fn=self.search_fn,
             ref_resolver=self.ref_resolver,
             budget=budget,
@@ -1903,16 +2030,20 @@ class ToolContext:
         child.delegation_id = delegation_id
         child.parent_call_id = parent_call_id
         child._lock = self._lock
+        child.execution_capability = deepcopy(self.execution_capability)
+        child.execution_owner = getattr(self, 'execution_owner', self)
+        child.execution_materials = self.execution_materials
+        child.execution_files = self.execution_files
         return child
 
     @property
     def budget_deadline(self) -> float | None:
-        """run 墙钟 deadline（单调时钟）；没有预算时返回 None。"""
-        return self.budget.deadline if self.budget is not None else None
+        """研究阶段截止时间（不包含收尾预留）；没有预算时返回 None。"""
+        return self.budget.research_deadline if self.budget is not None else None
 
     def budget_expired(self) -> bool:
-        """墙钟是否已到（没有预算时为 False）。"""
-        return bool(self.budget is not None and self.budget.expired())
+        """研究时间是否已到（没有预算时为 False）。"""
+        return bool(self.budget is not None and self.budget.research_expired())
 
     def _commit_ledger(self) -> None:
         """落盘账本；失败转成 LLMPersistenceError（不能当成网络/抓取失败重试或吞掉）。"""
@@ -2111,22 +2242,80 @@ class ToolContext:
                 return _ERR + 'range 必须是字符串，如 "0-2000"。', False
 
         if raw_url:
-            reading = self._reading_for_url(raw_url)
+            from dra.file_sources import acquire, receipt
+            import mimetypes
+            from urllib.parse import urlsplit
+            kind = mimetypes.guess_type(urlsplit(raw_url).path)[0] or ''
+            file_hint = kind.startswith(('image/', 'audio/', 'video/')) or kind in (
+                'application/zip', 'application/gzip', 'application/vnd.oasis.opendocument.spreadsheet',
+                'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'application/vnd.openxmlformats-officedocument.presentationml.presentation')
+            from dra.file_sources import execution_available
+            file_capability = execution_available(self) or (self.config.vision.enabled and kind.startswith('image/'))
+            if args.get('original') is True or (file_hint and file_capability):
+                try:
+                    source, _, _ = acquire(self, raw_url)
+                except ExecutionError as exc:
+                    return _ERR + str(exc), False
+                if not source.quotable:
+                    return json.dumps(receipt(source, self), ensure_ascii=False), True
+                reading = self._local_reading(source.ref)
+            else:
+                reading = self._reading_for_url(raw_url)
             if isinstance(reading, str):
                 return reading, False
             # 同一 URL 重复读取不再抓取；按 URL 或按它给出的 ref 都能续读。
-            with self._lock:
-                self.sessions[raw_url] = reading.snapshot.ref
-                self.sessions[normalize_url(raw_url)] = reading.snapshot.ref
+            if (reading.snapshot.download or {}).get('detected_type') != 'text/html':
+                with self._lock:
+                    self.sessions[raw_url] = reading.snapshot.ref
+                    self.sessions[normalize_url(raw_url)] = reading.snapshot.ref
         else:
             entry = next((s for s in self.store.state["sources"] if s["ref"] == ref), None)
             if entry is None:
                 return _ERR + f"source_ref「{ref}」不存在。", False
             document = entry.get("document")
+            if entry['snapshot_kind'] == 'original':
+                if document and document['version_id'] not in self.config.library_selection.get('version_ids', []):
+                    return _ERR + '该原件不在本次选定资料内。', False
+                if not document and self.config.source_mode == 'library':
+                    return _ERR + '本次仅研究所选资料。', False
+                from dra.file_sources import original_bytes, receipt
+                if args.get("original") is True:
+                    try:
+                        original_bytes(self.store, self.store.original_source(ref))
+                    except (ExecutionError, OSError) as exc:
+                        return _ERR + str(exc), False
+                return json.dumps(receipt(self.store.original_source(ref), self), ensure_ascii=False), True
             if document and document["version_id"] not in self.config.library_selection.get("version_ids", []):
                 return _ERR + "该文档版本不在本次选定资料内。", False
-            if not document and not entry.get("computation") and self.config.source_mode == "library":
+            observation = entry.get('observation')
+            observation_parent = self.store.original_source(observation['original_source_ref']) if observation else None
+            if observation_parent and observation_parent.document and observation_parent.document['version_id'] not in self.config.library_selection.get('version_ids', []):
+                return _ERR + '视觉观察原件不在本次选定资料内。', False
+            if not document and not entry.get("computation") and self.config.source_mode == "library" and not (observation_parent and observation_parent.document):
                 return _ERR + "本次仅研究所选资料，不允许读取网页。", False
+            if args.get("original") is True:
+                from dra.file_sources import original_bytes, receipt
+                if document or entry.get("download"):
+                    if document and entry["snapshot_kind"] == "summary":
+                        reading = self._fetch_full(entry)
+                        if isinstance(reading, str):
+                            return reading, False
+                        ref = reading.snapshot.ref
+                    source = self.store.original_source(ref)
+                    try:
+                        original_bytes(self.store, source)
+                    except (ExecutionError, OSError) as exc:
+                        return _ERR + str(exc), False
+                    return json.dumps(receipt(source, self), ensure_ascii=False), True
+                if entry.get("computation") or observation:
+                    return _ERR + "该来源是计算结果或视觉观察，不是文件原件；请使用对应输入原件的 source_ref。", False
+                if not entry.get("url"):
+                    return _ERR + "该来源没有原件字节或下载 URL，不能获取原件。", False
+                # Return a separate original ref without rebinding the old text,
+                # its read exposures, aliases or citation locations.
+                return self._read_source({**args, "source_ref": None, "url": entry["url"]})
             key = self.sessions.get(ref)
             reading = self.readings.get(key) if key else None
             if reading is None:
@@ -2135,8 +2324,16 @@ class ToolContext:
                     persisted = self.store.persisted_full_ref(entry["url"], document)
                     if persisted is not None:
                         reading = self._local_reading(persisted)
-                    else:
+                    elif document or normalize_url(entry['url']) in self.body_cache:
                         reading = self._fetch_full(entry)
+                    else:
+                        result, ok = self._read_source({**args, 'source_ref': None, 'url': entry['url']})
+                        if ok:
+                            payload = json.loads(result)
+                            self.aliases[ref] = payload['source_ref']
+                            payload['summary_ref'] = ref
+                            return json.dumps(payload, ensure_ascii=False), ok
+                        return result, ok
                     if isinstance(reading, str):
                         return reading, False
                 else:
@@ -2152,15 +2349,19 @@ class ToolContext:
         with self._lock:
             self.sessions[body_ref] = body_ref
 
-        # 归档护栏：已存证的来源不再被"不带参数"整篇灌回上下文（那会当场撤销归档）。
-        # 显式 range/find/cursor 照常放行——那是精确、有界、模型主动要的。
+        # 归档只收起历史回执。无定位参数重读时复用已有压缩视图；未压缩的来源
+        # 从快照开头读取，沿用显式阅读窗口。精确查原文仍走下方 find/range。
         if (
             body_ref in self.archived
             and needle is None
             and range_arg is None
             and cursor is None
         ):
-            return json.dumps(archived_stub(self, reading, body_ref), ensure_ascii=False), True
+            if reading.condensed is not None:
+                condensed = self._condensed_receipt(reading, body_ref)
+                if condensed is not None:
+                    return condensed, True
+            range_arg = "0-"
 
         # 本地召回的是小块；无定位参数时扩读最佳命中上下文，保留整份快照供 find/range。
         if reading.snapshot.document and needle is None and range_arg is None and cursor is None:
@@ -2334,9 +2535,8 @@ class ToolContext:
     def _build_condensed_view(self, reading: Reading) -> dict:
         """构建一次压缩视图（结果缓存在 ``Reading.condensed`` 上）。
 
-        压缩是**尽力而为**：无额度、调用失败、片段全都过不了逐字门时，一律降级为
-        "代码切片"（直接取正文前几段），绝不阻断阅读——压缩是省上下文的优化，不是
-        阅读的前置条件。
+        压缩失败或没有逐字片段时，保留原文；回执按当前容量返回全文或阅读入口。
+        失败结果同样缓存，重复首读不会重新发起同一次压缩。
 
         压缩调用走同一份 ``Budget``（``role="condense"``），但**不占收尾预留**：
         它是真实的模型调用，隐藏成本比挤占额度更糟。
@@ -2348,59 +2548,51 @@ class ToolContext:
             "condense_input_truncated": None,
         }
         reason = ""
-        if self.budget is not None and not self.budget.can_call(
-            reserve=self.config.reserve_wrapup_calls
-        ):
-            reason = "模型额度不足"
+        if self.budget is not None and (self.budget.research_expired() or not self.budget.can_call(reserve=self.config.reserve_wrapup_calls)):
+            reason = "研究时间或模型额度不足"
         else:
             adapter = self.config.adapter
-            record = (
-                self.budget.take("condense", "condense", self.store)
-                if self.budget is not None
-                else None
-            )
-            trace_token = timing.set_ctx(usage_role="condense", step="condense",
-                call_id=record.call_id if record else None, parent_model_call_id=self.model_call_id)
-            try:
-                view["condense_attempted"] = True
-                data = condense_text(
-                    str(self.store.state.get("query") or ""),
-                    text,
-                    call_json=self.condense_fn or llm.call_json,
-                    json_retries=0,
-                    model=adapter.model,
-                    provider=adapter.provider,
-                    reasoning=adapter.reasoning,
-                    effort=adapter.effort,
-                    max_tokens=self.config.max_output_tokens,
-                )
-            finally:
-                timing.reset_ctx(trace_token)
-                if record is not None:
-                    self.budget.settle(record, self.store)
-            for key in ("condense_input_range", "condense_input_truncated"):
+            def call_chunk(messages, **kwargs):
+                if self.budget is not None and (self.budget.research_expired() or not self.budget.can_call(reserve=self.config.reserve_wrapup_calls)):
+                    raise RuntimeError("模型额度不足，未处理的正文仍可回读")
+                record = self.budget.take("condense", "condense", self.store) if self.budget is not None else None
+                trace_token = timing.set_ctx(usage_role="condense", step="condense",
+                    call_id=record.call_id if record else None, parent_model_call_id=self.model_call_id)
+                error = None
+                try:
+                    return (self.condense_fn or llm.call_json)(messages, **kwargs)
+                except Exception as exc:
+                    error = type(exc).__name__
+                    raise
+                finally:
+                    timing.reset_ctx(trace_token)
+                    if record is not None:
+                        self.budget.settle(record, self.store, error=error, status="failed" if error else "returned")
+            view["condense_attempted"] = True
+            from dra.context_budget import assess, capacity, output_limit
+            chunk_options = {}
+            if capacity(self.config, "condense")["input_budget_tokens"] is not None:
+                chunk_options["fits_request"] = lambda messages: assess(self, messages, phase="condense")["fits"]
+            data = condense_text(
+                self.effective_query, text, call_json=call_chunk,
+                **chunk_options, json_retries=0, model=adapter.model, provider=adapter.provider,
+                reasoning=adapter.reasoning, effort=adapter.effort, max_tokens=output_limit(self.config, "condense"))
+            for key in ("condense_input_range", "condense_input_ranges", "condense_completed_ranges", "condense_input_truncated"):
                 view[key] = data.get(key)
-            if data.get("error"):
-                reason = str(data["error"])
-            else:
-                view["summary"] = data.get("summary") or ""
-                view["rows"] = self._register_verbatim(reading, data.get("excerpts") or [])
+            reason = str(data.get("error") or "")
+            view["summary"] = data.get("summary") or ""
+            view["rows"] = self._register_verbatim(reading, data.get("excerpts") or [])
         if not view["rows"]:
-            # 降级：代码切片。它同样是原文的连续子串，同样可引用，只是没经过压缩挑选。
-            view["view"] = "slice"
-            view["rows"] = self._register_verbatim(
-                reading, [row[2] for row in reading.excerpts[:4]]
-            )
-            view["note"] = (
-                "压缩视图没能产出可引用片段（%s），这里给的是**代码切片**："
-                "正文开头连续几段。它不代表全篇内容。" % (reason or "原因未知")
-            )
+            view["view"] = "read_required"
+            view["note"] = f"压缩未能产出可引用片段（{reason or '没有通过逐字核验的摘录'}）；完整原文已保存在快照中。"
         else:
             view["note"] = (
                 "这是**压缩视图**（原文共 %d 字，完整保存在快照里，不在工作上下文）。"
                 "摘要只是线索、不可引用；`excerpts` 里的片段来自原文逐字片段，可直接存证。"
                 "要看压缩没覆盖的部分，用 range/find 显式读原文。" % len(text)
             )
+        if reason and view["rows"] and view["view"] == "condensed":
+            view["note"] += f" 分块整理未全部完成：{reason}；保留已完成部分，其余请回读原文。"
         if view["condense_input_truncated"]:
             view["note"] += (
                 f" 压缩模型只收到 {view['condense_input_range']}，之后的正文未参与摘要或摘录；"
@@ -2421,14 +2613,14 @@ class ToolContext:
             no = reading._entry_for(lo, hi)
             reading.read_range(lo, hi)
             rows.append((no, lo, hi))
-            if len(rows) >= 8:
-                break
         return rows
 
     def _condensed_receipt(self, reading: Reading, ref: str) -> str | None:
-        """超长正文首次精读的回执：摘要 + 逐字片段 + 重读指路。"""
-        if reading.condensed is None:
+        """超长正文的可复用阅读回执：摘要 + 逐字片段 + 原文定位指路。"""
+        task_key = (self.effective_query, self.input_revision)
+        if reading.condensed is None or reading.condensed.get("task_key") != task_key:
             reading.condensed = self._build_condensed_view(reading)
+            reading.condensed["task_key"] = task_key
         view = reading.condensed
         excerpts = []
         for no, lo, hi in view["rows"]:
@@ -2436,27 +2628,34 @@ class ToolContext:
             if quoted is None:
                 continue
             excerpts.append({"excerpt_no": no, "location": f"chars={lo}-{hi}", "quote": quoted[0]})
+        payload = {
+            "source_ref": ref, "title": reading.snapshot.title, "url": reading.snapshot.url,
+            "published_at": reading.snapshot.published_at, "view": view["view"],
+            "total_chars": len(reading.raw), "has_more": True,
+            "truncated_source": reading.snapshot.truncated, "summary": view["summary"],
+            "condense_attempted": view["condense_attempted"],
+            "condense_input_ranges": view.get("condense_input_ranges"),
+            "condense_input_range": view["condense_input_range"],
+            "condense_completed_ranges": view.get("condense_completed_ranges", []),
+            "condense_input_truncated": view["condense_input_truncated"],
+            "excerpts": excerpts, "note": view["note"],
+            "read_back": {"tool": "read_source", "source_ref": ref,
+                "find": "填写要找的关键词", "range": f"填写起止字符位置，全文范围 0-{len(reading.raw)}；find/range 任选一种"},
+        }
         if not excerpts:
-            return None  # 连切片都没登记出来：退回直读，别阻断阅读
-        return json.dumps(
-            {
-                "source_ref": ref,
-                "title": reading.snapshot.title,
-                "url": reading.snapshot.url,
-                "published_at": reading.snapshot.published_at,
-                "view": view["view"],
-                "total_chars": len(reading.raw),
-                "has_more": True,
-                "truncated_source": reading.snapshot.truncated,
-                "summary": view["summary"],
-                "condense_attempted": view["condense_attempted"],
-                "condense_input_range": view["condense_input_range"],
-                "condense_input_truncated": view["condense_input_truncated"],
-                "excerpts": excerpts,
-                "note": view["note"],
-            },
-            ensure_ascii=False,
-        )
+            # Allocate a stable identifier, but do not grant read permission until
+            # the complete receipt is known to fit the actual next request.
+            no = reading._entry_for(0, len(reading.raw))
+            whole = {**payload, "view": "original", "has_more": False,
+                "shown_range": f"chars=0-{len(reading.raw)}",
+                "excerpts": [{"excerpt_no": no, "location": f"chars=0-{len(reading.raw)}", "quote": reading.raw}],
+                "note": view["note"] + " 本次直接返回快照原文，可据此存证。"}
+            from dra.context_receipts import fits_receipt
+            if fits_receipt(self, json.dumps(whole, ensure_ascii=False)):
+                reading.read_range(0, len(reading.raw))
+                return json.dumps(whole, ensure_ascii=False)
+            payload["note"] += " 全文超出当前剩余输入容量，本次未展示正文。请用 read_source 的 find 定位，或用 range 分段读取；不要把未展示部分当作已读。"
+        return json.dumps(payload, ensure_ascii=False)
 
     def judge_saved_cards(self, card_ids: list[str]) -> dict[str, dict]:
         if not self.config.evidence_judge.enabled or not card_ids:
@@ -2480,6 +2679,20 @@ class ToolContext:
 
     def _bind_evidence_quote(self, item: dict):
         """绑定一段，失败返回原有候选合同；本方法不保存部分卡片。"""
+        if "image_ref" in item:
+            image = self.image_exposures.get(item["image_ref"])
+            observation = item.get("observation")
+            if not image or not image.get("delivered"):
+                return None, None, {"reason": "image_ref必须来自当前Agent实际看过的图片"}, set()
+            if not isinstance(observation, str) or not observation.strip() or "quote" in item:
+                return None, None, {"reason": "视觉观察需填写observation，不可冒充原文quote"}, set()
+            source = self.store.original_source(image["original_source_ref"])
+            if source is None:
+                return None, None, {"reason": "工作区图片仅作视觉检查；外部事实请登记原始来源后存证，不把自制报告当来源"}, set()
+            span = EvidenceQuote(quote=observation, source_ref=source.ref, source_url=source.url,
+                source_title=source.title, source_kind="observation", observation=image,
+                location="image=" + image["image_ref"])
+            return span, None, None, set()
         ref = str(item.get("source_ref") or "").strip()
         target = self.aliases.get(ref, ref)
         affected = {target} if target else set(self.read_exposures)
@@ -2555,8 +2768,9 @@ class ToolContext:
         snap = reading.snapshot
         span = EvidenceQuote(quote=quote, submitted_quote=supplied, source_ref=snap.ref,
             source_url=snap.url, source_title=snap.title, published_at=snap.published_at,
-            source_kind="computation" if snap.computation else "original",
-            location=location, deep_link=text_fragment_url(snap.url, quote) or "",
+            source_kind="computation" if snap.computation else "observation" if snap.observation else "original",
+            observation=snap.observation,
+            location=location, deep_link="" if snap.observation else text_fragment_url(snap.url, quote) or "",
             summary_ref=ref if ref and ref != snap.ref else None)
         return span, excerpt_no, None, {target}
 
@@ -2607,7 +2821,7 @@ class ToolContext:
                 continue
             pieces = item["quotes"] if multi else [item]
             if (not isinstance(pieces, list) or not 1 <= len(pieces) <= MAX_QUOTES
-                    or any(not isinstance(q, dict) or (multi and "quote" not in q) for q in pieces)):
+                    or any(not isinstance(q, dict) or (multi and "quote" not in q and "image_ref" not in q) for q in pieces)):
                 reject(index, f"quotes 须为 1–{MAX_QUOTES} 段对象，每段包含连续原话 quote")
                 continue
             bound, quote_results, affected = [], [], set()
@@ -2641,7 +2855,7 @@ class ToolContext:
             if sum(len(q.quote) for q in quotes) > MAX_QUOTE_CHARS:
                 reject(index, f"各段原话总计超过 {MAX_QUOTE_CHARS} 字符，请聚焦结论或拆卡；本次未截断保存")
                 continue
-            add_context(quotes, {q.source_ref: self.readings[q.source_ref].raw for q in quotes})
+            add_context(quotes, {q.source_ref: self.readings[q.source_ref].raw for q in quotes if q.source_ref in self.readings})
             first = quotes[0]
             card = EvidenceCard(card_id=self.store.next_card_id(), claim=claim, quotes=quotes,
                 judgment=evidence_judge.Judgment(status="pending") if self.config.evidence_judge.enabled else None,
@@ -2653,9 +2867,10 @@ class ToolContext:
             for span, no in bound:
                 if span.submitted_quote:
                     self.pending_quote_refs.pop(" ".join(span.submitted_quote.split()), None)
-                accepted_refs.add(span.source_ref)
-                with self._lock:
-                    self.saved_excerpts.add((span.source_ref, no))
+                if no is not None:
+                    accepted_refs.add(span.source_ref)
+                    with self._lock:
+                        self.saved_excerpts.add((span.source_ref, no))
                 for block in span.context:
                     lo, hi = _chars_of(block.location)
                     context_exposures.append((span.source_ref, lo, hi))
@@ -2691,7 +2906,7 @@ class ToolContext:
         with self._lock:
             self.unsettled_rejected_refs |= unresolved_errors
             self.unsettled_rejected_refs -= eligible
-        if self.config.archive_mode == "immediate":
+        if self.config.effective_archive_mode() == "immediate":
             self.archived |= eligible
             for ref in sorted(eligible):
                 generation = self.archive_generations[ref]
@@ -2710,7 +2925,19 @@ class ToolContext:
                     },
                     action_id=f"archive:{self.store.run_id}:{self.delegation_id or 'lead'}:{ref}:{generation}",
                 )
-        self.last_rejections = reasons[:3]
+        self.last_rejections = reasons
+        for index, row in enumerate(results):
+            item = items[index]
+            identity = json.dumps({"claim": item.get("claim") if isinstance(item, dict) else item,
+                                   "quotes": item.get("quotes", [item]) if isinstance(item, dict) else []},
+                                  ensure_ascii=False, sort_keys=True)
+            if row.get("accepted"):
+                self.rejection_items = {key: pending for key, pending in self.rejection_items.items()
+                    if not isinstance(pending["submitted"], dict) or pending["submitted"].get("claim") != item.get("claim")}
+            else:
+                self.rejection_items[identity] = {"submitted": item, "result": deepcopy(row)}
+        with self.store._lock:
+            self.store.state.setdefault("unresolved_evidence_feedback", {})[self.delegation_id or self.tool_role] = deepcopy(self.rejection_items)
         self.store.commit()
         judgments = self.judge_saved_cards([r["card_id"] for r in results if r["accepted"]])
         for row in results:
@@ -2718,7 +2945,10 @@ class ToolContext:
                 row["judgment"] = _judgment_for_model(judgments[row["card_id"]])
         return json.dumps(
             {"results": results, "saved_total": len(self.store.cards()), "pending_selection": pending_selection,
-             "note": "index 是本次提交序号，不是卡号；accepted=true 只表示已存档。请核对全部 quotes 与程序补充的 context（快照中的相邻片段，不代表全文）。judgment 是 Jev 的判定：insufficient/contradicted 须修正后重存；未完成核验不能视为通过。"},
+             "note": "index 是本次提交序号，不是卡号；accepted=true 只表示已存档。请核对全部 quotes 与程序补充的 context（快照中的相邻片段，不代表全文）。" + (
+                 "judgment 是 Jev 的判定：insufficient/contradicted 须修正后重存；未完成核验不能视为通过。"
+                 if self.config.evidence_judge.enabled else
+                 "本轮 JEV 核验已关闭，无需等待 judgment；原话匹配与出处绑定仍执行，请自行核对结论是否有完整依据。")},
             ensure_ascii=False
         ), accepted > 0 or pending_selection == len(items)
 
@@ -2726,29 +2956,52 @@ class ToolContext:
     # 压力收起（"满了再压"）：达到触发线后批量降到目标线。
     # ------------------------------------------------------------------
 
-    def note_usage_anchor(self, input_tokens, request_chars) -> None:
+    def note_usage_anchor(self, input_tokens, request_chars, *, phase="research", image_estimate=0, image_parts=None) -> None:
         """记录一次真实请求的用量锚点：(真实 input_tokens, 当时请求字符数)。"""
         if input_tokens and request_chars:
-            self.usage_anchor = (int(input_tokens), int(request_chars))
+            if image_parts is not None:
+                image_estimate = sum(p['tokens'] for p in image_parts)
+            estimate, _ = self.estimate_request_tokens(request_chars, phase=phase)
+            previous = self.token_calibration.get(phase, {})
+            if image_estimate:
+                # Aggregate usage does not reveal exact image tokens. Never subtract a
+                # pixel guess and use the remainder as a real text-only anchor.
+                self.token_calibration[phase] = {**previous,
+                    "error_per_char": previous.get("error_per_char", 0),
+                    "image_anchor": {"input_tokens": input_tokens, "request_chars": request_chars,
+                        "image_estimate": image_estimate, "text_estimate": estimate,
+                        "text_margin": request_chars * previous.get("error_per_char", 0),
+                        "parts": image_parts}}
+                return
+            self.token_calibration[phase] = {
+                **previous,
+                "anchor": (int(input_tokens), int(request_chars)),
+                "error_per_char": max(previous.get("error_per_char", 0),
+                                      (input_tokens - estimate) / request_chars, 0),
+            }
+            if phase == "research":
+                self.usage_anchor = (int(input_tokens), int(request_chars))
 
-    def estimate_request_tokens(self, chars: int) -> tuple[float, str]:
+    def estimate_request_tokens(self, chars: int, *, phase="research") -> tuple[float, str]:
         """请求字符 → token 估算：有真实用量锚按锚的比例换算，否则按字符系数。
 
         返回 (估算值, 依据)；依据必须随事件落账，估算与真实用量分开记账，
         任何时候不得把字符数冒充 token 数。"""
-        anchor = self.usage_anchor
+        anchor = self.usage_anchor if phase == "research" else self.token_calibration.get(phase, {}).get("anchor")
         if anchor and anchor[1] > 0:
             return chars * anchor[0] / anchor[1], "usage_anchored"
         return chars / self.config.estimate_chars_per_token, "chars_estimated"
 
-    def pressure_archive_if_needed(self, messages: list[dict], *, extra_chars: int = 0) -> dict | None:
+    def pressure_archive_if_needed(self, messages: list[dict], *, extra_chars: int = 0, commit=True) -> dict | None:
         """只在越线时授权本批具体阅读回执；存证资格、近期保护与历史授权互相独立。"""
         config = self.config
-        if config.archive_mode != "pressure":
+        if config.effective_archive_mode() != "pressure":
             return None
         chars = _request_chars(messages) + extra_chars
+        from dra.context_budget import capacity, estimated_image_tokens
         tokens, basis = self.estimate_request_tokens(chars)
-        usable = config.context_window_tokens - config.pressure_reserve_tokens
+        tokens += chars * self.token_calibration.get("research", {}).get("error_per_char", 0) + estimated_image_tokens(self, messages)[0]
+        usable = capacity(config)["input_budget_tokens"]
         trigger_tokens = usable * config.pressure_trigger_ratio
         target_tokens = usable * config.pressure_low_ratio
         if tokens < trigger_tokens:
@@ -2793,16 +3046,18 @@ class ToolContext:
             projected[message_index] = replacement
             projected_chars -= freed
             selected.append((ref, seq, stub))
-            if self.estimate_request_tokens(projected_chars)[0] <= target_tokens:
+            if (self.estimate_request_tokens(projected_chars)[0]
+                    + projected_chars * self.token_calibration.get("research", {}).get("error_per_char", 0)) <= target_tokens:
                 break
-        after_tokens = self.estimate_request_tokens(projected_chars)[0]
+        after_tokens = (self.estimate_request_tokens(projected_chars)[0]
+                        + projected_chars * self.token_calibration.get("research", {}).get("error_per_char", 0))
         details = {
             "agent_id": self.delegation_id or self.tool_role,
             "trigger": "context_pressure", "basis": basis,
             "estimated_tokens_before": round(tokens, 1),
             "estimated_tokens_after": round(after_tokens, 1),
             "trigger_tokens": round(trigger_tokens, 1), "target_tokens": round(target_tokens, 1),
-            "window_tokens": config.context_window_tokens, "reserve_tokens": config.pressure_reserve_tokens,
+            "window_tokens": capacity(config)["window_tokens"], "reserve_tokens": capacity(config)["output_reserve_tokens"],
             "trigger_ratio": config.pressure_trigger_ratio, "low_ratio": config.pressure_low_ratio,
             "protect_recent_reads": config.pressure_protect_recent_reads,
             "protected_recent_receipts": len(protected), "protected_receipts": protected,
@@ -2818,6 +3073,15 @@ class ToolContext:
             })
         if not selected:
             return None
+        batch = {**details, "collapsed_refs": list(dict.fromkeys(ref for ref, _, _ in selected)),
+                 "collapsed_receipts": [{"source_ref": ref, "receipt_seq": seq} for ref, seq, _ in selected],
+                 "_selected": selected, "_messages": projected}
+        if commit:
+            self.commit_pressure_archive(batch)
+        return batch
+
+    def commit_pressure_archive(self, batch):
+        selected = batch["_selected"]
         self.pressure_batch_count += 1
         collapsed = list(dict.fromkeys(ref for ref, _, _ in selected))
         for ref, seq, stub in selected:
@@ -2831,8 +3095,7 @@ class ToolContext:
                 "batch": self.pressure_batch_count,
                 "receipt_seqs": [seq for source, seq, _ in selected if source == ref],
             }, action_id=f"archive:{self.store.run_id}:{self.delegation_id or 'lead'}:{ref}:p{self.pressure_batch_count}")
-        return {**details, "batch_no": self.pressure_batch_count, "collapsed_refs": collapsed,
-                "collapsed_receipts": [{"source_ref": ref, "receipt_seq": seq} for ref, seq, _ in selected]}
+        batch["batch_no"] = self.pressure_batch_count
 
     def inspect_research(self, args: dict) -> tuple[str, bool]:
         view = str(args.get("view") or "summary")
@@ -2953,7 +3216,7 @@ class ToolContext:
                 from dra.search_observation import journal_observer
                 observer = journal_observer(self.store, agent_id=self.delegation_id or self.tool_role,
                     tool_call_id=self.active_tool_call_id, model_call_id=self.model_call_id)
-                web = _retrieve(query, self.config.adapter, on_provider_event=observer,
+                web = _retrieve(query, self.config.adapter, on_provider_event=observer, deadline=self.budget_deadline,
                                 **({"exclude_domains": exclude} if exclude else {}))
         except Exception as exc:
             if scope == "web":
@@ -3229,7 +3492,9 @@ class ToolContext:
                 return cached
         persisted = self.store.persisted_full_ref(url)
         if persisted is not None:
-            reading = self._local_reading(persisted)
+            reading = self.readings.get(persisted)
+            if reading is None:
+                reading = self._local_reading(persisted)
             if isinstance(reading, str):
                 return reading
             with self._lock:
@@ -3336,6 +3601,7 @@ class ToolContext:
                 self.effective_query = scope["goal"]
                 self.effective_requirements = [Requirement.model_validate(r) for r in scope["requirements"]]
                 self.scope_history.append(scope)
+                self.artifact_repair_draft = None
             self.plan_reviews.clear()
         events.emit(EventType.RESEARCH_PLAN_UPDATED, **payload)
         return (
@@ -3375,6 +3641,8 @@ class ToolContext:
                              "requirements": [r.model_dump() for r in self.effective_requirements]}}
 
     def execute(self, name: str, args: dict) -> tuple[str, bool]:
+        if name == "browser":
+            return browser.execute(self, args or {})
         if name in {"load_skill", "read_skill_reference"}:
             return self.skills.execute(self, name, args or {})
         if name in execution_tools.NAMES:
@@ -3385,10 +3653,14 @@ class ToolContext:
             "search_sources": self.search_sources,
             "read_source": self.read_source,
             "save_evidence": self.save_evidence,
+            "view_image": lambda args: vision.execute(self, args),
             "inspect_research": self.inspect_research,
             "update_research_plan": self.update_research_plan,
             "read_research_history": self.read_research_history,
         }
+        if name == "read_tool_result":
+            from dra.context_receipts import read_page
+            return read_page(self, args or {})
         if name == "read_context_history":
             from dra.context_compaction import read_history
             return read_history(self, args or {})
@@ -3434,7 +3706,8 @@ class ToolContext:
             parts, warnings = source_parts(payload)
         except MCPError as exc:
             return json.dumps({**response, "ok": False, "error": str(exc)}, ensure_ascii=False), False
-        if not parts:
+        image_results = vision.mcp_images(self, payload, metadata)
+        if not parts and not image_results:
             return json.dumps({**response, "ok": False, "error": "MCP 未返回可读取的文本或结构化资料",
                                "warnings": warnings}, ensure_ascii=False), False
         sources = []
@@ -3460,7 +3733,7 @@ class ToolContext:
                 source.update(json.loads(visible))
                 remaining -= sum(len(e["quote"]) for e in source["excerpts"])
             sources.append(source)
-        response.update(sources=sources, warnings=warnings,
+        response.update(sources=sources, images=image_results, warnings=warnings,
                         truncated=any(s["has_more"] or s["truncated"] for s in sources),
                         note="excerpts 中已展示的原话可直接 save_evidence，无需重复读取。未展示部分用 read_source(source_ref, cursor=next_cursor) 继续读取。引用来源为 MCP 工具返回内容。")
         return json.dumps(response, ensure_ascii=False), True
@@ -3528,6 +3801,19 @@ class Budget:
         self.config = config
         self.deadline = deadline
         self.calls_used = 0
+
+    @property
+    def research_deadline(self) -> float | None:
+        return None if self.deadline is None else self.deadline - self.config.wrapup_reserve_s
+
+    def research_expired(self) -> bool:
+        return self.expired() or (self.research_deadline is not None and time.monotonic() >= self.research_deadline)
+
+    def research_seconds_left(self) -> float | None:
+        return None if self.research_deadline is None else max(0.0, self.research_deadline - time.monotonic())
+
+    def time_stop_reason(self) -> str:
+        return "deadline" if self.expired() else "research_time"
 
     def remaining_calls(self) -> int | None:
         if self.config.max_llm_calls is None:
@@ -4069,7 +4355,7 @@ def _create_delegation_manager(store, context, config, budget, model_call):
             "max_llm_calls": (adapter.max_tool_calls + adapter.max_invalid_calls + 2) if config.max_llm_calls is not None else None,
             "reserve_wrapup_calls": 1,
         })
-        deadline = min(budget.deadline or float("inf"), time.monotonic() + adapter.wall_timeout_s)
+        deadline = min(budget.research_deadline or float("inf"), time.monotonic() + adapter.wall_timeout_s)
         child_budget = Budget(child_config, deadline)
         child_budget.identity = task["id"]
         child = context.fork_for_subagent(child_config, budget=child_budget,
@@ -4090,32 +4376,38 @@ def _create_delegation_manager(store, context, config, budget, model_call):
         except Exception as exc:
             outcome = {"stop_reason": "failed", "error": {
                 "stage": "execution", "type": type(exc).__name__, "message": str(exc)[:2000]}}
+        finally:
+            if child.browser is not None:child.browser.close()
         return {"goal":task["goal"], "status":outcome.get("stop_reason", ""),
                 "findings":outcome.get("draft", ""), "gaps":outcome.get("gaps", []),
                 "card_ids": list(child.saved_card_ids),
                 "summary_available": bool(outcome.get("draft")), "error": outcome.get("error")}
 
     return DelegationManager(runner, persist, workers=_SUBAGENT_MAX_PARALLEL,
-                             cancel=llm.current_cancel_event(), deadline=budget.deadline)
+                             cancel=llm.current_cancel_event(), deadline=budget.research_deadline)
 
 
 def _receive_delegation_messages(context):
     manager = getattr(context, "delegation_manager", None)
     if manager is None:
-        return
+        return False
     target = context.delegation_id if context.tool_role == "subagent" else "parent"
+    progressed = False
     for event in manager.drain(target):
         context.delegation_messages.append(event)
+        progressed = progressed or event.get("kind") in ("message", "result")
         if event.get("kind") == "result":
             task = event.get("task", {})
             context.request_plan_review(f"child:{event['message_id']}",
                 f"子任务 {task.get('id', event.get('sender', ''))} 已结束（{task.get('status', '未知状态')}），需要核对相关路线")
+    return progressed
 
 
 def _receive_user_input(context, call_id, *, close=False):
     if context.tool_role != "lead" or context.user_input is None:
         return []
     rows, context.input_revision = context.user_input.begin_request(call_id, close=close)
+    if rows:context.artifact_repair_draft = None
     context.user_messages.extend(rows)
     for row in rows:
         context.request_plan_review(f"user:{row['message_id']}",
@@ -4172,19 +4464,39 @@ def run_lead_loop(
     elif role == "subagent":
         # 子 Agent 共用 store.query，但检索补查必须采用自己的任务，不能跑回主线范围。
         context.effective_query = mission_text or store.query
+    if config.library_selection.get('original_version_ids'):
+        from dra.library import get_library
+        library = get_library()
+        for version_id in config.library_selection['original_version_ids']:
+            version = library.read_version(version_id)
+            if version['status'] == 'original':
+                metadata = {k: v for k, v in version.items() if k != 'text'}
+                data = library.original(version_id)
+                with store._lock:
+                    if not any((row.get('document') or {}).get('version_id') == version_id for row in store.state['sources']):
+                        store.write_original(RetrievedDoc(title=version['file_name'], snippet='', raw_content='', document=metadata), data)
     schemas = schemas if schemas is not None else LEAD_TOOL_SCHEMAS
+    schemas = vision.tool_schemas(schemas, enabled=config.vision.enabled,
+                                 originals=config.vision.enabled or config.execution.enabled)
     if role == "lead" and not config.delegation_enabled:
         schemas = [s for s in schemas if s["function"]["name"] not in DELEGATION_TOOL_NAMES]
-    context.mcp.prepare(deadline=budget.deadline, cancelled=llm.cancellation_requested)
+    context.mcp.prepare(deadline=budget.research_deadline, cancelled=llm.cancellation_requested)
     schemas = [*schemas, *context.mcp.schemas, *skills.schemas(context.skills.bundle)]
-    if role == "lead" and config.execution.enabled:
+    if config.vision.enabled:
+        from dra.vision import SCHEMA
+        schemas.append(SCHEMA)
+    if config.browser.enabled:
+        schemas.append(browser.SCHEMA)
+    if config.execution.enabled:
         capability = execution_tools.prepare(context)
         if capability.get("available"):
-            schemas = [EXECUTION_FINISH_SCHEMA if item["function"]["name"] == "finish_research" else item for item in schemas]
+            if role == 'lead':
+                schemas = [EXECUTION_FINISH_SCHEMA if item["function"]["name"] == "finish_research" else item for item in schemas]
             schemas.extend(execution_tools.schemas_for(context))
     if config.compaction_enabled:
         from dra.context_compaction import HISTORY_TOOL
-        schemas.append(HISTORY_TOOL)
+        from dra.context_receipts import PAGE_TOOL
+        schemas.extend([HISTORY_TOOL, PAGE_TOOL])
     if role == "lead" and context.config.mcp_servers:
         store.state["mcp"] = {"servers": [s.id for s in context.config.mcp_servers],
                               "tools": [s["function"]["name"] for s in context.mcp.schemas],
@@ -4194,6 +4506,7 @@ def run_lead_loop(
         schemas = [*schemas, HISTORY_SCHEMA]
     schemas = _with_reserve_note(schemas, config)
     schemas = research_prompts.tool_schemas(config.prompt_profile, schemas, role)
+    schemas = _evidence_mode_schemas(schemas, enabled=config.evidence_judge.enabled)
     # 子 Agent 与主 Agent 各自有自己的回合编号，动作 id 必须带 scope 才不会互相覆盖。
     _action_scope = f"{scope}:" if scope else ""
     _action_actor = scope or role
@@ -4204,14 +4517,17 @@ def run_lead_loop(
     只带 ``run_id`` 的键会把后来者的记录静默当成"重放"丢掉（例如主线的交稿被子 Agent
     的交稿挡掉，没有落盘）。
     """
-    execution_ready = bool(role == "lead" and config.execution.enabled
+    execution_ready = bool(config.execution.enabled
                            and (context.execution_capability or {}).get("available"))
+    if role == "subagent" and execution_ready and system_prompt:
+        system_prompt = system_prompt.replace(_citable_rule(execution=False), _citable_rule(execution=True))
     base_messages = [
-        {"role": "system", "content": research_prompts.system_prompt(
+        {"role": "system", "content": _evidence_mode_prompt(research_prompts.system_prompt(
             config.prompt_profile, role,
             system_prompt or _lead_system(delegation=config.delegation_enabled, execution=execution_ready),
             evidence=_EVIDENCE_USE_INSTRUCTIONS,
-            steering=_steering_instructions(delegation=config.delegation_enabled) if role == "lead" else "")
+            steering=_steering_instructions(delegation=config.delegation_enabled) if role == "lead" else "",
+            delegation=config.delegation_enabled), enabled=config.evidence_judge.enabled)
          + time_hint(store.state["research_time"]) + _source_scope_prompt(context.config)
          + _answer_language_prompt(store.query)},
         {
@@ -4219,7 +4535,12 @@ def run_lead_loop(
             "content": _current_mission(context, requirements, mission_text, brief_context),
         },
     ]
-    if role == "lead" and config.execution.enabled:
+    if config.vision.enabled:
+        from dra.vision import INSTRUCTIONS
+        base_messages[0]["content"] += INSTRUCTIONS
+    if config.browser.enabled:
+        base_messages[0]["content"] += browser.INSTRUCTIONS
+    if config.execution.enabled:
         base_messages[0]["content"] += (execution_tools.instructions_for(context) if context.execution_capability.get("available")
             else "\n本轮执行工具不可用：" + str(context.execution_capability.get("reason")) + "。仍可研究并交付文字报告；文件要求须明确记为缺口。")
         if context.execution_capability.get("workspace"):
@@ -4257,7 +4578,7 @@ def run_lead_loop(
     with store._lock:
         store.state.setdefault("agents", {})[budget.identity] = {
             "max_llm_calls": config.max_llm_calls, "max_tool_calls": config.max_tool_calls,
-            "wall_timeout_s": config.wall_timeout_s,
+            "wall_timeout_s": config.wall_timeout_s, "wrapup_reserve_s": config.wrapup_reserve_s,
             "tool_reserve_calls": config.effective_tool_reserve(),
             "reserve_wrapup_calls": config.reserve_wrapup_calls if config.max_llm_calls is not None else 0,
         }
@@ -4266,7 +4587,7 @@ def run_lead_loop(
     # 否则测试替身会因多出的关键字而失败（生产行为由 llm.call_tools 保证）。
     streams_text = model_call is None
 
-    deadline_token = llm.set_request_deadline(budget.deadline)
+    deadline_token = llm.set_request_deadline(budget.research_deadline)
     # 角色可参数化：子 Agent 复用同一个循环，但用量与步骤名分开记，账本上分得清谁花的。
     usage_role = role if role != "lead" else "lead"
     step_name = "lead_research" if role == "lead" else "subagent_research"
@@ -4283,9 +4604,11 @@ def run_lead_loop(
             if llm.cancellation_requested():
                 stop_reason = "cancelled"
                 break
-            if budget.expired():
-                stop_reason = "deadline"
+            if budget.research_expired():
+                stop_reason = budget.time_stop_reason()
                 break
+            if _receive_delegation_messages(context):
+                strikes = 0
             if strikes >= config.max_invalid_turns:
                 stop_reason = "no_progress"
                 break
@@ -4298,24 +4621,24 @@ def run_lead_loop(
             if not budget.can_call(reserve=config.reserve_wrapup_calls):
                 stop_reason = "call_budget"
                 break
-            _receive_delegation_messages(context)
             if config.compaction_enabled:
                 from dra.context_compaction import compact_context, ContextLimit
                 preview = _build_messages(base_messages, context, requirements, recent_exchanges,
-                    seconds_left=budget.seconds_left(), budget=budget,
+                    seconds_left=budget.research_seconds_left(), budget=budget,
                     extra_chars=sum(len(json.dumps(s, ensure_ascii=False)) for s in schemas))
                 try:
                     compact_context(context, preview, schemas, budget, call_model=call_model)
                 except ContextLimit:
-                    stop_reason = "cancelled" if llm.cancellation_requested() else "deadline" if budget.expired() else "context_limit"
+                    stop_reason = "cancelled" if llm.cancellation_requested() else budget.time_stop_reason() if budget.research_expired() else "context_limit"
                     break
-                if llm.cancellation_requested() or budget.expired():
-                    stop_reason = "cancelled" if llm.cancellation_requested() else "deadline"
+                if llm.cancellation_requested() or budget.research_expired():
+                    stop_reason = "cancelled" if llm.cancellation_requested() else budget.time_stop_reason()
                     break
                 if not budget.can_call(reserve=config.reserve_wrapup_calls):
                     stop_reason = "call_budget"
                     break
-                _receive_delegation_messages(context)
+                if _receive_delegation_messages(context):
+                    strikes = 0
             record = budget.take(role, f"turn-{turns + 1}", store)
             context.model_call_id = record.call_id
             incoming = _receive_user_input(context, record.call_id)
@@ -4330,13 +4653,15 @@ def run_lead_loop(
                 context,
                 requirements,
                 recent_exchanges,
-                seconds_left=budget.seconds_left(),
+                seconds_left=budget.research_seconds_left(),
                 budget=budget,
                 extra_chars=sum(len(json.dumps(s, ensure_ascii=False)) for s in schemas),
             )
             if config.compaction_enabled:
-                estimate, _ = context.estimate_request_tokens(_request_chars(messages, schemas))
-                if estimate >= config.context_window_tokens - config.pressure_reserve_tokens:
+                from dra.context_budget import assess
+                request_budget = assess(context, messages, schemas)
+                store.record_action("context_request_budget", {"call_id": record.call_id, **request_budget})
+                if not request_budget["fits"]:
                     budget.settle(record, store, error="新增消息超过可用上下文容量", status="not_sent")
                     stop_reason = "context_limit"
                     break
@@ -4400,11 +4725,17 @@ def run_lead_loop(
                         max_tokens=config.max_output_tokens,
                         max_retries=_CALL_MAX_RETRIES,
                     )
+            except llm.LLMDeadlineExceeded as exc:
+                message.finish()
+                _finish_reasoning()
+                budget.settle(record, store, error=type(exc).__name__, status="failed")
+                stop_reason = "cancelled" if llm.cancellation_requested() else budget.time_stop_reason()
+                break
             except llm.LLMRequestTimeout as exc:
                 message.finish()
                 _finish_reasoning()
                 budget.settle(record, store, error=type(exc).__name__, status="failed")
-                stop_reason = "request_timeout"
+                stop_reason = budget.time_stop_reason() if budget.research_expired() else "request_timeout"
                 break
             except LLMPersistenceError:
                 # 账本/落盘失败是持久化错误，不是"这次调用崩了"：必须向上抛，
@@ -4418,16 +4749,19 @@ def run_lead_loop(
                 budget.settle(record, store, error=f"{type(exc).__name__}: {exc}", status="failed")
                 execution_error = {"stage": "model", "type": type(exc).__name__,
                                    "message": str(exc)[:2000], "call_id": record.call_id}
-                if config.compaction_enabled and any(term in str(exc).lower() for term in
-                    ("context_length_exceeded", "maximum context length", "context window exceeded", "prompt is too long")):
-                    from dra.context_compaction import compact_context, ContextLimit
-                    try:
-                        compact_context(context, messages, schemas, budget, call_model=call_model, force=True)
-                    except ContextLimit:
-                        stop_reason = "context_limit"
-                        break
-                    execution_error = None
-                    continue
+                from dra.context_budget import is_context_error
+                if is_context_error(exc):
+                    if config.compaction_enabled:
+                        from dra.context_compaction import compact_context, ContextLimit
+                        try:
+                            compact_context(context, messages, schemas, budget, call_model=call_model, force=True)
+                        except ContextLimit:
+                            stop_reason = "context_limit"
+                            break
+                        execution_error = None
+                        continue
+                    stop_reason = "context_limit"
+                    break
                 stop_reason = "failed"
                 break
             # attempts 记"这次预算调用实际发了几次 HTTP"：账本按一次调用计费，
@@ -4437,8 +4771,10 @@ def run_lead_loop(
             # 真实用量锚点：压力收起的 token 估算优先按它换算，不盲猜字符系数。
             context.note_usage_anchor(
                 getattr(usage, "prompt_tokens", None),
-                _request_chars(messages, schemas),
+                _request_chars(messages, schemas), image_parts=vision.image_token_parts(messages),
             )
+            from dra.vision import mark_delivered
+            mark_delivered(context, messages)
             # 结束标记：流式已有增量时只发 complete，不重复全文。
             message.finish(getattr(turn, "content", "") or "")
             _finish_reasoning(turn)
@@ -4452,7 +4788,7 @@ def run_lead_loop(
                 break
             # 流在收到终止标记前因取消/deadline 断开：按上层意图停止，不记协议错误。
             if getattr(turn, "stopped", False):
-                stop_reason = getattr(turn, "stop_reason", "") or "cancelled"
+                stop_reason = budget.time_stop_reason() if budget.research_expired() else getattr(turn, "stop_reason", "") or "cancelled"
                 break
             # 流式装配不完整（终止原因异常 / 缺 index·id·name / 回调出错）：
             # **一个工具都不执行**——半截或伪造的参数会以错误参数触达外部边界。
@@ -4471,6 +4807,7 @@ def run_lead_loop(
             exchange = [getattr(turn, "assistant_message", {}) or {}]
             tool_results: list[dict] = []
             ok_any = False
+            neutral_waits = 0
             budget_stop = ""
             for call in calls:
                 name = call.name
@@ -4540,7 +4877,7 @@ def run_lead_loop(
                         continue
                     context.tool_calls += 1
                     try:
-                        if budget.expired() or llm.cancellation_requested() or (config.max_tool_calls is not None and context.tool_calls > config.max_tool_calls):
+                        if budget.research_expired() or llm.cancellation_requested() or (config.max_tool_calls is not None and context.tool_calls > config.max_tool_calls):
                             raise ValueError("委派预算已到或运行取消")
                         _emit_tool(context, name, False, "", call, turn=turns, phase="running")
                         rows = manager.submit(tasks_in, f"{turns}:{call.id}")
@@ -4579,7 +4916,7 @@ def run_lead_loop(
                 if control:
                     args = call.arguments or {}
                     try:
-                        if manager is None or llm.cancellation_requested() or budget.expired():
+                        if manager is None or llm.cancellation_requested() or budget.research_expired():
                             raise ValueError("研究已停止")
                         sender = context.delegation_id if role == "subagent" else "parent"
                         _emit_tool(context, name, False, "", call, turn=turns, phase="running")
@@ -4593,8 +4930,16 @@ def run_lead_loop(
                         elif name == "cancel_research":
                             value = manager.cancel(args.get("delegation_id"), args.get("reason", ""))
                         elif name == "wait_research":
-                            value = manager.wait(args.get("delegation_ids"), args.get("timeout_s",30),
+                            from dra.research_delegation import ACTIVE
+                            task_ids = args.get("delegation_ids")
+                            timeout = args.get("timeout_s", 30)
+                            waiting_on_active = float(timeout) > 0 and any(
+                                t["status"] in ACTIVE and (not task_ids or t["id"] in task_ids)
+                                for t in manager.inspect())
+                            value = manager.wait(task_ids, timeout,
                                 wakeup=context.user_input.pending if context.user_input is not None else None)
+                            if waiting_on_active:
+                                neutral_waits += 1
                         else:
                             value = manager.inspect(args.get("delegation_id"))
                         payload=json.dumps(value,ensure_ascii=False)
@@ -4608,6 +4953,8 @@ def run_lead_loop(
                     _emit_tool(context,name,valid,payload,call,turn=turns,phase="done",status="ok" if valid else "rejected")
                     tool_results.append({"role":"tool","tool_call_id":call.id,"content":payload})
                     ok_any = ok_any or (valid and name in ("send_research_message","cancel_research"))
+                    if valid and name == "inspect_research":
+                        ok_any = ok_any or any(t.get("result") for t in value)
                     continue
                 if (
                     name == "inspect_research"
@@ -4624,7 +4971,7 @@ def run_lead_loop(
                         selection_error = ""
                     except ValueError as exc:
                         card_ids, selection_error = set(), str(exc)
-                    if llm.cancellation_requested() or budget.expired():
+                    if llm.cancellation_requested() or budget.research_expired():
                         payload, valid = _ERR + "研究已停止，未执行回读。", False
                     elif selection_error:
                         payload, valid = _ERR + selection_error, False
@@ -4652,8 +4999,8 @@ def run_lead_loop(
                         _emit_tool(context,name,False,_ERR+reason,call,turn=turns,phase="done",status="rejected")
                         continue
                 if name == "finish_research":
-                    if llm.cancellation_requested() or budget.expired():
-                        budget_stop = "cancelled" if llm.cancellation_requested() else "deadline"
+                    if llm.cancellation_requested() or budget.research_expired():
+                        budget_stop = "cancelled" if llm.cancellation_requested() else budget.time_stop_reason()
                         blocked = _ERR + f"未执行：{budget_stop}"
                         _emit_tool(context, name, False, blocked, call, turn=turns, status="rejected")
                         tool_results.append({"role": "tool", "tool_call_id": call.id, "content": blocked})
@@ -4678,6 +5025,11 @@ def run_lead_loop(
                             reject_reason = _unknown_citation_reason(candidate, store) or ""
                             if reject_reason:
                                 citation_repairs += 1
+                    if not reject_reason and context.pending_artifact_errors:
+                        context.artifact_repair_draft = (candidate, candidate_coverage, candidate_gaps,
+                                                        list(context.pending_artifacts), list(context.pending_artifact_errors), parsed)
+                        reject_reason = ('正文和可用附件已保留，但以下附件尚未交付。请在剩余预算内修正路径或文件，再提交 finish_research；'
+                                         '无法修复时可交付可用部分，并明确缺口。\n' + json.dumps(context.pending_artifact_errors, ensure_ascii=False))
                     if reject_reason:
                         store.record_action(
                             "finish_rejected",
@@ -4741,8 +5093,8 @@ def run_lead_loop(
                 # 反推「没有超额执行」。被挡住的调用如实回执，不再触达外部边界。
                 if llm.cancellation_requested():
                     budget_stop = "cancelled"
-                elif budget.expired():
-                    budget_stop = "deadline"
+                elif budget.research_expired():
+                    budget_stop = budget.time_stop_reason()
                 elif config.max_tool_calls is not None and context.tool_calls >= config.max_tool_calls and name != "update_research_plan":
                     budget_stop = "tool_budget"
                 elif (
@@ -4824,6 +5176,8 @@ def run_lead_loop(
                 # 只有到这里才真会执行外部动作：先发 running，再执行，最后发终态。
                 _emit_tool(context, name, False, "", call, turn=turns, phase="running")
                 context.active_tool_call_id = call.id
+                before_exposures = deepcopy(context.read_exposures)
+                context.tool_page_request = ([*messages, *exchange, *tool_results], schemas, call.id)
                 try:
                     result, ok = context.execute(name, args)
                 except Exception as exc:
@@ -4852,12 +5206,10 @@ def run_lead_loop(
                     },
                     action_id=f"tool:{_action_scope}:{turns}:{call.id}",
                 )
+                from dra.context_receipts import deliver
+                visible_result = deliver(context, name, result, before_exposures)
                 tool_results.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": result,
-                    }
+                    {"role": "tool", "tool_call_id": call.id, "content": visible_result}
                 )
                 _emit_tool(context, name, ok, result, call, turn=turns, phase="done")
                 if verbose:
@@ -4878,11 +5230,14 @@ def run_lead_loop(
                 )
             elif ok_any:
                 strikes = 0
+            elif neutral_waits == len(calls):
+                pass  # Legitimate waiting preserves, rather than clears, prior strikes.
             else:
                 strikes += 1
             # 完整交换一起留：assistant 的 tool_calls 与对应 tool 回执必须成对，
             # 从中间截断会造出没有请求的孤儿 tool 消息（provider 会拒收）。
-            exchange = exchange + tool_results
+            exchange = exchange + tool_results + context.pending_image_messages
+            context.pending_image_messages = []
             recent_exchanges.append(exchange)
         else:
             # 正常退出循环 = 模型给出了 finish_research（或自己停了）。
@@ -4907,13 +5262,14 @@ def run_lead_loop(
     # **只允许交稿**的调用收尾。这不是新增预算，而是把兜底从「直接掐断」改成
     # 「有界收尾」：材料够就交答案，不够就如实写缺口。
     # 取消/超时不延长：这两条路径不进入收尾回合。
-    _no_wrapup = ("cancelled", "failed", "request_timeout", "context_limit")
+    _no_wrapup = ("cancelled", "failed", "request_timeout")
     if not draft and not stop_reason.startswith(_no_wrapup) and not budget.expired():
         context.last_stop_hint = {
             "tool_budget": f"研究工具额度已用尽（{context.tool_calls}/{config.max_tool_calls}）",
             "call_budget": "模型调用额度即将用尽",
             "no_progress": "连续无效回合，已停止研究",
             "deadline": "墙钟预算已到",
+            "research_time": "研究时间已到，使用总预算内预留的时间交稿",
             "failed": "研究回合出错，已停止",
         }.get(stop_reason, stop_reason or "研究阶段结束")
         if budget.can_call(reserve=0):
@@ -4937,6 +5293,15 @@ def run_lead_loop(
                                "deadline" if budget.expired() else stop_reason or "no_draft")
                 if wrapup_note:
                     gaps = [*gaps, wrapup_note]
+
+    if (not draft and context.artifact_repair_draft and not llm.cancellation_requested()
+            and stop_reason != 'cancelled' and not (context.user_input and context.user_input.pending())):
+        draft, coverage, gaps, context.pending_artifacts, context.pending_artifact_errors, parsed = context.artifact_repair_draft
+        plan_note = _finish_plan(context, parsed, role)
+        if plan_note:gaps = [*gaps, plan_note]
+        context.accepted_artifacts = role == 'lead'
+        gaps = [*gaps, '附件修正未完成，交付此前保留的正文和有效附件。']
+        if stop_reason == 'failed':stop_reason = 'failed+partial_delivery'
 
     return {
         "draft": draft,
@@ -5158,16 +5523,24 @@ def _wrapup_turn(
     lines = [_current_mission(context, requirements, mission_text, brief_context)]
     if context.skills.loaded:
         lines.append(context.skills.prompt())
+    if context.latest_work_notes:
+        lines.append("【工作笔记（非证据，保留判断、排除路线与缺口）】" + json.dumps(context.latest_work_notes, ensure_ascii=False))
+    if context.rejection_items:
+        lines.append("【尚未解决的存证反馈】" + json.dumps(context.rejection_items, ensure_ascii=False))
     lines += [
         f"【研究为何结束】{context.last_stop_hint or '研究已进入收尾'}",
         f"【已保存证据卡】共 {len(cards)} 张",
     ]
     if cards:
-        for card in cards:
+        from dra.context_delivery import delivery_evidence
+        lines.append("重复原文区间只展示一次；quote_ref / text_ref 指向同一消息中 evidence_id 对应的完整原文，限定上下文同样适用。")
+        for card, evidence in zip(cards, delivery_evidence(cards)):
             lines.append(
                 f"- [{card.card_id}] {card.claim}"
-                f"（保存者：{card.created_by}）依据：{json.dumps(evidence_judge.evidence_state(card.model_dump())['evidence'], ensure_ascii=False)}"
-                f"；Jev：{_judgment_for_model(card.judgment) or '未核验'}"
+                f"（保存者：{card.created_by}）依据：{json.dumps(evidence, ensure_ascii=False)}"
+                + ((f"；Jev：{_judgment_for_model(card.judgment)}" if config.evidence_judge.enabled else
+                    f"；已有 JEV 核验记录（本轮不调用）：{_judgment_for_model(card.judgment)}") if card.judgment else
+                   "；Jev：未核验" if config.evidence_judge.enabled else "")
             )
     else:
         lines.append("（没有任何证据卡：只能如实说明未取到可引用材料，不要编造结论）")
@@ -5177,14 +5550,16 @@ def _wrapup_turn(
         for task in manager.inspect():
             result=task.get("result",{})
             lines.append("【子任务结果（摘要非证据）】"+json.dumps({"id":task["id"],"status":task["status"],
-                "goal":task["goal"],"findings":result.get("findings","")[:4000],"gaps":result.get("gaps",[]),
+                "goal":task["goal"],"findings":result.get("findings",""),"gaps":result.get("gaps",[]),
                 "card_ids":result.get("card_ids",[]), "summary_available":result.get("summary_available"),
                 "error":result.get("error")},ensure_ascii=False))
     if manager is not None and role == "subagent":
         while not manager.seal(context.delegation_id):
             _receive_delegation_messages(context)
-    for event in getattr(context,"delegation_messages", [])[-20:]:
-        lines.append("【协作消息（非证据）】" + json.dumps(event,ensure_ascii=False)[:6500])
+    for event in getattr(context,"delegation_messages", []):
+        if manager is not None and role == "lead" and event.get("kind") == "result":
+            continue  # 完整终态已由上面的子任务结果提供，不在协作消息里重复附上。
+        lines.append("【协作消息（非证据）】" + json.dumps(event,ensure_ascii=False))
     if role == "lead" and context.plan_items:
         lines.append("【当前路线】" + json.dumps(context.plan_items, ensure_ascii=False))
     if role == "lead":
@@ -5192,10 +5567,11 @@ def _wrapup_turn(
     if config.max_llm_calls is not None:
         lines.append(f"【剩余模型额度】{budget.remaining_calls()} 次（本次收尾占用其中 1 次）")
     messages = [
-        {"role": "system", "content": research_prompts.system_prompt(
+        {"role": "system", "content": _evidence_mode_prompt(research_prompts.system_prompt(
             config.prompt_profile, role, _wrapup_system(role=role, delegation=config.delegation_enabled),
             evidence=_WRAPUP_EVIDENCE_INSTRUCTIONS,
-            steering=_WRAPUP_STEERING_INSTRUCTIONS if role == "lead" else "", wrapup=True)
+            steering=_WRAPUP_STEERING_INSTRUCTIONS if role == "lead" else "", wrapup=True,
+            delegation=config.delegation_enabled), enabled=config.evidence_judge.enabled)
          + time_hint(store.state["research_time"]) + _source_scope_prompt(config)
          + _answer_language_prompt(store.query)},
         {"role": "user", "content": "\n".join(lines)},
@@ -5207,13 +5583,24 @@ def _wrapup_turn(
     context.model_call_id = record.call_id
     _receive_user_input(context, record.call_id, close=True)
     if role == "lead":
+        absorbed = {mid for revision in context.scope_history for mid in revision.get("user_message_ids", [])}
         messages.extend({"role": "user", "content":
             f"【用户中途消息 id={m['message_id']}，顺序={m['revision']}】\n{m['text']}"}
-            for m in context.user_messages)
+            for m in context.user_messages if m["message_id"] not in absorbed)
         context.request_plan_review("wrapup", "已进入收尾，需要同步最终路线并保留缺口")
         messages[1]["content"] += "\n" + context.plan_review_prompt(wrapup=True)
     if role == "lead" and context.execution is not None:
         messages[1]["content"] += "\n只可提交已有工作区文件，不能再运行代码。已知文件：" + json.dumps(execution_tools.snapshot(context), ensure_ascii=False)
+    from dra.context_budget import output_limit
+    finish_schemas = research_prompts.tool_schemas(config.prompt_profile,
+        [EXECUTION_FINISH_SCHEMA if role == "lead" and context.execution is not None else LEAD_FINISH_SCHEMA if role == "lead" else SUBAGENT_FINISH_SCHEMA], role)
+    if config.compaction_enabled:
+        from dra.context_budget import assess
+        request_budget = assess(context, messages, finish_schemas, phase="wrapup")
+        store.record_action("context_request_budget", {"call_id": record.call_id, **request_budget})
+        if not request_budget["fits"]:
+            budget.settle(record, store, error="完整交付材料超过收尾输入容量", status="not_sent")
+            return "", [], [], "完整证据已保留，但收尾输入超过容量；未发起超窗请求，未生成答案"
     timing_token = timing.set_ctx(
         usage_role=role,
         step="lead_wrapup" if role == "lead" else "subagent_wrapup",
@@ -5221,17 +5608,17 @@ def _wrapup_turn(
         delegation_id=context.delegation_id, parent_call_id=context.parent_call_id,
         call_id=record.call_id, turn=0,
     )
+    wrapup_deadline_token = llm.set_request_deadline(budget.deadline)
     try:
         turn = model_call(
             messages,
-            tools=research_prompts.tool_schemas(config.prompt_profile,
-                [EXECUTION_FINISH_SCHEMA if role == "lead" and context.execution is not None else LEAD_FINISH_SCHEMA if role == "lead" else SUBAGENT_FINISH_SCHEMA], role),
+            tools=finish_schemas,
             model=adapter.model,
             provider=adapter.provider,
             reasoning=adapter.reasoning,
             effort=adapter.effort,
             **_temperature_kwargs(adapter),
-            max_tokens=config.max_output_tokens,
+            max_tokens=output_limit(config, "wrapup"),
             max_retries=_CALL_MAX_RETRIES,
         )
         for field in ("reasoning_content", "reasoning"):
@@ -5246,12 +5633,13 @@ def _wrapup_turn(
         budget.settle(record, store, error=f"{type(exc).__name__}: {exc}", status="failed")
         return "", [], [], f"收尾调用失败：{type(exc).__name__}"
     finally:
+        llm.reset_request_deadline(wrapup_deadline_token)
         timing.reset_ctx(timing_token)
     usage = _turn_usage(turn)
     budget.settle(record, store, usage=usage, attempts=getattr(turn, "attempts", None))
     context.note_usage_anchor(
         getattr(usage, "prompt_tokens", None),
-        _request_chars(messages, [LEAD_FINISH_SCHEMA if role == "lead" else FINISH_SCHEMA]),
+        _request_chars(messages, finish_schemas), phase="wrapup",
     )
     for requested in getattr(turn, "tool_calls", []) or []:
         store.call_journal.record(agent_id=context.delegation_id or role, model_call_id=record.call_id,
@@ -5279,7 +5667,8 @@ def _wrapup_turn(
             plan_note = _finish_plan(context, parsed, role)
             if plan_note:
                 gaps.append(plan_note)
-        receipt = error or json.dumps({"accepted": True, "draft_chars": len(body)}, ensure_ascii=False)
+        receipt = error or json.dumps({"accepted": True, "draft_chars": len(body),
+                                      "artifact_errors": context.pending_artifact_errors}, ensure_ascii=False)
         _emit_tool(context, call.name, not error, receipt, call, turn=0, role=role,
                    status="rejected" if error else "ok")
         if error:
@@ -5375,7 +5764,6 @@ def _render_mission(
         # 开跑前确认过的目标 / 初步路线 / 未确认前提：这是**背景**，不是要逐条交差的清单——
         # 要求清单在上面的【用户要求】里，核查只按它对账。
         lines.append(brief_context)
-    lines.append("先检索取证，再交出带引用的答案（按问题维度组织）。")
     return "\n".join(lines)
 
 
@@ -5384,7 +5772,6 @@ def _render_subagent_mission(mission: str) -> str:
     return "\n".join([
         f"【子任务目标】{mission}",
         "coverage 只报一条：requirement_id=sub。",
-        "先检索取证，再交出带 [cN] 的发现清单。",
     ])
 
 
@@ -5447,80 +5834,10 @@ def _unknown_citation_reason(draft: str, store: "RunStore") -> str | None:
     )
 
 
-def _recent_read_hints(context: ToolContext) -> list[str]:
-    """从已有回执恢复有界引用提示；绝不把未读全文补进工作上下文。"""
-    hints: list[str] = []
-    seen: set[tuple[str, int]] = set()
-    for receipt in reversed(context.receipts):
-        name = receipt.get("tool")
-        if not receipt.get("ok") or (name != "read_source" and name not in context.mcp.tools):
-            continue
-        data = json.loads(receipt["payload"])
-        payloads = data.get("sources", []) if name in context.mcp.tools else [data]
-        for payload in payloads:
-            ref = payload.get("source_ref")
-            reading = context.readings.get(ref)
-            if reading is None:
-                continue
-            for excerpt in payload.get("excerpts", []):
-                number = excerpt["excerpt_no"]
-                key = (ref, number)
-                if key in seen:
-                    continue
-                seen.add(key)
-                quoted = reading.quote(number)
-                if quoted is None:
-                    continue
-                quote, location = quoted
-                lo, hi = _chars_of(location)
-                if not any(a <= lo and hi <= b for a,b in context.read_exposures.get(ref, [])):
-                    continue
-                preview = quote[:160] + ("…（预览截断）" if len(quote) > 160 else "")
-                hints.append(f"- source_ref={ref}, {location}：{preview}（存证须提交完整连续quote，必要时重读）")
-                if len(hints) == 6:
-                    return hints
-    return hints
-
-
-_ARCHIVE_STUB_HINTS = 6
-_ARCHIVE_STUB_PREVIEW_CHARS = 160
-"""归档存根的边界：最多 6 条未用片段预览、每条 ≤160 字符。
-
-与 ``_recent_read_hints`` 同量级——存根本身也必须是有界的，否则"归档"会变成
-"换一个大回执继续占上下文"。
-"""
-
-
 def archived_stub(context: ToolContext, reading: Reading, ref: str) -> dict:
-    """已归档来源的最小回执：原文不在工作上下文里，但引用能力一个都没少。
-
-    三件事必须说清：
-    - **原文没消失**：磁盘快照与已读区间都在，显式 ``range``/``find`` 仍可读回；
-    - **已存卡片不受影响**：卡片自带 quote 与 location，归档只回收历史回执；
-    - **未存证的已读片段要留痕**（旧架构 ``close_saved_doc`` 的同款语义：保存后
-      退全文，未保存的 excerpt 必须留）——这里给编号、位置与有界预览，模型可以不
-      重读就继续用完整原话存卡；预览不足时须按位置重读。
-    """
+    """保留来源身份、归档标记与回读入口，不把未存证片段当成待办提醒。"""
     with context._lock:
         saved = {no for (r, no) in context.saved_excerpts if r == ref}
-    unused = []
-    for no in reading.readable_numbers():
-        if no in saved:
-            continue
-        _, location = reading.quote(no)
-        lo, hi = _chars_of(location)
-        if any(a <= lo and hi <= b for a,b in context.read_exposures.get(ref, [])):
-            unused.append(no)
-    previews: list[dict] = []
-    for no in unused[:_ARCHIVE_STUB_HINTS]:
-        quoted = reading.quote(no)
-        if quoted is None:
-            continue
-        text, location = quoted
-        head = text if len(text) <= _ARCHIVE_STUB_PREVIEW_CHARS else (
-            text[:_ARCHIVE_STUB_PREVIEW_CHARS] + "…"
-        )
-        previews.append({"excerpt_no": no, "location": location, "preview": head})
     return {
         "source_ref": ref,
         "title": reading.snapshot.title,
@@ -5528,12 +5845,11 @@ def archived_stub(context: ToolContext, reading: Reading, ref: str) -> dict:
         "archived": True,
         "total_chars": len(reading.raw),
         "cards_saved_from_this_source": len(saved),
-        "unused_readable_count": len(unused),
-        "unused_readable_previews": previews,
         "note": (
-            "该来源已归档：原文不再每轮重复投喂（磁盘快照、已读区间与已存卡片都不受影响）。"
-            "存证须提交完整连续quote；预览若不足请按位置重读，不要引用省略号。要看原文请显式给范围或定位词，"
-            '例如 range="0-3000" 或 find="关键词"。'
+            "该来源已归档：历史阅读正文已收起，完整快照、已读区间与已存卡片仍保留。"
+            f'要重新阅读，调用 read_source(source_ref="{ref}")；已压缩长文复用原压缩视图。'
+            '要查看原文局部或压缩未覆盖的内容，加 find="关键词" 或 range="0-3000"。'
+            "如回执有 next_cursor，可用 cursor 继续读后文。"
         ),
     }
 
@@ -5571,7 +5887,7 @@ def _archived_receipt_stub(context: ToolContext, content: str) -> str | None:
         return None
     if not isinstance(payload, dict) or payload.get("source_ref") not in context.archived:
         return None
-    if context.config.archive_mode == "pressure":
+    if context.config.effective_archive_mode() == "pressure":
         return context.pressure_receipt_stubs.get((payload["source_ref"], payload.get("receipt_seq")))
     return _receipt_stub_payload(context, payload)
 
@@ -5630,14 +5946,16 @@ def _archived_exchange(context: ToolContext, exchange: list[dict]) -> list[dict]
 
 def _request_chars(messages, tools=()) -> int:
     """估算与用量校准共享口径，包含参数、推理字段和工具定义；不是精确 tokenizer。"""
-    return sum(len(json.dumps(value, ensure_ascii=False)) for value in [*messages, *tools])
+    from dra.context_budget import request_chars
+    return request_chars(messages, tools)
 
 
 def _reading_receipt_rows(context, messages):
     """只枚举已配对的原文阅读回执；证据回读等工具不授予归档资格。"""
-    names = {call["id"]: (call.get("function") or {}).get("name")
-             for message in messages for call in message.get("tool_calls") or [] if call.get("id")}
+    names = {}
     for index, message in enumerate(messages):
+        for call in message.get("tool_calls") or []:
+            names[call["id"]] = (call.get("function") or {}).get("name")
         if message.get("role") != "tool":
             continue
         name = names.get(message.get("tool_call_id"))
@@ -5740,7 +6058,7 @@ def _build_messages(base, context, requirements, recent_exchanges, *, seconds_le
     if base != view.latest_base:
         # Scope revisions are appended, never written back into the original mission.
         view.append([{"role": "user", "content": "【当前有效任务】替代此前任务范围，以本条及后续用户补充为准。\n" +
-                      "\n".join(m.get("content", "") for m in base if m.get("role") == "user")}])
+                      base[1].get("content", "")}])
         view.latest_base = deepcopy(base)
     config = context.config
     tool_left = None if config.max_tool_calls is None else max(0, config.max_tool_calls - context.tool_calls)
@@ -5748,6 +6066,9 @@ def _build_messages(base, context, requirements, recent_exchanges, *, seconds_le
         f"【当前状态】已存来源 {len(context.store.state['sources'])}，"
         f"可引用快照 {len(context.readings)}，证据卡 {len(context.store.cards())}。"
     ]
+    if context.context_history_ids:
+        from dra.context_compaction import history_notice
+        lines.append(history_notice(context))
     if config.max_tool_calls is not None:
         lines.append(
             f"【工具额度】已用 {context.tool_calls}/{config.max_tool_calls}，还可调用 {tool_left} 次"
@@ -5774,7 +6095,7 @@ def _build_messages(base, context, requirements, recent_exchanges, *, seconds_le
             lines.append("【Agent 消息】" + json.dumps({"id":event["message_id"],"kind":event["kind"],
                 "sender":event.get("sender"),"message":event.get("message",""),
                 "status":event.get("task",{}).get("status"),
-                "findings":result.get("findings","")[:4000],"gaps":result.get("gaps",[]),
+                "findings":result.get("findings",""),"gaps":result.get("gaps",[]),
                 "card_ids":result.get("card_ids",[]), "summary_available":result.get("summary_available"),
                 "error":result.get("error")},ensure_ascii=False))
     if context.tool_role == "lead":
@@ -5794,17 +6115,26 @@ def _build_messages(base, context, requirements, recent_exchanges, *, seconds_le
             readings = list(context.readings.items())
         for ref, reading in readings:
             if ref in context.archived:
-                state = "**已归档**（历史原文已收起；显式重读保留至再次存证）"
+                state = "**已归档**（历史阅读回执已收起；完整快照可回读）"
             else:
-                state = "已读完本次取得内容" if reading.exhausted else "还有后文"
+                exposed = context.read_exposures.get(ref, [])
+                state = ("本 Agent 尚未读到原文" if not exposed else
+                         "本 Agent 已读完整快照" if any(lo == 0 and hi >= len(reading.raw) for lo, hi in exposed)
+                         else "本 Agent 已读部分，仍有未展示内容")
             lines.append(
                 f"- {ref}「{reading.snapshot.title or reading.snapshot.url}」"
                 f"共 {len(reading.raw)} 字，{state}"
             )
-    hints = _recent_read_hints(context)
-    if hints:
-        lines.append("【最近已读、可直接存证的片段】")
-        lines.extend(hints)
+        if context.archived:
+            lines.append(
+                "【归档来源回读】完整快照仍在；用 read_source(source_ref=来源编号) 重新阅读，"
+                "已压缩长文复用原压缩视图，其余来源从头读原文。"
+                "加 find/range 可读原文局部或压缩未覆盖的内容；回执有 next_cursor 时可继续读取。"
+            )
+    originals = [s for s in context.store.state['sources'] if s['snapshot_kind'] == 'original']
+    if originals:
+        lines.append('【原件目录】仅登记原件，尚未读取正文；图片/PDF用view_image，其他文件可由当前Agent的bash解析：' + json.dumps([
+            {'source_ref': s['ref'], 'title': s['title']} for s in originals], ensure_ascii=False))
     view.updates(lines)
     cards = context.store.cards()
     known = {card.card_id: card for card in cards}
@@ -5846,12 +6176,19 @@ def _build_messages(base, context, requirements, recent_exchanges, *, seconds_le
             judgments.append({"card_id": card.card_id, **judgment})
             view.judgments_seen[card.card_id] = judgment
     if judgments:
-        view.append([{"role": "user", "content": "【Jev 引文支持判断更新】依据不足/矛盾须修正后重存；其他未完成状态保持未核验。\n" + json.dumps(judgments, ensure_ascii=False)}])
+        note = ("【Jev 引文支持判断更新】依据不足/矛盾须修正后重存；其他未完成状态保持未核验。\n"
+                if config.evidence_judge.enabled else
+                "【已有 JEV 核验记录】本轮核验已关闭；保留既有判断供你对照引文核对，不会自动重判，也无需等待新判定。\n")
+        view.append([{"role": "user", "content": note + json.dumps(judgments, ensure_ascii=False)}])
     for exchange in new_exchanges[pending_start:]:
         view.append(exchange, exchange=True)
     view.exchanges = deepcopy(recent_exchanges)
     messages = view.render(context)
     # 压力收起在装配末尾检查、一次一批，收完重渲染一次（历史只变这一次）。
+    # When compaction is enabled, one coordinator previews archive + summary and
+    # commits a single boundary. Ordinary assembly never mutates the sent prefix.
+    if config.compaction_enabled:
+        return messages
     batch = context.pressure_archive_if_needed(messages, extra_chars=extra_chars)
     if batch is None:
         return messages
@@ -5860,7 +6197,7 @@ def _build_messages(base, context, requirements, recent_exchanges, *, seconds_le
     chars_after = sum(len(str(m.get("content") or "")) for m in messages)
     context.store.record_action(
         "context_pressure_batch",
-        {**batch, "real_chars_removed": chars_before - chars_after},
+        {**{k: v for k, v in batch.items() if not k.startswith("_")}, "real_chars_removed": chars_before - chars_after},
         action_id=f"pressure:{context.store.run_id}:{context.delegation_id or 'lead'}:{batch['batch_no']}",
     )
     return messages
@@ -6009,6 +6346,10 @@ def render_markdown(result: SimpleResult) -> str:
                     date = "MCP 返回资料"
                 # 显式 Markdown 链接：裸 URL 后面紧跟中文逗号/括号时，渲染器会把标点当成
                 # URL 的一部分，链接就点不准了。有 URL 时用 [标题](URL)，没有就只写标题。
+                if quote.observation:
+                    image = quote.observation
+                    url = f"/api/runs/{result.run_id}/images/{image['image_sha256']}"
+                    date = '视觉观察，未经机器核验' + (f" · PDF第{image['page']}页" if image.get('page') else '')
                 source = f"[{title}]({url})" if url else title
                 lines.append(
                     f"- [{card.card_id}] {f'依据 {number} · ' if len(quotes) > 1 else ''}{source}"
@@ -6118,6 +6459,7 @@ def run_simple_research(
             stop_reason = "failed"
             warnings.append(f"研究循环异常：{type(exc).__name__}: {exc}")
         finally:
+            if context.browser is not None:context.browser.close()
             if context.execution is not None:
                 if stop_reason in ('cancelled','failed'):
                     context.execution.close()
@@ -6181,6 +6523,10 @@ def run_simple_research(
         coverage_reasons.setdefault(rid, []).append(item["message"])
     if artifact_errors:
         gaps.extend(item["message"] for item in artifact_errors)
+        for item in artifact_errors:
+            for rid in item.get('requirement_ids') or ([r.id for r in context.effective_requirements] if not item.get('requirement_id') else []):
+                if coverage.get(rid) == 'answered':coverage[rid] = 'partial'
+                coverage_reasons.setdefault(rid, []).append(item['message'])
         if delivery == "delivered": delivery = "limited"
     if llm.cancellation_requested():
         stop_reason = "cancelled"

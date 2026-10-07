@@ -160,14 +160,14 @@ class ResearchHistory:
         if not re.fullmatch(r"s[0-9]{1,6}", ref):
             raise HistoryError("历史来源句柄无效")
         source = next((s for s in ledger.get("sources",[]) if s.get("ref")==ref),None)
-        if not source or source.get("snapshot_kind") != "full":
+        if not source or source.get("snapshot_kind") not in ("full", "original"):
             raise HistoryError("历史来源没有完整快照，不能导入")
         source = SourceSnapshot.model_validate(source)
         path = directory / "sources" / (ref+".txt")
-        if not path.exists() or path.resolve().parent != (directory/"sources").resolve():
+        if source.snapshot_kind == "full" and (not path.exists() or path.resolve().parent != (directory/"sources").resolve()):
             raise HistoryError("历史原文缺失")
-        data = path.read_bytes()
-        if not source.content_sha256 or _hash(data) != source.content_sha256:
+        data = path.read_bytes() if source.snapshot_kind == "full" else b""
+        if source.snapshot_kind == "full" and (not source.content_sha256 or _hash(data) != source.content_sha256):
             raise HistoryError("历史原文哈希校验失败")
         raw = data.decode("utf-8")
         if len(raw) != source.raw_chars:
@@ -180,8 +180,11 @@ class ResearchHistory:
             if not p.exists() or p.resolve().parent != (directory/"sources").resolve():
                 raise HistoryError("历史资料原件缺失")
             original = p.read_bytes()
-            if _hash(original) != source.document.get("original_sha256") or _hash(data) != source.document.get("text_sha256"):
+            if _hash(original) != source.document.get("original_sha256") or (source.snapshot_kind == "full" and _hash(data) != source.document.get("text_sha256")):
                 raise HistoryError("历史资料原件或文本版本校验失败")
+        elif source.observation:
+            self._snapshot(directory, ledger, source.observation['original_source_ref'])
+            self._copy_image(directory, source.observation)
         elif source.computation:
             if self.context.config.source_mode == "library":
                 computation = source.computation
@@ -218,13 +221,15 @@ class ResearchHistory:
             if identity in mapping:
                 return mapping[identity]
             def same(s):
-                if s.get("snapshot_kind") != "full" or s.get("content_sha256") != source.content_sha256:
+                if s.get("snapshot_kind") != source.snapshot_kind or s.get("content_sha256") != source.content_sha256:
                     return False
                 d = s.get("document")
                 if source.document:
                     return d and d.get("version_id")==source.document["version_id"] and d.get("original_sha256")==source.document["original_sha256"]
                 if source.mcp or s.get("mcp"):
                     return s.get("mcp") == source.mcp
+                if source.observation or s.get("observation"):
+                    return s.get("observation") == source.observation
                 if source.computation or s.get("computation"):
                     return s.get("computation") == source.computation
                 if source.download or s.get("download"):
@@ -240,9 +245,13 @@ class ResearchHistory:
             local = f"s{self.store._next_source}"
             self.store._next_source += 1
             origin={"run_id":entry["run_id"],"turn_index":entry["turn_index"],"source_ref":ref,"imported_at":time.time()}
+            if source.observation:
+                observation = self._import_observation(entry, source.observation)
+                source = source.model_copy(update={'observation': observation})
             snap=source.model_copy(update={"ref":local,"origin":origin,"revalidated_at":None})
             try:
-                _atomic_write(self.store.sources_dir/(local+".txt"),raw)
+                if source.snapshot_kind == "full":
+                    _atomic_write(self.store.sources_dir/(local+".txt"),raw)
                 if original is not None:
                     target = self.store.sources_dir / (local + ".original")
                     temporary = target.with_suffix(".original.tmp")
@@ -264,6 +273,27 @@ class ResearchHistory:
             raise HistoryError("历史来源句柄须来自历史来源目录，如 h1:s4")
         return self.import_source(int(match[1]),match[2])
 
+    def _copy_image(self, directory, observation):
+        from dra.durable import atomic_bytes
+        sha = observation['image_sha256']
+        if not re.fullmatch(r'[a-f0-9]{64}', sha):
+            raise HistoryError('历史图片哈希无效')
+        try:
+            data = (directory / 'images' / (sha + '.png')).read_bytes()
+        except OSError as exc:
+            raise HistoryError('历史图片缺失或无法读取') from exc
+        if _hash(data) != sha:
+            raise HistoryError('历史图片哈希校验失败')
+        target = self.store.dir / 'images' / (sha + '.png')
+        target.parent.mkdir(exist_ok=True)
+        atomic_bytes(target, data)
+
+    def _import_observation(self, entry, observation):
+        directory = self.directory.parent / entry['run_id']
+        self._copy_image(directory, observation)
+        ref = self.import_source(entry['turn_index'], observation['original_source_ref'])
+        return {**observation, 'original_source_ref': ref}
+
     def import_card(self, turn, card_id):
         from dra.simple_research import EvidenceCard
         entry,directory=self.entry(turn)
@@ -282,6 +312,13 @@ class ResearchHistory:
             if span.source_ref not in snapshots:
                 snapshots[span.source_ref] = self._snapshot(directory, ledger, span.source_ref)
             source,raw,_=snapshots[span.source_ref]
+            if span.location.startswith('image='):
+                if span.source_kind != 'observation' or not span.observation or span.observation['original_source_ref'] != source.ref:
+                    raise HistoryError('历史视觉观察来源身份不一致')
+                self._copy_image(directory, span.observation)
+                if span.source_url != source.url:
+                    raise HistoryError('历史视觉观察网址不一致')
+                continue
             for block, is_context in [(span, False), *((c, True) for c in span.context)]:
                 match=re.fullmatch(r"chars=(\d+)-(\d+)",block.location)
                 label = "上下文" if is_context else "引文"
@@ -297,6 +334,8 @@ class ResearchHistory:
         with self.store._lock:
             refs = {ref: self._import_source(entry, *snapshot) for ref, snapshot in snapshots.items()}
             local_ref=refs[old.source_ref]
+            remapped_quotes = [q.model_copy(update={'source_ref': refs[q.source_ref],
+                'observation': self._import_observation(entry, q.observation) if q.observation else None}) for q in quotes]
             identity=f"{entry['run_id']}:{card_id}"
             mapping=self.store.state.setdefault("history_cards",{})
             imported = identity not in mapping
@@ -305,7 +344,8 @@ class ResearchHistory:
             else:
                 from dra.evidence_judge import Judgment
                 card=old.model_copy(update={"card_id":self.store.next_card_id(),"source_ref":local_ref,
-                    "quotes": [q.model_copy(update={"source_ref": refs[q.source_ref]}) for q in quotes] if old.quotes else [],
+                    "quotes": remapped_quotes if old.quotes else [],
+                    "observation": remapped_quotes[0].observation,
                     "judgment": Judgment(status="pending") if self.context.config.evidence_judge.enabled else None,
                     "created_by":self.context.delegation_id or "lead",
                     "origin":{"run_id":entry["run_id"],"turn_index":turn,"card_id":card_id,

@@ -20,6 +20,12 @@ class LocalSession:
         self.store = store
         self.preview = preview
 
+    def import_file(self, name, data):
+        target = self.store.dir / 'input' / name
+        target.parent.mkdir(exist_ok=True)
+        target.write_bytes(data)
+        return str(target)
+
     def tool(self, name, args):
         assert name == 'bash'
         proc = subprocess.run(args['command'], shell=True, executable='/bin/bash',

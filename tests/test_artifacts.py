@@ -102,7 +102,6 @@ def test_bad_optional_attachments_keep_body_and_publish_valid_file(tmp_path, fil
 
 @pytest.mark.parametrize('items', [
     {'path':'/workspace/output/report.csv','title':'Report'},
-    [{'path':f'/workspace/output/{i}.csv','title':'Report'} for i in range(9)],
 ])
 def test_invalid_attachment_list_keeps_body_with_explicit_error(tmp_path, items):
     from dra.artifacts import prepare_finish

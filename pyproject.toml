@@ -19,6 +19,9 @@ dependencies = [
     "jsonschema>=4.26,<5",
     "docker>=7.1,<8",
     "pyyaml>=6",
+    "pypdfium2>=5.14.0",
+    "pillow>=12.3.0",
+    "pillow-heif>=1.8.0",
 ]
 
 # 启用私域资料索引/检索/重排时安装；纯网页研究无需 Torch。
@@ -50,6 +53,7 @@ packages = ["src/dra"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
+    "browser: 本机浏览器与离线测试页面，需要 --run-browser",
     "docker: 真实本机容器验收，需要 --run-docker",
     "live: 需要联网 / 真实 API 调用的集成测试（默认跳过，加 --run-live 才跑）",
 ]

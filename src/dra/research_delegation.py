@@ -99,7 +99,8 @@ class DelegationManager:
                               or task['status'] == 'cancel_requested')
             if user_cancelled:
                 status = 'cancelled'
-            elif expired or result.get('status', '').startswith(('deadline', 'request_timeout')):
+            elif (expired or result.get('status') == 'research_time'
+                  or result.get('status', '').startswith(('deadline', 'request_timeout'))):
                 status = 'timed_out'
             elif cancel.is_set() or result.get('status') == 'cancelled':
                 status = 'cancelled'
@@ -200,7 +201,9 @@ class DelegationManager:
                 if self.seq!=version: break
                 self.cv.wait(min(.1,max(0,end-time.monotonic())))
                 self.check()
-            return self.inspect()
+            # 完整结果由收件箱通知一次，或经 inspect 主动回查；等待只回报所选任务状态。
+            return [{'id': t['id'], 'status': t['status'], 'accepts_messages': t['accepts_messages']}
+                    for t in self.tasks.values() if not task_ids or t['id'] in task_ids]
 
     def cancel(self,task_id,reason):
         with self.cv:
