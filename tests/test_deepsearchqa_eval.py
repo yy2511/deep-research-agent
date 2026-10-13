@@ -278,6 +278,15 @@ def test_bash_leak_audit_flags_commands_and_outputs_without_blocking(modules, tm
     assert runner.bash_leak_audit(tmp_path / 'missing') == []
 
 
+def test_bash_leak_audit_keeps_journal_lines_with_unicode_separators_whole(modules, tmp_path):
+    # 网页内容里的 \u2028 等分隔符不能把一条日志拆开；拆出的 "1987" 之类碎片曾让整轮评测崩掉。
+    runner = modules[1]
+    (tmp_path / 'tool_calls.jsonl').write_text('\n'.join(json.dumps(r, ensure_ascii=False) for r in [
+        {'tool': 'read_source', 'result': 'table\u20281987\u2028200'},
+        {'tool': 'bash', 'tool_call_id': 'b', 'result': 'rows\x1c10\u2028deepsearchqa'}]), encoding='utf-8')
+    assert [h['tool_call_id'] for h in runner.bash_leak_audit(tmp_path)] == ['b']
+
+
 def test_planning_is_retried_like_a_user_retry_and_failures_are_recorded(modules, monkeypatch, tmp_path):
     runner = modules[1]
     from dra.simple_research import SimpleConfig
@@ -301,3 +310,31 @@ def test_planning_is_retried_like_a_user_retry_and_failures_are_recorded(modules
     failed = runner.run_one({"id": 5, "problem": "q"}, tmp_path / "b", SimpleConfig(), run_fn=lambda *a, **k: pytest.fail("no research"),
                             brief_config={"planner_model": "m", "planner_provider": "p"}, plan_fn=always_bad)
     assert failed["status"] == "error" and len(attempts) == runner.PLAN_ATTEMPTS
+
+
+def test_runner_records_per_call_usage_with_cache_but_not_messages(modules, monkeypatch, tmp_path):
+    runner = modules[1]
+    from dra import events
+    from dra.simple_research import SimpleConfig
+    monkeypatch.setattr(runner.simple_research, "render_markdown", lambda r: "report")
+
+    def research(query, **kwargs):
+        events.emit(events.EventType.LLM_USAGE, model="m", cache_read_tokens=900, cache_miss_tokens=100,
+                    first_token_ms=12.5, request_messages=[{"role": "user", "content": "big"}], request_tools=[])
+        events.emit("tool_result", tool="search")
+        return SimpleNamespace(draft="A", draft_rejected=False, delivery_status="delivered",
+                               stop_reason="finished", cards=[], sources=[], calls=[], usage={}, warnings=[])
+
+    runner.run_one({"id": 6, "problem": "q"}, tmp_path, SimpleConfig(), run_fn=research)
+    rows = [json.loads(line) for line in (tmp_path / "llm_usage.jsonl").read_text().splitlines()]
+    assert [(r["type"], r["cache_read_tokens"], r["first_token_ms"]) for r in rows] == [("llm_usage", 900, 12.5)]
+    assert "request_messages" not in rows[0] and "request_tools" not in rows[0]
+    events.emit(events.EventType.LLM_USAGE, model="after")  # 题目结束后不再写入
+    assert len((tmp_path / "llm_usage.jsonl").read_text().splitlines()) == 1
+
+
+def test_planner_override_only_changes_this_batch_planner(modules, monkeypatch, capsys):
+    runner = modules[1]
+    runner.main(["--ids", "1", "--planner-model", "pm", "--planner-provider", "pp"])
+    planner = json.loads(capsys.readouterr().out.splitlines()[-1])["planner"]
+    assert (planner["planner_model"], planner["planner_provider"]) == ("pm", "pp")

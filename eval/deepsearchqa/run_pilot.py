@@ -15,7 +15,7 @@ import subprocess
 import threading
 import time
 
-from dra import llm, research, research_brief, runtime_config, simple_research, subagent, file_sources
+from dra import events, llm, research, research_brief, runtime_config, simple_research, subagent, file_sources
 from dra.durable import atomic_json
 from dra.execution import ExecutionError
 from dra.evidence_judge import JudgeConfig
@@ -160,12 +160,13 @@ def bash_leak_audit(run_dir):
     run_dir = Path(run_dir)
     journal = run_dir / "tool_calls.jsonl"
     if journal.exists():
-        for line in journal.read_text(encoding="utf-8", errors="replace").splitlines():
+        # 只按 \n 分行：splitlines 还会在网页内容里的 \x1c、\u2028 等字符处断开，切出的碎片可能解析成数字。
+        for line in journal.read_text(encoding="utf-8", errors="replace").split("\n"):
             try:
                 call = json.loads(line)
             except ValueError:
                 continue
-            if call.get("tool") == "bash":
+            if isinstance(call, dict) and call.get("tool") == "bash":
                 text = " ".join(str(call.get(k) or "") for k in ("arguments_raw", "arguments", "result"))
                 if LEAKAGE_MARKER.search(text):
                     hits.append({"where": "bash_call", "tool_call_id": call.get("tool_call_id"), "phase": call.get("phase")})
@@ -174,6 +175,23 @@ def bash_leak_audit(run_dir):
         if LEAKAGE_MARKER.search(path.read_text(encoding="utf-8", errors="replace")):
             hits.append({"where": "bash_output", "file": path.name})
     return hits
+
+
+def _usage_recorder(path):
+    """逐次记录模型调用用量（含缓存命中、首字延迟、重试）。每个 worker 进程同时只跑一题，故不按 run_id 过滤。
+
+    完整请求消息与工具定义不写入：内容已在 run.json / tool_calls.jsonl，逐次重复会使每题多出数 MB。
+    """
+    path.unlink(missing_ok=True)
+    lock = threading.Lock()
+
+    def sink(evt):
+        if evt.get("type") != "llm_usage":
+            return
+        row = {k: v for k, v in evt.items() if k not in ("request_messages", "request_tools")}
+        with lock, path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+    return events.subscribe(sink)
 
 
 def delivered_answer(result):
@@ -197,6 +215,7 @@ def run_one(question, out, config, *, run_fn=None, brief_config=None, plan_fn=No
     simple_research.fetch_url_content = guard.wrap_fetch(old_fetch)
     file_sources.fetch_original = guard.wrap_download(old_download)
     trace_token = llm.set_trace_full_io(True)
+    usage_sink = _usage_recorder(out / "llm_usage.jsonl")
     started = time.monotonic()
     record = {**question, "run_id": run_id, "response": "", "status": "error",
               "prompt_profile": config.prompt_profile}
@@ -229,6 +248,7 @@ def run_one(question, out, config, *, run_fn=None, brief_config=None, plan_fn=No
         simple_research.fetch_url_content = old_fetch
         file_sources.fetch_original = old_download
         llm.reset_trace_full_io(trace_token)
+        events.unsubscribe(usage_sink)
     record["bash_leak_hits"] = bash_leak_audit(RUNS_DIR / run_id)
     record.update(wall_seconds=round(time.monotonic() - started, 2), searches=guard.searches,
                   blocked_benchmark_pages=guard.blocked, blocked_original_downloads=guard.blocked_originals)
@@ -251,6 +271,8 @@ def main(argv=None):
     parser.add_argument("--seconds", type=float, default=1200, help="每题研究总时限，默认与第 68 题复测相同的 1200 秒")
     parser.add_argument("--model", help="仅覆盖本批研究模型，不修改网页设置")
     parser.add_argument("--provider", help="仅覆盖本批连接，不修改网页设置")
+    parser.add_argument("--planner-model", help="仅覆盖本批计划模型，不修改网页设置")
+    parser.add_argument("--planner-provider", help="仅覆盖本批计划连接，不修改网页设置")
     parser.add_argument("--no-plan", action="store_true", help="不生成计划，研究只收到原题（旧口径对照）")
     parser.add_argument("--run-live", action="store_true")
     args = parser.parse_args(argv)
@@ -269,7 +291,10 @@ def main(argv=None):
     config = research_config(settings, args.seconds)
     config_data = config.model_dump(mode="json")
     # 计划模型跟随网页设置；只记录模型身份，不含凭据。
-    brief_config = None if args.no_plan else runtime_config.to_brief_config(settings).model_dump(mode="json")
+    planner_overrides = {k: v for k, v in {"planner_model": args.planner_model,
+                                           "planner_provider": args.planner_provider}.items() if v}
+    brief_config = None if args.no_plan else runtime_config.to_brief_config(
+        settings, **planner_overrides).model_dump(mode="json")
     protocol = {"seed": args.seed, "excluded_ids": sorted(EXPOSED_IDS),
                 "questions": questions, "config": config_data,
                 "provenance": json.loads((HERE / "data/provenance.json").read_text()),
