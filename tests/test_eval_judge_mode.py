@@ -129,3 +129,29 @@ def test_official_image_capability_does_not_depend_on_env_already_loaded(monkeyp
     monkeypatch.setattr(provider_registry, 'custom_connections', lambda: {})
     snapshot = provider_registry.capacity_snapshot('deepseek', 'deepseek-flash')
     assert snapshot['image_input'] is True and snapshot['sources']['image_input'] == ['official']
+
+
+def test_drb2_matches_deepsearchqa_web_aligned_research_and_plans_first(monkeypatch, tmp_path):
+    settings = runtime_config.RuntimeModelSettings(planner={'provider': 'f', 'model': 'f'}, subagent={'provider': 'f', 'model': 'f'})
+    monkeypatch.setattr(runtime_config, 'current', lambda: settings)
+    module = _load_eval('drb2_aligned', 'eval/drb2/run_pilot.py', monkeypatch)
+    expected = module.DSQA.research_config(settings, 2400).model_dump(mode='json')
+    seen = {}
+    monkeypatch.setattr(module.DSQA, 'prepare_plan', lambda problem, brief: (
+        {'requirements': ['r'], 'brief_context': 'ctx', 'initial_route': []}, {'brief': problem}))
+
+    class Captured(Exception):
+        pass
+
+    def capture(query, *, config, **kwargs):
+        seen.update(config=config.model_dump(mode='json'), kwargs=kwargs)
+        raise Captured
+    monkeypatch.setattr(module.research, 'run_minimal_research', capture)
+    task = {'idx': 1, 'content': {'task': 'fixture', 'blocked': {'urls': ['https://example.org/paper'], 'title': 'T'}}}
+    with pytest.raises(Captured):
+        module.run_one(task, tmp_path, settings=settings, seconds=2400, brief_config={'planner_model': 'f'})
+    got = seen['config']
+    assert got['blocked_sites'] == ['example.org/paper']
+    assert {k: v for k, v in got.items() if k != 'blocked_sites'} == {k: v for k, v in expected.items() if k != 'blocked_sites'}
+    assert got['wall_timeout_s'] == 2400 and got['execution'] == expected['execution']
+    assert seen['kwargs']['brief_context'] == 'ctx' and (tmp_path / 'plan.json').exists()
