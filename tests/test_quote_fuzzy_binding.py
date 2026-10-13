@@ -181,3 +181,21 @@ def test_source_mismatch_requires_selection_and_keeps_actual_source(tmp_path):
         {'candidate_id': row['candidates'][0]['candidate_id']}]}]})
     assert ok and json.loads(body)['results'][0]['accepted']
     assert ctx.store.cards()[0].quotes[0].source_ref == 's2'
+
+
+def test_long_table_quote_with_skipped_rows_is_located_quickly():
+    # 真实运行里模型整段复制表格、漏掉中间一个小标题，旧的近似搜索在研究线程里卡了两小时。
+    import time
+    rows = [f'| {i} | STS-{i} | Discovery | Commander {i % 17} | Pilot {i % 11} |' for i in range(600)]
+    header = ['## 2001–2005', '| Order | Mission | Shuttle | Commander | Pilot | Mission specialists | Payload |',
+              '| --- | --- | --- | --- | --- | --- | --- |', '| --- | --- | --- | --- | --- | --- | --- |']
+    raw = '\n'.join(rows[:300] + header + rows[300:])
+    start = raw.index(rows[260])
+    end = raw.index(rows[320]) + len(rows[320])
+    copied = '\n'.join(rows[260:321])  # 漏掉中间的小标题和表头，约 7% 的差异
+    started = time.monotonic()
+    result = locate(copied, raw)
+    assert time.monotonic() - started < 10
+    best = result['candidates'][0]
+    assert (best['start'], best['end']) == (start, end)
+    assert best['binding']['edit_distance'] == len(raw[start:end]) - len(copied)

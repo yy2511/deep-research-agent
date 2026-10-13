@@ -9,7 +9,6 @@ import math
 import re
 
 import regex
-from fuzzysearch.levenshtein import find_near_matches_levenshtein
 
 
 # Alignment tolerances, not document/quote length limits. The offline replay
@@ -130,22 +129,82 @@ def _exact_matches(needle, text):
         cursor = start + 1
 
 
+def _edit_columns(pattern, text, *, anchored):
+    """Myers bit-parallel edit distance, one Python big integer per column.
+
+    Yields (characters consumed, distance of the whole pattern). Unanchored, the
+    match may start anywhere in text (distance to the best substring ending
+    there); anchored, it must start at text[0] (distance to that prefix). Cost
+    is len(text) x len(pattern)/word, so long quotes stay fast; no length cap.
+    """
+    m = len(pattern)
+    peq = {}
+    for i, char in enumerate(pattern):
+        peq[char] = peq.get(char, 0) | (1 << i)
+    mask, top = (1 << m) - 1, 1 << (m - 1)
+    pv, mv, score = mask, 0, m
+    for j, char in enumerate(text, 1):
+        eq = peq.get(char, 0)
+        xv = eq | mv
+        xh = (((eq & pv) + pv) ^ pv) | eq
+        ph = mv | (~(xh | pv) & mask)
+        mh = pv & xh
+        if ph & top:
+            score += 1
+        elif mh & top:
+            score -= 1
+        ph = ((ph << 1) | anchored) & mask
+        mh = (mh << 1) & mask
+        pv = mh | (~(xv | ph) & mask)
+        mv = ph & xv
+        yield j, score
+
+
 def _fuzzy_matches(needle, text, errors):
-    # Use the library's full-query Levenshtein search before its public wrapper
-    # consolidates overlapping matches: overlapping occurrences can be distinct
+    # Exact Levenshtein search over the whole query: every end position within
+    # the error budget, then the best start for each locally best end. Several
+    # local minima are kept because overlapping occurrences can be distinct
     # evidence locations. Unicode offsets stay in characters, never UTF-8 bytes.
-    matches = {}
-    for match in find_near_matches_levenshtein(needle, text, errors):
-        if match.end > match.start:
-            span = (match.start, match.end)
-            matches[span] = min(matches.get(span, match.dist), match.dist)
+    m, matches = len(needle), {}
+    runs, run = [], []
+    for end, distance in _edit_columns(needle, text, anchored=False):
+        if distance <= errors:
+            if run and run[-1][0] != end - 1:
+                runs.append(run)
+                run = []
+            run.append((end, distance))
+    if run:
+        runs.append(run)
+    reversed_needle = needle[::-1]
+    for run in runs:
+        plateaus = []
+        for end, distance in run:
+            if plateaus and plateaus[-1][0] == distance:
+                plateaus[-1][1].append(end)
+            else:
+                plateaus.append((distance, [end]))
+        for i, (distance, ends) in enumerate(plateaus):
+            if (i and plateaus[i - 1][0] <= distance) or (i + 1 < len(plateaus) and plateaus[i + 1][0] <= distance):
+                continue
+            for end in ends:
+                lo = max(0, end - m - errors)
+                # Walk back from the end; the best start has the fewest edits.
+                # On a tie keep the longer slice: an edge character counts as
+                # replaced, not as dropped from the copy (which blocks auto-binding).
+                size, best = min(((size, d) for size, d in
+                                  _edit_columns(reversed_needle, text[lo:end][::-1], anchored=True)),
+                                 key=lambda item: (item[1], -item[0]))
+                if best <= errors:
+                    span = (end - size, end)
+                    matches[span] = min(matches.get(span, best), best)
     # Drop worse endpoint variants of the same occurrence, not distinct
     # overlapping occurrences. A shifted endpoint is not another source passage.
+    # With equal edits the enclosing slice wins, as with the start above.
     kept = []
     for (lo, hi), distance in sorted(matches.items(), key=lambda item: (
-            item[1], abs(item[0][1] - item[0][0] - len(needle)), item[0])):
+            item[1], item[0][0] - item[0][1], item[0])):
         if any((a <= lo and hi <= b or lo <= a and b <= hi) and
-               (d < distance or abs(b - a - len(needle)) < abs(hi - lo - len(needle)))
+               (d < distance or b - a > hi - lo)
                for a, b, d in kept):
             continue
         kept.append((lo, hi, distance))
@@ -204,23 +263,38 @@ def bind_quote(quote, sources, exposures, *, selection=None, markup_sources=()):
     # Only widen when there is none; broad matches always need selection. This
     # avoids expensive large-distance alignment for an otherwise obvious typo.
     for error_rate in (FUZZY_AUTO_ERROR_RATE, FUZZY_SEARCH_ERROR_RATE):
-        candidates = []
-        for ref, raw, lo, hi, text, positions, wanted in views:
+        found = []
+        for view in views:
+            ref, raw, lo, hi, text, positions, wanted = view
             errors = math.floor(len(wanted) * error_rate)
             for a, b, distance in _fuzzy_matches(wanted, text, errors):
-                c = _candidate(ref, raw, lo, positions, a, b, quote, 'fuzzy')
-                ops = SequenceMatcher(None, wanted, text[a:b], autojunk=False).get_opcodes()
-                missing_edge = any(kind == 'delete' and (x == 0 or y == len(wanted))
-                                   for kind, x, y, _, _ in ops)
-                boundary = missing_edge and ((a == 0 and lo > 0) or (b == len(text) and hi < len(raw)))
-                c['binding'].update(edit_distance=distance, query_chars=len(wanted),
-                                    missing_edge=missing_edge, needs_read=boundary)
-                candidates.append(c)
-        if candidates:
+                found.append((distance, ref, lo + positions[a][0], a, b, view))
+        if found:
             break
-    candidates.sort(key=lambda c: (c['binding']['edit_distance'], c['source_ref'], c['start']))
-    if not candidates:
+    if not found:
         return _result([])
+    found.sort(key=lambda item: item[:3])
+
+    def at_unread_edge(item):
+        _, _, _, a, b, (_, raw, lo, hi, text, _, _) = item
+        return (a == 0 and lo > 0) or (b == len(text) and hi < len(raw))
+
+    def describe(item):
+        distance, ref, _, a, b, (_, raw, lo, hi, text, positions, wanted) = item
+        c = _candidate(ref, raw, lo, positions, a, b, quote, 'fuzzy')
+        ops = SequenceMatcher(None, wanted, text[a:b], autojunk=False).get_opcodes()
+        missing_edge = any(kind == 'delete' and (x == 0 or y == len(wanted))
+                           for kind, x, y, _, _ in ops)
+        c['binding'].update(edit_distance=distance, query_chars=len(wanted),
+                            missing_edge=missing_edge, needs_read=missing_edge and at_unread_edge(item))
+        return c
+
+    # Repetitive tables can yield hundreds of matches. Only returned candidates
+    # need a character diff; needs_read can hold only when every match touches
+    # an unread edge, so those are all described. total_matches stays complete.
+    every = all(at_unread_edge(item) for item in found)
+    candidates = [describe(item) if every or i < MAX_CANDIDATES else {'binding': {'needs_read': False}}
+                  for i, item in enumerate(found)]
     best = candidates[0]['binding']
     if all(c['binding']['needs_read'] for c in candidates):
         return _result(candidates, status='needs_read')
