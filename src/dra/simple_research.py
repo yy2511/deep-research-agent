@@ -4879,6 +4879,31 @@ def run_lead_loop(
             if getattr(turn, "stopped", False):
                 stop_reason = "deadline" if budget.expired() else getattr(turn, "stop_reason", "") or "cancelled"
                 break
+            if getattr(turn, "finish_reason", None) == "length":
+                # 截断内容不回给模型，但完整另存供诊断（如第一轮未检索就长篇推理）。
+                from dra.durable import atomic_json
+                message = getattr(turn, "assistant_message", {}) or {}
+                diagnostic = f"truncated_turns/{_action_actor}-turn{turns}.json"
+                atomic_json(store.dir / diagnostic, {
+                    "call_id": record.call_id, "turn": turns, "role": role,
+                    "content": message.get("content", getattr(turn, "content", "")),
+                    **{k: v for k, v in message.items() if k not in ("role", "content")},
+                    "note": getattr(turn, "note", ""),
+                })
+                store.record_action(
+                    "output_truncated",
+                    {"call_id": record.call_id, "turn": turns, "finish_reason": "length",
+                     "output_tokens": getattr(turn, "output_tokens", None),
+                     "max_output_tokens": config.max_output_tokens, "diagnostic_file": diagnostic},
+                    action_id=f"truncated:{store.run_id}:{_action_actor}:{turns}",
+                )
+                # 截断回合及其工具片段不进入历史，也不执行；下一轮仍由原预算决定能否继续。
+                recent_exchanges.append([{
+                    "role": "user",
+                    "content": "上一轮输出达到单次额度上限，未执行任何工具。"
+                               "请基于此前完整记录继续，调用工具推进研究，或用 finish_research 交出答案。",
+                }])
+                continue
             # 流式装配不完整（终止原因异常 / 缺 index·id·name / 回调出错）：
             # **一个工具都不执行**——半截或伪造的参数会以错误参数触达外部边界。
             if getattr(turn, "incomplete", False):

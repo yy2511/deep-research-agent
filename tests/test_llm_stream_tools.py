@@ -181,6 +181,7 @@ def test_length_finish_reason_is_incomplete_and_no_tool_calls(fake):
     ])
     turn = _stream_call(client)
     assert turn.incomplete is True
+    assert turn.finish_reason == "length"
     assert "length" in turn.note
     assert turn.tool_calls == []
     # 片段不静默丢弃：写进 note 供诊断，但不可执行

@@ -33,8 +33,9 @@ _NO_RETRY_STATUS = {400, 401, 403, 404, 422}
 
 # SDK 的默认 read timeout 是 600s，且默认自动重试 2 次；再叠项目自己的重试会把
 # 单个调用拉到不可解释的长等待。项目统一管理重试，SDK 一律关闭内建重试；每次请求
-# 默认最多等 90s，调用方可显式给更长预算。
-DEFAULT_REQUEST_TIMEOUT_S = 90.0
+# 默认最多等 240s（SDK 按单次读取计时：等首字或两段输出之间的间隔），调用方可显式给其他预算。
+# 原为 90s：2026-10-12 实测 15 万 token 以上的长请求高峰期首字常超过 90s，断开后上游仍按全部输入计费且无缓存。
+DEFAULT_REQUEST_TIMEOUT_S = 240.0
 DEFAULT_MAX_RETRIES = 1
 
 
@@ -890,6 +891,8 @@ class ToolTurn(BaseModel):
     assistant_message: dict = Field(default_factory=dict)
     input_tokens: int | None = None
     output_tokens: int | None = None
+    finish_reason: str | None = None
+    """服务端返回的终止原因；研究循环据此区分输出额度截断与其它协议错误。"""
     incomplete: bool = False
     """流式装配不完整（终止原因异常 / 缺 index·id·name / 回调出错 / 未知扩展字段）。
     为 True 时 **本次返回的 tool_calls 一律不得执行**——半截或伪造的参数会以错误
@@ -1076,10 +1079,14 @@ def call_tools(
                 messages,
                 content + tool_trace,
                 _t0, model, usage, tools=tools)
+            finish_reason = getattr(resp.choices[0], "finish_reason", None)
+            if not isinstance(finish_reason, str):
+                finish_reason = None
             turn = ToolTurn(content=content, tool_calls=calls,
                             assistant_message=assistant_message,
                             input_tokens=getattr(usage, "prompt_tokens", None),
                             output_tokens=getattr(usage, "completion_tokens", None),
+                            finish_reason=finish_reason,
                             incomplete=incomplete,
                             note="有工具调用缺少 function.name" if incomplete else "")
             turn.attempts = attempt + 1
@@ -1351,6 +1358,7 @@ def _stream_tool_turn(
             assistant_message={},
             input_tokens=getattr(usage, "prompt_tokens", None),
             output_tokens=getattr(usage, "completion_tokens", None),
+            finish_reason=finish_reason,
             incomplete=True,
             note="；".join(problems) if problems else "",
             stopped=True,
@@ -1419,6 +1427,7 @@ def _stream_tool_turn(
         assistant_message=assistant_message,
         input_tokens=getattr(usage, "prompt_tokens", None),
         output_tokens=getattr(usage, "completion_tokens", None),
+        finish_reason=finish_reason,
         incomplete=incomplete,
         note="；".join(dict.fromkeys(problems)),
         streamed=bool(content_parts),
