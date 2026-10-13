@@ -142,7 +142,7 @@ def test_runner_downloads_originals_with_leak_guard_and_follows_vision_setting(m
     def research(query, **kwargs):
         config = kwargs['config']
         seen.append(config.vision.enabled)
-        assert not config.browser.enabled
+        assert config.browser.enabled and config.browser.mode == 'isolated'  # 只按批次协议开启，且固定独立模式
         assert file_sources.fetch_original('https://orr.gov.uk/table.ods')[2]['filename'] == 'table.ods'
         with pytest.raises(runner.ExecutionError) as error:
             file_sources.fetch_original('https://example.org/leak.csv')
@@ -153,7 +153,7 @@ def test_runner_downloads_originals_with_leak_guard_and_follows_vision_setting(m
             stop_reason='finished', cards=[], sources=[], calls=[], usage={}, warnings=[])
     monkeypatch.setattr(runner.simple_research, 'render_markdown', lambda *a: '')
     result = runner.run_one({'id': 1, 'problem': 'offline question'}, tmp_path / 'out',
-        SimpleConfig(vision=VisionConfig(enabled=True), browser={'enabled': True}), run_fn=research)
+        SimpleConfig(vision=VisionConfig(enabled=True), browser={'enabled': True, 'mode': 'extension'}), run_fn=research)
     assert seen == [True]
     assert calls == ['https://orr.gov.uk/table.ods', 'https://example.org/leak.csv']  # 第三个在下载前就被拦下
     assert result['blocked_original_downloads'] == ['https://example.org/leak.csv',
@@ -276,6 +276,15 @@ def test_bash_leak_audit_flags_commands_and_outputs_without_blocking(modules, tm
     hits = runner.bash_leak_audit(tmp_path)
     assert {h.get('tool_call_id') or h.get('file') for h in hits} == {'b', 'exec_2.stdout'}
     assert runner.bash_leak_audit(tmp_path / 'missing') == []
+
+
+def test_browser_calls_are_audited_like_bash(modules, tmp_path):
+    # 开浏览器的批次：浏览器访问不经过搜索/阅读的泄题过滤，事后同样扫描并标记。
+    runner = modules[1]
+    (tmp_path / 'tool_calls.jsonl').write_text('\n'.join(json.dumps(r) for r in [
+        {'tool': 'browser', 'tool_call_id': 'a', 'arguments_raw': '{"tool": "browser_navigate", "arguments": {"url": "https://wonder.cdc.gov"}}'},
+        {'tool': 'browser', 'tool_call_id': 'b', 'arguments_raw': '{"tool": "browser_navigate", "arguments": {"url": "https://example.org/deepsearchqa-answers"}}'}]))
+    assert runner.bash_leak_audit(tmp_path) == [{'where': 'browser_call', 'tool_call_id': 'b', 'phase': None}]
 
 
 def test_bash_leak_audit_keeps_journal_lines_with_unicode_separators_whole(modules, tmp_path):

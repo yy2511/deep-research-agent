@@ -58,12 +58,13 @@ def skill_bundle():
     return skills.SkillRepository(DATA_DIR).prepare([])
 
 
-def research_config(settings, seconds):
+def research_config(settings, seconds, *, browser=False):
     # 运行代码与网页一致（执行后端、联网方式取自网页有效配置）；Bash 的联网访问由 bash_leak_audit 事后检查。
+    # 浏览器默认关闭；开启时用独立无界面浏览器，导航沿用网站黑名单，访问记录同样事后审计。
     return runtime_config.to_simple_config(
         settings, wall_timeout_s=seconds, execution=runtime_config.execution_config(settings),
         evidence_judge=JudgeConfig(enabled=False),
-        browser=BrowserConfig(enabled=False), compaction_enabled=False, skill_bundle=skill_bundle(),
+        browser=BrowserConfig(enabled=browser), compaction_enabled=False, skill_bundle=skill_bundle(),
         blocked_sites=BLOCKED_SITES, source_mode="web", mcp_servers=[])
 
 
@@ -155,7 +156,7 @@ def prepare_plan(problem, brief_config, *, plan_fn=None):
 
 
 def bash_leak_audit(run_dir):
-    """Bash 可直接联网，绕过搜索/阅读/下载的泄题过滤；研究结束后扫描命令与输出，命中只标记不改答案。"""
+    """Bash 与浏览器可直接联网，绕过搜索/阅读/下载的泄题过滤；研究结束后扫描调用与输出，命中只标记不改答案。"""
     hits = []
     run_dir = Path(run_dir)
     journal = run_dir / "tool_calls.jsonl"
@@ -166,10 +167,10 @@ def bash_leak_audit(run_dir):
                 call = json.loads(line)
             except ValueError:
                 continue
-            if isinstance(call, dict) and call.get("tool") == "bash":
+            if isinstance(call, dict) and call.get("tool") in ("bash", "browser"):
                 text = " ".join(str(call.get(k) or "") for k in ("arguments_raw", "arguments", "result"))
                 if LEAKAGE_MARKER.search(text):
-                    hits.append({"where": "bash_call", "tool_call_id": call.get("tool_call_id"), "phase": call.get("phase")})
+                    hits.append({"where": f"{call['tool']}_call", "tool_call_id": call.get("tool_call_id"), "phase": call.get("phase")})
     logs = run_dir / "execution" / "logs"
     for path in sorted(logs.glob("*")) if logs.is_dir() else []:
         if LEAKAGE_MARKER.search(path.read_text(encoding="utf-8", errors="replace")):
@@ -204,8 +205,9 @@ def run_one(question, out, config, *, run_fn=None, brief_config=None, plan_fn=No
     给出 ``brief_config`` 时先按网页方式生成计划（不问澄清问题）再研究；不给时沿用无计划协议。
     """
     run_fn = run_fn or research.run_minimal_research
-    # 看图跟随传入配置（新批次沿用网页设置）；浏览器在评测中始终关闭，泄题过滤不覆盖浏览器访问。
-    config = config.model_copy(update={'browser': BrowserConfig(enabled=False)})
+    # 看图跟随传入配置（新批次沿用网页设置）；浏览器只在批次协议显式开启时可用（独立模式），
+    # 搜索/阅读的泄题过滤不覆盖浏览器页面，靠黑名单与事后审计。
+    config = config.model_copy(update={'browser': BrowserConfig(enabled=config.browser.enabled)})
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     run_id = f"dsqa-{question['id']}-{datetime.now():%Y%m%d-%H%M%S-%f}"
@@ -273,6 +275,7 @@ def main(argv=None):
     parser.add_argument("--provider", help="仅覆盖本批连接，不修改网页设置")
     parser.add_argument("--planner-model", help="仅覆盖本批计划模型，不修改网页设置")
     parser.add_argument("--planner-provider", help="仅覆盖本批计划连接，不修改网页设置")
+    parser.add_argument("--browser", action="store_true", help="开启独立无界面浏览器（默认关闭）；导航沿用黑名单，访问事后审计")
     parser.add_argument("--no-plan", action="store_true", help="不生成计划，研究只收到原题（旧口径对照）")
     parser.add_argument("--run-live", action="store_true")
     args = parser.parse_args(argv)
@@ -288,7 +291,7 @@ def main(argv=None):
     node_overrides = {k: v for k, v in {"model": args.model, "provider": args.provider}.items() if v}
     if node_overrides:
         settings = settings.model_copy(update={"subagent": settings.subagent.model_copy(update=node_overrides)})
-    config = research_config(settings, args.seconds)
+    config = research_config(settings, args.seconds, browser=args.browser)
     config_data = config.model_dump(mode="json")
     # 计划模型跟随网页设置；只记录模型身份，不含凭据。
     planner_overrides = {k: v for k, v in {"planner_model": args.planner_model,
