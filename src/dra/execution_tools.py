@@ -259,7 +259,8 @@ def execute(ctx,name,args):
                 if item not in ctx.execution_materials:
                     ctx.execution_materials.append(item)
         if name == 'bash' and 'fetch' in args:
-            inputs = [item for item in ctx.execution_materials if item['source_ref'] in args['source_refs']]
+            # 导出资料时登记的清单文件没有来源编号，不属于本次声明的输入。
+            inputs = [item for item in ctx.execution_materials if item.get('source_ref') in args['source_refs']]
             args = {**args, 'command': 'export DRA_INPUTS=' + shlex.quote(json.dumps(inputs, ensure_ascii=False)) + '\n' + args['command']}
         payload=(export_materials(ctx,args) if name=='export_research_materials' else
                  download_source(ctx,args) if name=='download_source' else session.tool(name,{k:v for k,v in args.items() if k != 'fetch'}))

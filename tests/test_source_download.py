@@ -3,6 +3,7 @@ import csv
 import hashlib
 import io
 import json
+import shlex
 import socket
 
 import pytest
@@ -298,3 +299,18 @@ def test_web_original_download_matches_bytes_and_checks_hash(tmp_path, monkeypat
     (ctx.store.sources_dir / f'{ref}.original').write_bytes(b'bad')
     with pytest.raises(HTTPException):
         web.api_run_original(run_id, ref)
+
+
+def test_bash_fetch_after_export_ignores_manifest_material(tmp_path, monkeypatch):
+    # 导出资料会登记一个没有来源编号的清单文件；之后带 fetch 的 bash 不能因此崩掉整轮研究。
+    fake_http(monkeypatch, [Response(), Response()])
+    ctx = context(tmp_path)
+    commands = []
+    ctx.execution.tool = lambda name, args: commands.append(args['command']) or {'ok': True, 'stdout': ''}
+    ref = json.loads(ctx.execute('download_source', {'url': URL})[0])['source_ref']
+    assert ctx.execute('export_research_materials', {'source_refs': [ref]})[1]
+    assert any('source_ref' not in item for item in ctx.execution_materials)
+    receipt, ok = ctx.execute('bash', {'command': 'ls', 'fetch': [URL]})
+    assert ok, receipt
+    inputs = json.loads(shlex.split(commands[0].split('\n', 1)[0].removeprefix('export DRA_INPUTS='))[0])
+    assert [item['source_ref'] for item in inputs] == [ref]
