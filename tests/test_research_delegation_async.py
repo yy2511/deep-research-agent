@@ -277,3 +277,27 @@ def test_repeated_provider_call_ids_do_not_reuse_task_or_budget_identity(tmp_pat
     assert {t['parent_call_id'] for t in tasks}=={'1:c0','2:c0'}
     children=[c for c in result.calls if c.role=='subagent']
     assert len(children)==2 and len({c.call_id for c in children})==2
+
+
+def test_research_cutoff_cancels_active_child_and_still_delivers(tmp_path):
+    """研究阶段到点时子任务还在跑：不再因「有活跃子任务」挡住交稿，收掉子任务后用交稿回合交卷。"""
+    import time
+    from dra import simple_research as sr, llm
+    from test_simple_research import _turn
+    started = time.monotonic()
+    def model(messages, **kwargs):
+        if '你是研究子 Agent' in messages[0]['content']:
+            while not llm.cancellation_requested() and time.monotonic() - started < 5:
+                time.sleep(0.02)
+            raise llm.LLMDeadlineExceeded('child stopped')
+        names = [s['function']['name'] for s in kwargs['tools']]
+        if names == ['finish_research']:
+            return _turn(('finish_research', {'draft': '按已有材料交稿。', 'gaps': ['子任务未完成']}))
+        if 'delegate_research' in str(messages[-1]) or len(messages) > 3:
+            return _turn(('finish_research', {'draft': '想提前交稿。', 'gaps': []}))
+        return _turn(('delegate_research', {'tasks': [{'goal': 'slow-child', 'context': ''}]}))
+    result = sr.run_simple_research('test', config=sr.SimpleConfig(wall_timeout_s=4, wrapup_reserve_s=1.5),
+                                    run_dir=tmp_path/'run', model_call=model)
+    assert result.stop_reason == 'research_time+wrapup' and result.draft == '按已有材料交稿。'
+    assert time.monotonic() - started < 4
+    assert not any(t.name.startswith('research-child') and t.is_alive() for t in threading.enumerate())

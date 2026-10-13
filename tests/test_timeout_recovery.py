@@ -78,7 +78,7 @@ QUOTE = "The sqlite3_rsync utility works fine if both ORIGIN and REPLICA are loc
 
 
 def test_near_deadline_reminds_but_keeps_tools_for_saving_and_finishing(tmp_path, monkeypatch):
-    """剩余时间进入提醒区间只提醒交稿：检索、阅读、存证照常执行，总截止时间不提前。"""
+    """研究阶段最后一段只提醒存证：检索、阅读、存证照常执行；研究请求以研究截止为限，不延长总截止。"""
     clock = Clock()
     monkeypatch.setattr(sr.time, 'monotonic', clock.monotonic)
     cfg = sr.SimpleConfig(wall_timeout_s=1200, wrapup_reserve_s=120, delegation_enabled=False)
@@ -95,16 +95,81 @@ def test_near_deadline_reminds_but_keeps_tools_for_saving_and_finishing(tmp_path
                     'coverage': [{'requirement_id': 'goal', 'status': 'answered'}]}))]
     def model(messages, **kwargs):
         seen.append((json.dumps(messages, ensure_ascii=False), [t['function']['name'] for t in kwargs['tools']]))
-        clock.now = 2080 + len(seen)  # 每轮都在最后 120 秒内
+        clock.now = 1960 + len(seen)  # 研究阶段（截止 2080）的最后 120 秒内
         return turns[len(seen) - 1]
     result = sr.run_simple_research('q', config=cfg, run_dir=tmp_path,
         model_call=model, search_fn=lambda q: searched.append(q) or [_doc(RAW)])
     assert result.stop_reason == 'finished' and '[c1]' in result.draft
     assert searched == ['sqlite3_rsync local'] and len(result.cards) == 1
     assert len(seen) == 4 and all('save_evidence' in names and 'search_sources' in names for _, names in seen)
-    assert '【临近截止】请整理证据' not in seen[0][0] and '【临近截止】请整理证据' in seen[1][0]
+    assert '【临近截止】研究阶段即将结束' not in seen[0][0] and '【临近截止】研究阶段即将结束' in seen[1][0]
     assert '工具仍可使用' in seen[1][0]
-    assert bound_deadlines[0] == 2200 and 2080 not in bound_deadlines
+    assert bound_deadlines[0] == 2080 and 2200 not in bound_deadlines[:1]
+
+
+def test_research_cutoff_switches_to_one_delivery_turn_within_total_limit(tmp_path, monkeypatch):
+    """研究阶段到点：不再检索，用已存证据交稿一次；交稿请求以总截止为限，总时限不延长。"""
+    clock = Clock()
+    monkeypatch.setattr(sr.time, 'monotonic', clock.monotonic)
+    cfg = sr.SimpleConfig(wall_timeout_s=1200, wrapup_reserve_s=300, delegation_enabled=False)
+    seen, searched, bound_deadlines = [], [], []
+    original_set = llm.set_request_deadline
+    def bind(deadline):
+        bound_deadlines.append(deadline)
+        return original_set(deadline)
+    monkeypatch.setattr(llm, 'set_request_deadline', bind)
+    research = [_turn(('search_sources', {'query': 'sqlite3_rsync local'})),
+                _turn(('read_source', {'source_ref': 's1'})),
+                _turn(('save_evidence', {'cards': [{'claim': '两端都在本机也可同步', 'quote': QUOTE}]})),
+                _turn(('search_sources', {'query': 'more'}))]
+    def model(messages, **kwargs):
+        names = [t['function']['name'] for t in kwargs['tools']]
+        seen.append(names)
+        if names == ['finish_research']:
+            assert clock.now < 2200
+            return _turn(('finish_research', {'draft': '两端都在本机也能同步 [c1]。',
+                          'coverage': [{'requirement_id': 'goal', 'status': 'answered'}]}))
+        clock.now = 1000 + 280 * len(seen)  # 第 4 轮结束时越过研究截止 1900
+        return research[len(seen) - 1]
+    result = sr.run_simple_research('q', config=cfg, run_dir=tmp_path,
+        model_call=model, search_fn=lambda q: searched.append(q) or [_doc(RAW)])
+    assert result.stop_reason == 'research_time+wrapup' and '[c1]' in result.draft
+    assert searched == ['sqlite3_rsync local']  # 越过研究截止后那次检索不执行
+    assert seen[-1] == ['finish_research'] and len(seen) == 5
+    assert bound_deadlines[0] == 1900 and 2200 in bound_deadlines
+
+
+def test_finish_and_save_in_the_turn_that_crosses_research_cutoff_still_count(tmp_path, monkeypatch):
+    """跨过研究截止返回的那一轮：存证与交稿仍有效，外部工具不再执行。"""
+    clock = Clock()
+    monkeypatch.setattr(sr.time, 'monotonic', clock.monotonic)
+    cfg = sr.SimpleConfig(wall_timeout_s=1200, wrapup_reserve_s=300, delegation_enabled=False)
+    searched = []
+    turns = [_turn(('search_sources', {'query': 'sqlite3_rsync local'})),
+             _turn(('read_source', {'source_ref': 's1'})),
+             _turn(('save_evidence', {'cards': [{'claim': '两端都在本机也可同步', 'quote': QUOTE}]}),
+                   ('search_sources', {'query': 'late'}),
+                   ('finish_research', {'draft': '两端都在本机也能同步 [c1]。',
+                    'coverage': [{'requirement_id': 'goal', 'status': 'answered'}]}))]
+    calls = []
+    def model(messages, **kwargs):
+        calls.append(1)
+        clock.now = 1950 if len(calls) == 3 else 1000 + len(calls)
+        return turns[len(calls) - 1]
+    result = sr.run_simple_research('q', config=cfg, run_dir=tmp_path,
+        model_call=model, search_fn=lambda q: searched.append(q) or [_doc(RAW)])
+    assert result.stop_reason == 'finished' and len(result.cards) == 1 and '[c1]' in result.draft
+    assert searched == ['sqlite3_rsync local']
+
+
+def test_delivery_reserve_never_takes_more_than_half_of_total_time():
+    clock_now = sr.time.monotonic()
+    budget = sr.Budget(sr.SimpleConfig(wall_timeout_s=200, wrapup_reserve_s=300), clock_now + 200)
+    assert 99 <= budget.wrapup_reserve_s <= 100
+    assert budget.deadline == budget.research_deadline < budget.final_deadline
+    budget.end_research()
+    assert budget.deadline == budget.final_deadline
+    assert sr.Budget(sr.SimpleConfig(wrapup_reserve_s=300), None).deadline is None
 
 
 def test_time_limit_prompt_follows_switch(tmp_path):

@@ -139,8 +139,9 @@ class SimpleConfig(BaseModel):
     """已停用，仅为读取旧配置保留：连续无效回合不再结束研究，错误原因照常返回模型。"""
     wall_timeout_s: float | None = None
     """整个研究的墙钟预算。None（默认）= 不设总时限，由用户叫停或外层 deadline 控制。"""
-    wrapup_reserve_s: float = Field(default=120.0, ge=0)
-    """剩余这么多秒时提醒模型整理证据并交稿；工具照常可用，不延长总时限。0 关闭提醒。"""
+    wrapup_reserve_s: float = Field(default=300.0, ge=0)
+    """总时限内留给交稿的秒数：研究阶段在「截止前这么多秒」结束，之后只允许用已存证据交稿，
+    不延长总时限。超过总时限一半时按一半计，保证研究阶段不被吃光。0 = 研究到总截止，不留交稿时间。"""
     summary_timeout_s: float = Field(default=120.0, gt=0)
     summary_max_retries: int = Field(default=1, ge=0)
     max_cards_per_call: int = 50
@@ -2953,7 +2954,8 @@ class ToolContext:
             card = EvidenceCard(card_id=self.store.next_card_id(), claim=claim, quotes=quotes,
                 judgment=evidence_judge.Judgment(status="pending") if self.config.evidence_judge.enabled else None,
                 **first.model_dump(exclude={"submitted_quote", "context", "binding"}), created_by=self.tool_role)
-            if llm.cancellation_requested() or self.budget_expired():
+            # 研究阶段截止后、总截止前，本回合的存证仍可完成，交稿只能引用已存的卡。
+            if llm.cancellation_requested() or (self.budget is not None and self.budget.final_expired()):
                 reject(index, "已取消或研究时限已到，未提交证据卡")
                 continue
             self.store.add_card(card)
@@ -3892,13 +3894,38 @@ class Budget:
 
     def __init__(self, config: SimpleConfig, deadline: float | None):
         self.config = config
-        self.deadline = deadline
+        self.final_deadline = deadline
+        # 总时限内划出交稿时间：研究阶段先截止，最多占总时长一半，不延长总截止。
+        reserve = 0.0 if deadline is None else min(
+            config.wrapup_reserve_s, max(0.0, deadline - time.monotonic()) / 2)
+        self.wrapup_reserve_s = reserve
+        self.research_deadline = None if deadline is None else deadline - reserve
+        self.wrapping = False
         self.calls_used = 0
 
+    @property
+    def deadline(self) -> float | None:
+        """当前阶段的截止：研究阶段是研究截止，进入交稿后是总截止。"""
+        return self.final_deadline if self.wrapping else self.research_deadline
+
+    @deadline.setter
+    def deadline(self, value: float | None) -> None:
+        # 直接指定的截止时间就是绝对截止，不再划分交稿时间。
+        self.final_deadline = self.research_deadline = value
+
+    def final_expired(self) -> bool:
+        """总截止是否已到；研究阶段截止后、总截止前仍可存证与交稿。"""
+        return self.final_deadline is not None and time.monotonic() >= self.final_deadline
+
+    def end_research(self) -> None:
+        """研究阶段结束：此后的检查、请求时限与交稿都以总截止为准。"""
+        self.wrapping = True
+
     def near_deadline(self) -> bool:
-        """进入交稿提醒窗口：只提醒，工具照常可用，截止时间不变。"""
+        """研究阶段最后一段（与交稿预留等长）提醒存证；工具照常可用。"""
         left = self.seconds_left()
-        return left is not None and self.config.wrapup_reserve_s > 0 and left <= self.config.wrapup_reserve_s
+        return (not self.wrapping and left is not None and self.wrapup_reserve_s > 0
+                and left <= self.wrapup_reserve_s)
 
     def remaining_calls(self) -> int | None:
         if self.config.max_llm_calls is None:
@@ -4493,10 +4520,14 @@ def _time_limit_prompt(config: SimpleConfig, budget: Budget) -> str:
     if budget.deadline is None:
         return ("\n【研究时限】本轮不设总时限。材料足以回答时主动 finish_research；"
                 "不必为赶时间省略存证，也不要为凑细节无限检索。\n")
-    reminder = (f"剩余约 {int(config.wrapup_reserve_s)} 秒时状态中会出现【临近截止】提醒，"
-                "届时工具仍可用，用来完成存证、计算和文件后交稿。" if config.wrapup_reserve_s > 0 else "")
-    return ("\n【研究时限】本轮有总截止时间，状态中的【剩余墙钟】显示剩余秒数。" + reminder
-            + "到总截止时间仍未交稿，本轮记为未完成，已保存材料保留。证据要边研究边存，不要攒到最后。\n")
+    if budget.wrapup_reserve_s > 0:
+        reserve = round(budget.wrapup_reserve_s)
+        return ("\n【研究时限】本轮有总截止时间，状态中的【剩余墙钟】是研究阶段剩余秒数。"
+                f"研究阶段最后约 {reserve} 秒会出现【临近截止】提醒；研究阶段一到，检索、阅读、运行代码和子任务都会停止，"
+                f"只在总截止前预留的约 {reserve} 秒里用已保存的证据卡交稿一次，到时不能再存证。"
+                "证据要边研究边存，不要攒到最后；材料足以回答时直接 finish_research。\n")
+    return ("\n【研究时限】本轮有总截止时间，状态中的【剩余墙钟】显示剩余秒数。"
+            "到总截止时间仍未交稿，本轮记为未完成，已保存材料保留。证据要边研究边存，不要攒到最后。\n")
 
 
 def _receive_user_input(context, call_id, *, close=False):
@@ -5100,7 +5131,7 @@ def run_lead_loop(
                         _emit_tool(context,name,False,_ERR+reason,call,turn=turns,phase="done",status="rejected")
                         continue
                 if name == "finish_research":
-                    if llm.cancellation_requested() or budget.expired():
+                    if llm.cancellation_requested() or budget.final_expired():
                         budget_stop = "cancelled" if llm.cancellation_requested() else "deadline"
                         blocked = _ERR + f"未执行：{budget_stop}"
                         _emit_tool(context, name, False, blocked, call, turn=turns, status="rejected")
@@ -5193,7 +5224,8 @@ def run_lead_loop(
                 # 反推「没有超额执行」。被挡住的调用如实回执，不再触达外部边界。
                 if llm.cancellation_requested():
                     budget_stop = "cancelled"
-                elif budget.expired():
+                elif budget.final_expired() or (budget.expired() and name != "save_evidence"):
+                    # 研究阶段截止后本回合剩余的外部工具不再执行；存证只在本地定位已读原文，留给交稿用。
                     budget_stop = "deadline"
                 elif config.max_tool_calls is not None and context.tool_calls >= config.max_tool_calls and name != "update_research_plan":
                     budget_stop = "tool_budget"
@@ -5315,7 +5347,8 @@ def run_lead_loop(
                         f"  [lead] {name} {'✓' if ok else '✗'} | 卡片 "
                         f"{len(store.cards())} | 调用 {budget.calls_used}"
                     )
-            if budget_stop:
+            # 同一批里交稿已被接受时，以交稿为准；被挡下的其余动作只留回执。
+            if budget_stop and not finished:
                 stop_reason = budget_stop
                 break
             # 工具报错、读取或存证失败都已作为回执交给模型，由它修正、换方法或交稿；
@@ -5351,13 +5384,19 @@ def run_lead_loop(
             llm.reset_request_deadline(deadline_token)
             timing.reset_ctx(ctx_token)
 
-    # 预算收尾回合：用户设置的工具或模型额度用尽、仍没有草稿时，用预留的一次
+    # 研究阶段到此结束：之后的收尾请求与检查都以总截止为准。研究截止（总截止前的交稿
+    # 预留）到点而总截止未到时，进入下面的交稿回合。
+    budget.end_research()
+    if stop_reason == "deadline" and not budget.expired():
+        stop_reason = "research_time"
+    # 预算收尾回合：研究时间、工具或模型额度用尽、仍没有草稿时，用一次
     # **只允许交稿**的调用收尾。这不是新增预算，而是把兜底从「直接掐断」改成
     # 「有界收尾」：材料够就交答案，不够就如实写缺口。
     # 取消/总时限到不延长：这两条路径不进入收尾回合，已有材料照常保留。
     _no_wrapup = ("cancelled", "failed", "request_timeout")
     if not draft and not stop_reason.startswith(_no_wrapup) and not budget.expired():
         context.last_stop_hint = {
+            "research_time": f"研究时间已到：总截止前预留约 {round(budget.wrapup_reserve_s)} 秒交稿，不能再检索、阅读或运行代码",
             "tool_budget": f"研究工具额度已用尽（{context.tool_calls}/{config.max_tool_calls}）",
             "call_budget": "模型调用额度即将用尽",
             "context_limit": "对话内容超过可用上下文容量",
@@ -6215,8 +6254,8 @@ def _build_messages(base, context, requirements, recent_exchanges, *, seconds_le
     if seconds_left is not None:
         lines.append(f"【剩余墙钟】约 {int(seconds_left)} 秒")
         if budget is not None and budget.near_deadline():
-            lines.append("【临近截止】请整理证据并交稿：把已读到、算出的关键材料 save_evidence 存证，"
-                         "完成必要文件后 finish_research。工具仍可使用；到总截止时间仍未交稿，本轮记为未完成。")
+            lines.append("【临近截止】研究阶段即将结束：把已读到、算出的关键材料 save_evidence 存证，"
+                         "完成必要文件；材料够了就 finish_research。工具仍可使用；研究阶段一到只能用已存证据交稿。")
             if context.tool_role == "lead":
                 context.request_plan_review("deadline-near", "临近研究截止，需要核对当前任务清单")
     manager = getattr(context, "delegation_manager", None)

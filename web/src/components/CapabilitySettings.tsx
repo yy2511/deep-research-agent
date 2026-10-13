@@ -79,7 +79,7 @@ export function capabilityTiles(saved: ConfigPayload, execution: ExecutionProbe,
       tone: saved.compaction_enabled ? "ok" : "off" },
     { id: "cap-time", icon: "timer", label: "研究时限",
       value: minutesText(saved.wall_timeout_s ?? null),
-      detail: retries != null ? `请求失败最多重试 ${retries} 次` : saved.wall_timeout_s ? "临近截止提醒交稿" : "由 Agent 交稿或你叫停",
+      detail: retries != null ? `请求失败最多重试 ${retries} 次` : saved.wall_timeout_s ? "截止前留出交稿时间" : "由 Agent 交稿或你叫停",
       tone: "ok" },
   ];
 }
@@ -281,14 +281,14 @@ export function CapabilitySettings({ s, onManageSkills }: { s: RuntimeSettings; 
       <h3>研究过程</h3>
 
       <CapCard id="cap-time" icon="timer" title="时间与重试"
-        summary="默认不限时长：Agent 自己判断何时交稿，你也可以随时叫停。开启总时限后，临近截止会提醒 Agent 整理证据交稿，期间仍可存证、计算和生成文件；到点还没交稿就记为未完成，已有材料保留。">
+        summary="默认不限时长：Agent 自己判断何时交稿，你也可以随时叫停。开启总时限后，截止前会留出一段交稿时间：研究阶段到点就停止检索、阅读和运行代码，Agent 用已保存的证据交稿；交稿时间也用完仍没交稿，就记为未完成，已有材料保留。">
         <SettingRow title="限制研究总时长" description="关闭时不设时间上限，研究不会因为时间被中止。">
           <Switch label="限制研究总时长" checked={config.wall_timeout_s != null}
             onChange={v => setConfig({ ...config, wall_timeout_s: v ? saved.wall_timeout_s ?? 1200 : null })} />
         </SettingRow>
         {config.wall_timeout_s != null && <div className="field-grid">
           {numberField("wall_timeout_s", "总时限", "秒", 1200, 1, `约 ${minutesText(Math.round(config.wall_timeout_s / 60) * 60)}`)}
-          {numberField("wrapup_reserve_s", "交稿提醒", "秒", 120, 0, "剩余这么多秒时提醒 Agent 交稿，工具照常可用，不延长总时限；填 0 不提醒")}
+          {numberField("wrapup_reserve_s", "交稿时间", "秒", 300, 0, "总时限里留给交稿的秒数，不延长总时限；最多占总时限一半；填 0 不留，研究到总截止")}
         </div>}
         {policy && <div className="cap-readonly">
           <strong>研究模型请求失败时自动重试</strong>
