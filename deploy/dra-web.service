@@ -1,0 +1,22 @@
+[Unit]
+Description=Deep Research Agent web workbench
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/home/deploy/apps/deep-research-agent/current
+Environment=PYTHONPATH=/home/deploy/apps/deep-research-agent/current/src
+Environment=PYTHONUNBUFFERED=1
+Environment=DRA_MAX_ACTIVE_RUNS=1
+Environment=DRA_DATA_DIR=/home/deploy/apps/deep-research-agent/shared
+ExecStart=/home/deploy/apps/deep-research-agent/current/.venv/bin/uvicorn dra.web:app --host 127.0.0.1 --port 8765 --proxy-headers
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

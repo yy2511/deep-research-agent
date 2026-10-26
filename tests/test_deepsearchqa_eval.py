@@ -342,6 +342,8 @@ def test_runner_records_per_call_usage_with_cache_but_not_messages(modules, monk
     assert len((tmp_path / "llm_usage.jsonl").read_text().splitlines()) == 1
 
 
+@pytest.mark.skipif(not (EVAL_DIR / "data/DSQA-full.csv").exists(),
+                    reason="需要本机 DSQA 题库与来源记录（不入库，见 prepare.py）")
 def test_planner_override_only_changes_this_batch_planner(modules, monkeypatch, capsys):
     runner = modules[1]
     runner.main(["--ids", "1", "--planner-model", "pm", "--planner-provider", "pp"])

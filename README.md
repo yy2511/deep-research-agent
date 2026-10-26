@@ -208,13 +208,15 @@ src/dra/        自主 Agent、工具、证据、持久化与 Web API
 web/            React + Vite + TypeScript 工作台
 tests/          默认离线的运行时回归测试
 fixtures/       本地资料与演示运行的可控样本
-docs/           检索来源决策
+docs/           部署、检索来源决策与评测总结
+deploy/         容器发布与回滚控制
 ```
 
 ## 文档
 
 - [当前状态](STATUS.md)：能力、默认值、验证结果、已知边界与退役范围
 - [架构与决策](EXPERIMENT_PLAN.md)：数据责任、控制流和生产交付边界
+- [部署与回滚](docs/deployment.md)：容器、GHCR、Caddy 与受控发布
 - [检索来源决策](docs/RETRIEVAL_SOURCES_DECISION.md)：Tavily、Exa、DDG 与本地 RAG 的边界
 
 ## 技术栈

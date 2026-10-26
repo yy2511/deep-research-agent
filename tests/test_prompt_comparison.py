@@ -30,6 +30,8 @@ def test_fixed_nonperfect_pool_keeps_empty_answers_and_nested_subset(comparison)
     assert first[:100][:50] == first[:50]
 
 
+@pytest.mark.skipif(not (Path(__file__).resolve().parents[1] / "eval/deepsearchqa/runs/concise-v2-20261003").exists(),
+                    reason="需要本机旧批次 concise-v2-20261003 及其冻结代码快照（运行记录不入库）")
 def test_new_comparison_disables_inherited_jev_without_rewriting_old_batch(comparison, tmp_path, monkeypatch):
     source = tmp_path / 'source'
     source.mkdir()
