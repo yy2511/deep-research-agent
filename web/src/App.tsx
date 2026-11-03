@@ -135,6 +135,36 @@ function App() {
   // 每一次"选择/加载一条运行"都是一个批次：旧批次的结果、旧 SSE 回调一律不得提交。
   // 只比较 run id 不够——A→B→A 时两次 A 的 id 相同，但视图基底已经换过。
   const batchRef = useRef(new BatchGuard());
+  // Pre-run work has no run id yet. Give the entire prepare → plan → start chain
+  // its own identity, including progress/error/finally callbacks.
+  const planningEpoch = useRef(0);
+  const planningBusy = useRef(false);
+
+  function beginPlanningRequest(): number | null {
+    if (planningBusy.current) return null;
+    planningBusy.current = true;
+    return ++planningEpoch.current;
+  }
+
+  function isCurrentPlanning(epoch: number) {
+    return planningEpoch.current === epoch;
+  }
+
+  function invalidatePlanning() {
+    planningEpoch.current += 1;
+    planningBusy.current = false;
+    planProgressRef.current = null;
+    setPlanProgress(null);
+    setPlanThinking("");
+    setBriefing(false);
+    setSubmitting(false);
+    setGaps(null);
+    setBrief(null);
+    setBriefHint(null);
+    setBriefError(null);
+    setBriefFailTrace(null);
+    setStartError(null);
+  }
   // dispatch 会被 SSE 回调长期持有，闭包里读 state 会拿到旧值；当前 run id 走 ref。
   const runIdRef = useRef<string | null>(null);
 
@@ -156,6 +186,7 @@ function App() {
   }, [runId]);
 
   function connectToRun(id: string) {
+    invalidatePlanning();
     const batch = batchRef.current.begin(id);
     setCancelling(false);
     setStreamDropped(false);
@@ -264,6 +295,7 @@ function App() {
    * 并明确说明没有过程记录——不能因为 404 让整条历史打不开，也不伪造过程。
    */
   async function viewHistoricalRun(id: string, replayMode: "instant" | "paced") {
+    invalidatePlanning();
     const batch = batchRef.current.begin(id);
     stopStreamRef.current?.();
     setIsLive(false);
@@ -369,7 +401,12 @@ function App() {
   }, []);
 
   // 卸载时关掉还开着的 SSE 连接，避免页面切走后连接悬空重连
-  useEffect(() => () => stopStreamRef.current?.(), []);
+  useEffect(() => () => {
+    planningEpoch.current += 1;
+    planningBusy.current = false;
+    batchRef.current.begin(null);
+    stopStreamRef.current?.();
+  }, []);
 
   const running = view.startedAtMs !== undefined && view.endedAtMs === undefined;
   useEffect(() => {
@@ -401,12 +438,12 @@ function App() {
   }
 
   /** 开始一次规划请求：进度从空白开始，服务端推来的步骤和思考片段逐条合进去。 */
-  function trackPlanning(steps: PlanStage[]) {
+  function trackPlanning(steps: PlanStage[], epoch: number) {
     planProgressRef.current = startProgress(steps);
     setPlanProgress(planProgressRef.current);
     setPlanThinking("");
     return (event: PlannerEvent) => {
-      if (!planProgressRef.current) return;
+      if (!isCurrentPlanning(epoch) || !planProgressRef.current) return;
       planProgressRef.current = applyPlannerEvent(planProgressRef.current, event);
       setPlanProgress(planProgressRef.current);
     };
@@ -425,7 +462,9 @@ function App() {
    *  让用户看清目标与路线。是否要确认由模型判、服务端只透传，前端不再二次裁决。
    */
   async function handleSimpleSubmit(q: string) {
-    if (briefing || submitting) return;
+    const epoch = beginPlanningRequest();
+    if (epoch === null) return;
+    batchRef.current.begin(null);
     setBriefing(true);
     setBriefError(null);
     setBriefFailTrace(null);
@@ -433,31 +472,38 @@ function App() {
     sourceRef.current = sourceSelection;
     try {
       const prepared = await postJSON<{skill_selection:string}>("/api/skills/prepare", {selected:selectedSkills});
+      if (!isCurrentPlanning(epoch)) return;
       sourceRef.current = {...sourceRef.current, skill_selection:prepared.skill_selection};
       const res = await postStream<BriefResponse>("/api/brief", {
         query: q,
         ...sourceRef.current,
         trace_full_llm_io: traceFull,
-      }, trackPlanning(["gaps", "plan"]));
+      }, trackPlanning(["gaps", "plan"], epoch));
+      if (!isCurrentPlanning(epoch)) return;
       if (res.kind === "clarify") {
         // 有缺口时服务端**没有**生成计划：先问清楚，再生成。
         setGaps(res.gaps);
         return;
       }
-      await acceptPlan(res.brief);
+      await acceptPlan(res.brief, epoch);
     } catch (e) {
+      if (!isCurrentPlanning(epoch)) return;
       setBriefError(e instanceof Error ? e.message : String(e));
       if (e instanceof ApiError && e.trace) setBriefFailTrace(e.trace);
     } finally {
-      finishPlanning();
-      setBriefing(false);
+      if (isCurrentPlanning(epoch)) {
+        planningBusy.current = false;
+        finishPlanning();
+        setBriefing(false);
+      }
     }
   }
 
   /** 拿到计划后的统一出口：不需要确认就直接开跑，需要就停在卡片上。 */
-  async function acceptPlan(next: ResearchBrief) {
+  async function acceptPlan(next: ResearchBrief, epoch: number) {
+    if (!isCurrentPlanning(epoch)) return;
     if (!next.needs_confirmation) {
-      await startSimpleResearch(next);
+      await startSimpleResearch(next, epoch);
       return;
     }
     setBrief(next);
@@ -465,7 +511,9 @@ function App() {
 
   /** 带着用户对缺口问题的回答生成计划；answers 为空表示"全部跳过"。 */
   async function handleGapSubmit(answers: GapAnswer[]) {
-    if (submitting || gaps === null) return;
+    if (gaps === null) return;
+    const epoch = beginPlanningRequest();
+    if (epoch === null) return;
     setSubmitting(true);
     setBriefError(null);
     setBriefFailTrace(null);
@@ -476,31 +524,34 @@ function App() {
         ...sourceRef.current,
         answers,
         trace_full_llm_io: traceFull,
-      }, trackPlanning(["plan"]));
+      }, trackPlanning(["plan"], epoch));
+      if (!isCurrentPlanning(epoch)) return;
       if (res.kind !== "plan") {
         // 这一段的契约就是"给答案 → 拿计划"；还在追问说明服务端出了问题，别静默吞掉。
         throw new Error("生成计划失败：服务端仍在追问缺口");
       }
       setGaps(null);
-      await acceptPlan(res.brief);
+      await acceptPlan(res.brief, epoch);
     } catch (e) {
+      if (!isCurrentPlanning(epoch)) return;
       setBriefError(e instanceof Error ? e.message : String(e));
       if (e instanceof ApiError && e.trace) setBriefFailTrace(e.trace);
     } finally {
-      finishPlanning();
-      setSubmitting(false);
+      if (isCurrentPlanning(epoch)) {
+        planningBusy.current = false;
+        finishPlanning();
+        setSubmitting(false);
+      }
     }
   }
 
   function handleDiscardGaps() {
-    setPlanThinking("");
-    setGaps(null);
-    setBriefError(null);
-    setBriefFailTrace(null);
-    setStartError(null);
+    invalidatePlanning();
   }
 
-  async function startSimpleResearch(confirmed: ResearchBrief) {
+  async function startSimpleResearch(confirmed: ResearchBrief, parentEpoch?: number) {
+    const epoch = parentEpoch ?? beginPlanningRequest();
+    if (epoch === null || !isCurrentPlanning(epoch)) return;
     setSubmitting(true);
     setStartError(null);
     try {
@@ -513,15 +564,22 @@ function App() {
         brief: briefBody,
         trace_full_llm_io: traceFull,
       });
+      if (!isCurrentPlanning(epoch)) return;
       connectToRun(run_id);
     } catch (e) {
+      if (!isCurrentPlanning(epoch)) return;
       setStartError(e instanceof Error ? e.message : String(e));
     } finally {
-      setSubmitting(false);
+      if (isCurrentPlanning(epoch)) {
+        if (parentEpoch === undefined) planningBusy.current = false;
+        setSubmitting(false);
+      }
     }
   }
 
   async function handleBriefRevise(feedback: string) {
+    const epoch = beginPlanningRequest();
+    if (epoch === null) return;
     setBriefHint(null);
     setSubmitting(true);   // 修订飞行中也要挡住"开始研究"/"取消"，跟 handleStart 共用同一个忙态
     try {
@@ -530,7 +588,8 @@ function App() {
         feedback,
         ...sourceRef.current,
         trace_full_llm_io: traceFull,
-      }, trackPlanning(["plan"]));
+      }, trackPlanning(["plan"], epoch));
+      if (!isCurrentPlanning(epoch)) return;
       if (res.kind !== "plan") {
         throw new Error("修订失败：服务端没有返回计划");
       }
@@ -543,19 +602,19 @@ function App() {
         return;
       }
       setBrief(next);
+    } catch (e) {
+      if (isCurrentPlanning(epoch)) throw e;
     } finally {
-      finishPlanning();
-      setSubmitting(false);
+      if (isCurrentPlanning(epoch)) {
+        planningBusy.current = false;
+        finishPlanning();
+        setSubmitting(false);
+      }
     }
   }
 
   function handleDiscardBrief() {
-    setPlanThinking("");
-    setBrief(null);
-    setBriefHint(null);
-    setBriefError(null);
-    setBriefFailTrace(null);
-    setStartError(null);
+    invalidatePlanning();
   }
 
   /** 输入框提交：进入自主研究的澄清与路线确认。 */
@@ -582,13 +641,13 @@ function App() {
   // 空白输入态，否则整页永远卡在这次的 ProcessPane/banner，演示按钮也永久禁用
   // （这条路径正是 Task 14 冒烟脚本"再跑一次"要求踩到的，不是可以往后拖的美化项）。
   function startNewResearch() {
+    invalidatePlanning();
     // 先作废批次：旧流已排队的回调不能再往新页面写东西。
     batchRef.current.begin(null);
     setCancelling(false);
     stopStreamRef.current?.();
     stopStreamRef.current = null;
     setRunId(null);
-    setPlanThinking("");
     setIsLive(false);
     const blank = initialView();
     setView(blank);
@@ -596,12 +655,6 @@ function App() {
     // 清掉"当前运行"的两个入口：新研究不该带着上一条 run 的刷新目标。
     localStorage.removeItem(ACTIVE_RUN_KEY);
     writeRunParam(null);
-    setGaps(null);
-    setBrief(null);
-    setBriefHint(null);
-    setBriefError(null);
-    setBriefFailTrace(null);
-    setStartError(null);
     setStreamDropped(false);
   }
 

@@ -17,9 +17,10 @@ type Cell = { value: any };
  * 用来在 vitest 里驱动真实的 async 导航序列。
  *
  * 插桩只做一件事：把 App 函数体最后一个 return（渲染 JSX）换成返回所有内部函数
- * 声明的对象。**不复制任何业务逻辑**，被测的始终是真实源码。
+ * 声明的对象；可选 stateNames 同时暴露本次渲染的状态，避免测试依赖 hook 序号。
+ * **不复制任何业务逻辑**，被测的始终是真实源码。
  */
-export function loadAppHandlers(): () => Record<string, any> {
+export function loadAppHandlers(stateNames: string[] = []): () => Record<string, any> {
   const require_ = createRequire(path.join(process.cwd(), "package.json"));
   const ts = require_("typescript") as typeof import("typescript");
   void require_;
@@ -38,7 +39,8 @@ export function loadAppHandlers(): () => Record<string, any> {
       if (lastReturn === undefined) throw new Error("App 没有可插桩的 return");
       statements[lastReturn] = ts.factory.createReturnStatement(
         ts.factory.createObjectLiteralExpression(exposed.map(name =>
-          ts.factory.createShorthandPropertyAssignment(name))));
+          ts.factory.createShorthandPropertyAssignment(name)).concat(
+            stateNames.map(name => ts.factory.createShorthandPropertyAssignment(name)))));
       return ts.factory.updateFunctionDeclaration(node, undefined, node.asteriskToken, node.name,
         node.typeParameters, node.parameters, node.type,
         ts.factory.updateBlock(body, statements));
