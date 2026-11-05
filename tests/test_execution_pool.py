@@ -169,14 +169,33 @@ def test_background_process_is_not_parked_and_cancel_keeps_files(tmp_path):
 
 @pytest.mark.docker
 def test_warm_container_gets_a_new_lease_beyond_first_run_deadline(tmp_path):
+    import docker
     pool=pool_type()(tmp_path,ExecutionConfig(enabled=True),start_checker=False)
-    one=ExecutionSession(tmp_path/'r1','r1',pool.config,pool=pool,deadline=time.monotonic()+3)
+    one=ExecutionSession(tmp_path/'r1','r1',pool.config,pool=pool)
     try:
-        one.tool('bash',{'command':'echo ok'})
-        original=one.container;one.release()
-        time.sleep(3.1)
-        original.reload()
-        assert original.attrs['State']['Running']
+        # 冷启动、安全检查和依赖清单不占用本测试的短租期。
+        receipt=one.tool('bash',{'command':'echo ok'})
+        assert receipt['ok'], (receipt,one.summary())
+        assert one.state=='ready', one.summary()
+        original=one.container
+        # 容器就绪后才设置研究截止时间，并实际缩短容器租期。
+        one.deadline=time.monotonic()+10
+        one._renew_lease(one._lease_ttl())
+        expires_before_release=one.lease_until
+        one.release()
+        diagnostic={'session':one.summary(),'previous_lease_until':expires_before_release,
+                    'now':time.monotonic(),'warm_keys':list(pool.warm)}
+        assert one.state=='released', diagnostic
+        assert one.workspace.key in pool.warm, diagnostic
+        assert pool.warm[one.workspace.key].container.id==original.id, diagnostic
+        assert time.monotonic()<expires_before_release, diagnostic
+        # 等到续租前的容器租期确实已过；只延长研究 deadline 不能让测试通过。
+        time.sleep(max(0,expires_before_release-time.monotonic())+.3)
+        try:
+            original.reload()
+        except docker.errors.NotFound:
+            pytest.fail(f'待用容器在原租期后消失：{diagnostic}')
+        assert original.attrs['State']['Running'], (diagnostic,original.attrs['State'])
     finally: pool.shutdown()
 
 
