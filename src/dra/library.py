@@ -191,7 +191,7 @@ class LibraryStore:
                     if version["status"] != "ready" or (
                         version.get("encoder") == self.encoder.signature
                         and version.get("chunk_config") == CHUNK_CONFIG
-                        and version.get("parser") == ("pypdf-text-v1" if suffix == ".pdf" else "utf8-verbatim-v1" if suffix in (".txt", ".md") else "verbatim-v1")
+                        and version.get("parser") == ("pypdf-text-v1" if suffix == ".pdf" else "text-verbatim-v2" if suffix in (".txt", ".md") else "verbatim-v1")
                     ):
                         return dict(version)
             if not self.slots.acquire(blocking=False):
