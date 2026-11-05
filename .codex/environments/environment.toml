@@ -1,0 +1,7 @@
+version = 1
+name = "research-workbench-clean"
+
+[setup]
+script = """
+uv sync --locked && npm --prefix web ci
+"""
