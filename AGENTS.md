@@ -10,4 +10,12 @@
 - 历史运行轨迹和旧项目 Git 历史未复制到本目录。发布脚本与 CI 已于 2026-10-26 从迁出基准恢复（`deploy/`、`.github/workflows/`，说明见 [docs/deployment.md](docs/deployment.md)）；远程仓库为 `yy2511/deep-research-agent`，主线分支 `main`（2026-08 旧代码线保留在 `dag-v1`）。测试应使用可控样本，不依赖原项目中的文件。
 - 依赖通过 `pyproject.toml`、`uv.lock`、`web/package-lock.json` 管理；更改后验证对应的后端或前端功能。
 - 报告实际运行的测试和未验证部分。不要把离线冒烟说成真实模型质量验收。
-- 本目录于 2026-09-30 初始化 Git，提交身份按仓库单独设置（不改全局配置）。推送与发布由用户决定；推送前确认 `.env`、运行记录与本机配置仍被忽略。
+- 本目录于 2026-09-30 初始化 Git，提交身份按仓库单独设置（不改全局配置）。AI 可以推送功能分支并开 PR；推送 `main`、合并 PR 与发布上线由用户决定。推送前确认 `.env`、运行记录与本机配置仍被忽略。
+
+## 开发流程
+
+- 详细流程见 [docs/开发流程.md](docs/开发流程.md)，代码约束见 [docs/开发规范.md](docs/开发规范.md)，重大设计决定见 [docs/adr/](docs/adr/README.md)。
+- 每项改动对应一个 GitHub issue。不在 `main` 上直接提交；从 `main` 拉 `feat|fix|refactor|docs|eval/<issue号>-<简述>` 分支，完成后开 PR 并按模板填写。
+- 只做 issue 范围内的事；发现范围外的问题，记成新 issue，不顺手修改。
+- 要推翻 `docs/adr/` 里已定的决定，先新写一份 ADR 说明理由，经用户确认后再改。
+- 合并 PR 由用户决定，AI 不自行合并。
