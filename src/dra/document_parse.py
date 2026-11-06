@@ -1,6 +1,7 @@
 """有界的资料解析子进程。原件永不改写，输出是独立的解析文本坐标系。"""
 from __future__ import annotations
 
+import codecs
 import json
 import sys
 from pathlib import Path
@@ -39,18 +40,20 @@ def parse(path: Path, suffix: str) -> dict:
                 raise ValueError(f"解析文本超过 {MAX_CHARS} 字符；请拆分文件后导入")
         text = "".join(parts)
     else:
-        # 保留 CRLF / BOM 等原始文本，不做 markdown 清洗或 Unicode 归一化。
+        # 按 UTF-16 BOM 选择字节序；沿用 UTF-8 BOM、CRLF 和 Unicode 原文坐标。
         try:
-            text = path.read_bytes().decode("utf-8")
+            data = path.read_bytes()
+            encoding = "utf-16" if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)) else "utf-8"
+            text = data.decode(encoding)
         except UnicodeDecodeError as exc:
-            raise ValueError("文本文件必须采用 UTF-8 编码") from exc
+            raise ValueError("文本文件必须采用 UTF-8 或带 BOM 的 UTF-16 编码") from exc
         if "\x00" in text:
             raise ValueError("文件含二进制内容，不能作为文本导入")
     if not text.strip():
         raise ValueError("未提取到正文；扫描 PDF 暂不支持 OCR")
     if len(text) > MAX_CHARS:
         raise ValueError(f"解析文本超过 {MAX_CHARS} 字符；请拆分文件后导入")
-    return {"text": text, "pages": pages, "warnings": warnings, "parser": "pypdf-text-v1" if suffix == ".pdf" else "utf8-verbatim-v1"}
+    return {"text": text, "pages": pages, "warnings": warnings, "parser": "pypdf-text-v1" if suffix == ".pdf" else "text-verbatim-v2"}
 
 
 def main():

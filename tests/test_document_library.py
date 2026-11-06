@@ -175,3 +175,39 @@ def test_changed_encoder_allows_same_bytes_to_build_new_version(library):
     assert new["status"] == "ready"
     assert new["version_id"] != old["version_id"]
     assert new["encoder"] == "offline-test-v2"
+
+
+@pytest.mark.parametrize("suffix", [".txt", ".md"])
+@pytest.mark.parametrize("encoding,bom", [
+    ("utf-16-le", b"\xff\xfe"), ("utf-16-be", b"\xfe\xff"),
+])
+def test_utf16_bom_text_is_indexed_and_original_is_preserved(library, suffix, encoding, bom):
+    text = "# Orchid 🙂\r\n备份保留 43 天。\r\n日志 e\u0301。\r\n"
+    body = bom + text.encode(encoding)
+    version = library.import_bytes("规则" + suffix, body, wait=True)
+    assert version["status"] == "ready", version
+    version_id = version["version_id"]
+    assert library.read_version(version_id)["text"] == text
+    assert library.original(version_id) == body
+    pinned = library.pin([version["document_id"]])
+    hits = library.search("备份", pinned)
+    assert hits
+    for hit in hits[0].document["matches"]:
+        assert text[hit["start"]:hit["end"]] == hit["text"]
+    assert library.import_bytes("规则" + suffix, body, wait=True)["version_id"] == version_id
+
+
+@pytest.mark.parametrize("suffix", [".txt", ".md"])
+@pytest.mark.parametrize("body", [b"\xff\xfea", b"caf\xe9"])
+def test_undecodable_text_keeps_selectable_original(library, suffix, body):
+    version = library.import_bytes("原件" + suffix, body, wait=True)
+    assert version["status"] == "original", version
+    assert library.original(version["version_id"]) == body
+    assert library.pin([version["document_id"]])["version_ids"] == [version["version_id"]]
+
+
+def test_utf8_bom_text_keeps_existing_coordinates(library):
+    text = "\ufeff# Orchid\r\n备份保留 43 天。\r\n"
+    version = library.import_bytes("规则.md", text.encode("utf-8"), wait=True)
+    assert version["status"] == "ready", version
+    assert library.read_version(version["version_id"])["text"] == text
