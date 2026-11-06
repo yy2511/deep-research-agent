@@ -20,11 +20,11 @@ import re
 import tempfile
 import unicodedata
 import hashlib
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import quote
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import (
@@ -39,6 +39,12 @@ from dra import mcp_client, skills
 from dra.library import get_library, LibraryError, MAX_BYTES
 from dra.site_filter import MAX_BLOCKED_SITES, normalize_blocked_sites
 from dra.research_input import ResearchInput, replay_input
+from dra.runstore import (
+    IncompatibleEventSchemaError,
+    PlanAttemptStore,
+    RunStore,
+    replay_compatibility,
+)
 from dra.research_brief import (
     PROGRESS as PLANNER_PROGRESS,
     BriefGap,
@@ -68,6 +74,27 @@ def _positive_env_int(name: str, default: int) -> int:
 _MAX_ACTIVE_RUNS = _positive_env_int("DRA_MAX_ACTIVE_RUNS", 1)
 
 app = FastAPI(title="DRA 研究工作台")
+
+
+# ----- 依赖注入：存储与运行管理器挂在 app.state，接口通过 Depends 获取 -----
+# 实例在模块后部创建一次（搜索 "app.state.store ="）；测试替换 app.state 上的对象即可，
+# 不再直接改模块全局变量。
+
+def get_store(request: Request) -> RunStore:
+    return request.app.state.store
+
+
+def get_plan_store(request: Request) -> PlanAttemptStore:
+    return request.app.state.plan_store
+
+
+def get_registry(request: Request) -> "RunRegistry":
+    return request.app.state.registry
+
+
+StoreDep = Annotated[RunStore, Depends(get_store)]
+PlanStoreDep = Annotated[PlanAttemptStore, Depends(get_plan_store)]
+RegistryDep = Annotated["RunRegistry", Depends(get_registry)]
 
 
 # ----- 计划边界：只接受唯一的 typed plan-node DTO -----
@@ -111,6 +138,7 @@ def _capture_planner_step(
     cfg,
     step_name: str,
     fn,
+    plan_store: PlanAttemptStore,
     full_llm_io: bool = False,
 ) -> tuple[object, dict]:
     """跑一次规划/修订：timing.step 触发 llm_call 插桩 → 订阅落盘 → 返回 (结果, trace)。
@@ -119,7 +147,7 @@ def _capture_planner_step(
     """
     from dra import timing
 
-    plan_id = PLAN_STORE.create(
+    plan_id = plan_store.create(
         query=query,
         kind=kind,
         config_summary=_planner_config_summary(cfg, full_llm_io=full_llm_io),
@@ -131,7 +159,7 @@ def _capture_planner_step(
         e.setdefault("seq", len(captured))
         captured.append(e)
         try:
-            PLAN_STORE.append_event(plan_id, e)
+            plan_store.append_event(plan_id, e)
         except Exception:  # noqa: BLE001 — 落盘旁路
             pass
 
@@ -146,10 +174,10 @@ def _capture_planner_step(
         with timing.step(step_name):
             result = fn()
         payload = result if isinstance(result, dict) else None
-        PLAN_STORE.finalize(plan_id, "ok", plan=payload)
+        plan_store.finalize(plan_id, "ok", plan=payload)
         return result, {"plan_id": plan_id, "events": list(captured)}
     except Exception as exc:
-        PLAN_STORE.finalize(plan_id, "failed", error=str(exc))
+        plan_store.finalize(plan_id, "failed", error=str(exc))
         setattr(exc, "plan_trace", {"plan_id": plan_id, "events": list(captured)})
         raise
     finally:
@@ -160,7 +188,8 @@ def _capture_planner_step(
         timing.clear_ctx()
 
 
-def _brief_payload(q_text: str, *, full_llm_io: bool = False, source_context: str = "") -> tuple[dict, dict]:
+def _brief_payload(q_text: str, *, plan_store: PlanAttemptStore, full_llm_io: bool = False,
+                   source_context: str = "") -> tuple[dict, dict]:
     """POST /api/brief 主体：先判断缺口；**没有缺口才继续生成计划**。
 
     有缺口时只回问题、不生成计划——生成了却不给用户看，等于白花一次输出，而且那份计划必然
@@ -186,6 +215,7 @@ def _brief_payload(q_text: str, *, full_llm_io: bool = False, source_context: st
         cfg=cfg,
         step_name="research_brief",
         fn=_run,
+        plan_store=plan_store,
         full_llm_io=full_llm_io,
     )
 
@@ -195,6 +225,7 @@ def _plan_after_clarification_payload(
     gaps: list,
     answers: list,
     *,
+    plan_store: PlanAttemptStore,
     full_llm_io: bool = False,
     source_context: str = "",
 ) -> tuple[dict, dict]:
@@ -219,6 +250,7 @@ def _plan_after_clarification_payload(
                 mode="json"
             ),
         },
+        plan_store=plan_store,
         full_llm_io=full_llm_io,
     )
 
@@ -227,6 +259,7 @@ def _revise_brief_payload(
     brief_payload: dict,
     feedback: str,
     *,
+    plan_store: PlanAttemptStore,
     full_llm_io: bool = False,
     source_context: str = "",
 ) -> tuple[dict | None, dict | None]:
@@ -253,6 +286,7 @@ def _revise_brief_payload(
                 previous.original_query, cfg, clarification=feedback, previous=previous, **({"source_context": source_context} if source_context else {})
             ).model_dump(mode="json"),
         },
+        plan_store=plan_store,
         full_llm_io=full_llm_io,
     )
 
@@ -399,11 +433,11 @@ def api_skills_write(name: str, req: SkillWriteReq):
 
 
 @app.get("/api/runs/{run_id}/skills")
-def api_run_skills(run_id: str):
+def api_run_skills(run_id: str, *, store: StoreDep):
     _require_valid_run_id(run_id)
-    if STORE.get_meta(run_id) is None:
+    if store.get_meta(run_id) is None:
         raise HTTPException(404, "run 不存在")
-    directory = STORE._dir(run_id)
+    directory = store._dir(run_id)
     try:
         snapshot = directory / "skills.json"
         bundle = json.loads(snapshot.read_text()) if snapshot.exists() else {"skills": {}, "selected": []}
@@ -575,7 +609,7 @@ def api_config_put(body: dict) -> dict:
 
 
 @app.post("/api/brief")
-def api_brief(req: BriefReq, request: Request, stream: bool = False):
+def api_brief(req: BriefReq, request: Request, stream: bool = False, *, plan_store: PlanStoreDep):
     """开跑前的第一段：判断问题有没有会改变路线的缺口。
 
     有缺口 → 只回问题（``kind="clarify"``），**不生成计划**；没有缺口 → 直接接第二段生成
@@ -587,7 +621,8 @@ def api_brief(req: BriefReq, request: Request, stream: bool = False):
 
     def work() -> dict:
         try:
-            payload, trace = _brief_payload(req.query, full_llm_io=req.trace_full_llm_io, **sources)
+            payload, trace = _brief_payload(req.query, plan_store=plan_store,
+                                            full_llm_io=req.trace_full_llm_io, **sources)
         except (ValidationError, TypeError, ValueError, RuntimeError, TimeoutError) as exc:
             raise _brief_http_error(exc) from exc
         return {**payload, "trace": trace}
@@ -596,7 +631,7 @@ def api_brief(req: BriefReq, request: Request, stream: bool = False):
 
 
 @app.post("/api/brief/plan")
-def api_brief_plan(req: BriefPlanReq, request: Request, stream: bool = False):
+def api_brief_plan(req: BriefPlanReq, request: Request, stream: bool = False, *, plan_store: PlanStoreDep):
     """开跑前的第二段：带着用户对缺口问题的回答生成计划（没答 = 跳过，按假设处理）。"""
     if not req.query.strip():
         raise HTTPException(400, "query 不能为空")
@@ -605,7 +640,8 @@ def api_brief_plan(req: BriefPlanReq, request: Request, stream: bool = False):
     def work() -> dict:
         try:
             payload, trace = _plan_after_clarification_payload(
-                req.query, req.gaps, req.answers, full_llm_io=req.trace_full_llm_io, **sources
+                req.query, req.gaps, req.answers, plan_store=plan_store,
+                full_llm_io=req.trace_full_llm_io, **sources
             )
         except (ValidationError, TypeError, ValueError, RuntimeError, TimeoutError) as exc:
             raise _brief_http_error(exc) from exc
@@ -615,7 +651,7 @@ def api_brief_plan(req: BriefPlanReq, request: Request, stream: bool = False):
 
 
 @app.post("/api/brief/revise")
-def api_brief_revise(req: ReviseBriefReq, request: Request, stream: bool = False):
+def api_brief_revise(req: ReviseBriefReq, request: Request, stream: bool = False, *, plan_store: PlanStoreDep):
     """按用户在计划卡上写的意见重新生成计划。原始问题身份必须保持不变。"""
     if not req.feedback.strip():
         raise HTTPException(400, "feedback 不能为空")
@@ -623,7 +659,8 @@ def api_brief_revise(req: ReviseBriefReq, request: Request, stream: bool = False
 
     def work() -> dict:
         try:
-            payload, trace = _revise_brief_payload(req.brief, req.feedback, full_llm_io=req.trace_full_llm_io, **sources)
+            payload, trace = _revise_brief_payload(req.brief, req.feedback, plan_store=plan_store,
+                                                   full_llm_io=req.trace_full_llm_io, **sources)
         except (ValidationError, TypeError, ValueError, RuntimeError, TimeoutError) as exc:
             raise _brief_http_error(exc) from exc
         if payload is None:
@@ -640,8 +677,8 @@ def api_providers() -> list[dict]:
 
 
 @app.post("/api/providers/refresh")
-def api_providers_refresh() -> list[dict]:
-    _provider_edit_guard()
+def api_providers_refresh(*, registry: RegistryDep) -> list[dict]:
+    _provider_edit_guard(registry)
     from concurrent.futures import ThreadPoolExecutor
     from dra import provider_registry as pr
     providers=[p.name for p in pr.list_status()]
@@ -649,8 +686,8 @@ def api_providers_refresh() -> list[dict]:
         return [p.model_dump() for p in pool.map(pr.refresh_provider,providers)]
 
 
-def _provider_edit_guard():
-    if REGISTRY.active_count():
+def _provider_edit_guard(registry: "RunRegistry"):
+    if registry.active_count():
         raise HTTPException(409,"研究正在运行，请结束后修改 API 连接，避免影响正在发送的请求。")
 
 
@@ -663,25 +700,25 @@ def _provider_input(model, body):
 
 
 @app.post('/api/providers')
-def api_provider_create(body: dict):
+def api_provider_create(body: dict, *, registry: RegistryDep):
     from dra import provider_registry as pr
-    _provider_edit_guard()
+    _provider_edit_guard(registry)
     try:return pr.save_connection(_provider_input(pr.ConnectionInput,body)).model_dump()
     except ValueError as exc:raise HTTPException(400,str(exc))
 
 
 @app.put('/api/providers/{provider}')
-def api_provider_update(provider: str, body: dict):
+def api_provider_update(provider: str, body: dict, *, registry: RegistryDep):
     from dra import provider_registry as pr
-    _provider_edit_guard()
+    _provider_edit_guard(registry)
     try:return pr.save_connection(_provider_input(pr.ConnectionInput,body),provider).model_dump()
     except ValueError as exc:raise HTTPException(400,str(exc))
 
 
 @app.delete('/api/providers/{provider}')
-def api_provider_delete(provider: str):
+def api_provider_delete(provider: str, *, registry: RegistryDep):
     from dra import provider_registry as pr, runtime_config
-    _provider_edit_guard()
+    _provider_edit_guard(registry)
     used=[name for name in ('planner','subagent','vision') if getattr(runtime_config.current(),name).provider==provider]
     if used:raise HTTPException(409,'该连接仍被模型设置使用（'+', '.join(used)+'），请先更换并保存模型设置。')
     try:pr.delete_connection(provider)
@@ -690,9 +727,9 @@ def api_provider_delete(provider: str):
 
 
 @app.post('/api/providers/{provider}/refresh')
-def api_provider_refresh(provider: str):
+def api_provider_refresh(provider: str, *, registry: RegistryDep):
     from dra import provider_registry as pr
-    _provider_edit_guard()
+    _provider_edit_guard(registry)
     try:return pr.refresh_provider(provider).model_dump()
     except ValueError as exc:raise HTTPException(400,str(exc))
 
@@ -742,15 +779,6 @@ from dra import events
 from dra.events import EventType
 from dra.paths import DATA_DIR, PLANS_DIR, RUNS_DIR
 from dra.simple_research import SimpleConfig
-from dra.runstore import (
-    IncompatibleEventSchemaError,
-    PlanAttemptStore,
-    RunStore,
-    replay_compatibility,
-)
-
-STORE = RunStore(RUNS_DIR)
-PLAN_STORE = PlanAttemptStore(PLANS_DIR)
 
 
 class RunHandle:
@@ -1208,7 +1236,10 @@ def _simple_stats(buffer: list[dict]) -> dict:
     }
 
 
-REGISTRY = RunRegistry(STORE)
+# 启动时创建一次；接口通过 get_store / get_plan_store / get_registry 取用。
+app.state.store = RunStore(RUNS_DIR)
+app.state.plan_store = PlanAttemptStore(PLANS_DIR)
+app.state.registry = RunRegistry(app.state.store)
 
 
 def _first_unwritable_data_dir() -> str | None:
@@ -1232,7 +1263,7 @@ def _first_unwritable_data_dir() -> str | None:
 
 
 @app.get("/healthz")
-async def healthz() -> dict:
+async def healthz(*, registry: RegistryDep) -> dict:
     """容器内部健康检查：不读取配置，不调用模型、搜索或研究编排。"""
     # 磁盘异常可能阻塞；探针放线程，容量计数仍回到事件循环读取，避免与启动 run
     # 的字典写入跨线程竞争。
@@ -1244,16 +1275,16 @@ async def healthz() -> dict:
         )
     return {
         "status": "ok",
-        "active_runs": REGISTRY.active_count(),
-        "max_active_runs": REGISTRY.max_active_runs,
+        "active_runs": registry.active_count(),
+        "max_active_runs": registry.max_active_runs,
     }
 
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     """扫描中断运行和孤儿容器，管理会话容器池，退出时清理执行资源。"""
-    REGISTRY.loop = asyncio.get_running_loop()
-    n = STORE.mark_orphans()
+    _app.state.registry.loop = asyncio.get_running_loop()
+    n = _app.state.store.mark_orphans()
     if n:
         print(f"⚠️ 启动扫描：{n} 个 running 孤儿 run 标记 failed（server restart）")
     from dra.execution import ExecutionConfig, reap_orphans
@@ -1261,20 +1292,20 @@ async def _lifespan(_app: FastAPI):
     execution_config = ExecutionConfig.from_env()
     if execution_config.enabled:
         try:
-            await asyncio.to_thread(reap_orphans, STORE.root, execution_config)
-            get_pool(STORE.root,execution_config)
+            await asyncio.to_thread(reap_orphans, _app.state.store.root, execution_config)
+            get_pool(_app.state.store.root,execution_config)
         except Exception:
             print("执行工作区清理失败：已暂停新执行，普通研究仍可用")
     try:
         yield
     finally:
-        for handle in REGISTRY.runs.values():
+        for handle in _app.state.registry.runs.values():
             if handle.cancel_event is not None: handle.cancel_event.set()
         try:
             # 设置页可在运行期间开关执行，池可能在启动后才创建；按实际存在的池清理，没有池时不访问 Docker。
-            await asyncio.to_thread(shutdown_pools, STORE.root)
+            await asyncio.to_thread(shutdown_pools, _app.state.store.root)
             if execution_config.enabled:
-                await asyncio.to_thread(reap_orphans, STORE.root, execution_config)
+                await asyncio.to_thread(reap_orphans, _app.state.store.root, execution_config)
         except Exception:
             print("执行工作区清理未确认，将在下次启动重试")
 
@@ -1301,7 +1332,7 @@ def _normalise_plan_identity(text: str) -> str:
 
 
 @app.post("/api/research")
-async def api_research(req: ResearchReq) -> dict:
+async def api_research(req: ResearchReq, *, registry: RegistryDep) -> dict:
     from dra import runtime_config
 
     if not req.query.strip():
@@ -1326,7 +1357,7 @@ async def api_research(req: ResearchReq) -> dict:
     except (LibraryError, mcp_client.MCPError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
     try:
-        run_id = REGISTRY.start_simple_research(
+        run_id = registry.start_simple_research(
             req.query,
             config=runtime_config.to_simple_config(simple_settings, source_mode=req.source_mode,
                                 library_selection=selection, library_rerank=req.library_rerank,
@@ -1342,8 +1373,8 @@ async def api_research(req: ResearchReq) -> dict:
 
 
 @app.get("/api/runs")
-def api_runs() -> list[dict]:
-    return STORE.list_runs()
+def api_runs(*, store: StoreDep) -> list[dict]:
+    return store.list_runs()
 
 
 class FollowupReq(_StrictPayload):
@@ -1352,34 +1383,34 @@ class FollowupReq(_StrictPayload):
 
 
 @app.post("/api/research/{run_id}/followup", status_code=202)
-async def api_followup(run_id: str, req: FollowupReq):
+async def api_followup(run_id: str, req: FollowupReq, *, store: StoreDep, registry: RegistryDep):
     from dra import runtime_config
     from dra.research_history import HistoryError
     _require_valid_run_id(run_id)
-    if STORE.get_meta(run_id) is None:
+    if store.get_meta(run_id) is None:
         raise HTTPException(404,"run 不存在")
     try:
         config=runtime_config.to_simple_config(runtime_config.current())
-        new_id=REGISTRY.start_followup(run_id,req.request_id,req.text,config=config)
+        new_id=registry.start_followup(run_id,req.request_id,req.text,config=config)
     except ActiveRunLimitError as exc:
         raise HTTPException(429,str(exc)) from exc
     except (HistoryError, LibraryError, mcp_client.MCPError) as exc:
         raise HTTPException(409,str(exc)) from exc
-    meta=STORE.get_meta(new_id)
+    meta=store.get_meta(new_id)
     return {k:meta[k] for k in ("run_id","conversation_id","turn_index","status","parent_run_id")}
 
 
 @app.get("/api/conversations")
-def api_conversations():
-    return STORE.conversations()
+def api_conversations(*, store: StoreDep):
+    return store.conversations()
 
 
 @app.get("/api/conversations/{conversation_id}")
-def api_conversation(conversation_id: str, cursor: int = 0):
+def api_conversation(conversation_id: str, cursor: int = 0, *, store: StoreDep):
     _require_valid_run_id(conversation_id)
     if cursor < 0:
         raise HTTPException(400,"cursor 须为非负整数")
-    turns=STORE.conversation_turns(conversation_id)
+    turns=store.conversation_turns(conversation_id)
     if not turns:
         raise HTTPException(404,"研究会话不存在")
     return {"conversation_id":conversation_id,"latest_run_id":turns[-1]["run_id"],"total":len(turns),
@@ -1475,11 +1506,11 @@ def api_library_search(req: LibrarySearchReq):
 
 
 @app.get("/api/runs/{run_id}/mcp-results/{receipt_id}")
-def api_mcp_receipt(run_id: str, receipt_id: str):
+def api_mcp_receipt(run_id: str, receipt_id: str, *, store: StoreDep):
     _require_valid_run_id(run_id)
     if not re.fullmatch(r"[a-f0-9]{32}", receipt_id):
         raise HTTPException(404, "MCP 回执不存在")
-    path = STORE._dir(run_id) / "mcp_results" / f"{receipt_id}.json"
+    path = store._dir(run_id) / "mcp_results" / f"{receipt_id}.json"
     if not path.is_file() or path.resolve().parent != path.parent.resolve():
         raise HTTPException(404, "MCP 回执不存在")
     try:
@@ -1489,12 +1520,12 @@ def api_mcp_receipt(run_id: str, receipt_id: str):
 
 
 @app.get("/api/runs/{run_id}/images/{sha256}")
-def api_run_image(run_id: str, sha256: str):
+def api_run_image(run_id: str, sha256: str, *, store: StoreDep):
     _require_valid_run_id(run_id)
-    if not re.fullmatch(r"[a-f0-9]{64}", sha256) or STORE.get_meta(run_id) is None:
+    if not re.fullmatch(r"[a-f0-9]{64}", sha256) or store.get_meta(run_id) is None:
         raise HTTPException(404, "图片不存在")
     try:
-        data = (STORE._dir(run_id) / "images" / (sha256 + ".png")).read_bytes()
+        data = (store._dir(run_id) / "images" / (sha256 + ".png")).read_bytes()
         if hashlib.sha256(data).hexdigest() != sha256:
             raise ValueError("hash mismatch")
         return Response(data, media_type="image/png", headers={"X-Content-Type-Options": "nosniff"})
@@ -1503,12 +1534,12 @@ def api_run_image(run_id: str, sha256: str):
 
 
 @app.get("/api/runs/{run_id}/sources/{ref}/original")
-def api_run_original(run_id: str, ref: str):
+def api_run_original(run_id: str, ref: str, *, store: StoreDep):
     _require_valid_run_id(run_id)
-    if not re.fullmatch(r"s[0-9]{1,6}", ref) or STORE.get_meta(run_id) is None:
+    if not re.fullmatch(r"s[0-9]{1,6}", ref) or store.get_meta(run_id) is None:
         raise HTTPException(404, "来源不存在")
     try:
-        directory = STORE.root / run_id
+        directory = store.root / run_id
         ledger = json.loads((directory / "run.json").read_text())
         source = next(s for s in ledger["sources"] if s["ref"] == ref and s["snapshot_kind"] in ("full", "original"))
         document = source.get("document") or source.get("download")
@@ -1528,22 +1559,22 @@ def api_run_original(run_id: str, ref: str):
 
 
 @app.get("/api/runs/{run_id}")
-def api_run_detail(run_id: str) -> dict:
+def api_run_detail(run_id: str, *, store: StoreDep, registry: RegistryDep) -> dict:
     _require_valid_run_id(run_id)
-    meta = STORE.get_meta(run_id)
+    meta = store.get_meta(run_id)
     if meta is None:
         raise HTTPException(404, "run 不存在")
     compatible, error = replay_compatibility(meta)
     return {
-        "research_input": _run_input_snapshot(run_id),
+        "research_input": _run_input_snapshot(run_id, store, registry),
         "meta": {
             **meta,
             "replay_compatible": compatible,
             "replay_error": error,
         },
-        "report_md": STORE.read_report(run_id),
+        "report_md": store.read_report(run_id),
         # simple 运行的真实执行口径（与进度事件一致）；plan 运行不会执行过工具账本
-        "executed_tool_calls": STORE.executed_tool_calls(run_id),
+        "executed_tool_calls": store.executed_tool_calls(run_id),
     }
 
 
@@ -1558,22 +1589,22 @@ def api_execution_status():
 
 
 @app.get("/api/runs/{run_id}/artifacts")
-def api_artifact_list(run_id: str):
+def api_artifact_list(run_id: str, *, store: StoreDep):
     from dra.artifacts import committed_records
     _require_valid_run_id(run_id)
-    if STORE.get_meta(run_id) is None: raise HTTPException(404, "run not found")
-    return {"artifacts": committed_records(STORE.read_simple_result(run_id))}
+    if store.get_meta(run_id) is None: raise HTTPException(404, "run not found")
+    return {"artifacts": committed_records(store.read_simple_result(run_id))}
 
 
-def _artifact_response(run_id, artifact_id, preview=False):
+def _artifact_response(store: RunStore, run_id, artifact_id, preview=False):
     from dra.artifacts import committed_records, read_committed_file, previewable, ExecutionError
     from fastapi.responses import Response
     from urllib.parse import quote
     _require_valid_run_id(run_id)
-    if STORE.get_meta(run_id) is None: raise HTTPException(404, "run not found")
-    item=next((a for a in committed_records(STORE.read_simple_result(run_id)) if a.get('artifact_id')==artifact_id),None)
+    if store.get_meta(run_id) is None: raise HTTPException(404, "run not found")
+    item=next((a for a in committed_records(store.read_simple_result(run_id)) if a.get('artifact_id')==artifact_id),None)
     if item is None: raise HTTPException(404, "artifact not found")
-    try: data=read_committed_file(STORE._dir(run_id),item)
+    try: data=read_committed_file(store._dir(run_id),item)
     except ExecutionError as exc: raise HTTPException(409,str(exc)) from exc
     # 个人 demo：按文件本身的浏览器能力预览，不额外封锁脚本和外部资源。
     headers={"X-Content-Type-Options":"nosniff", "Cache-Control":"private, no-store"}
@@ -1585,22 +1616,22 @@ def _artifact_response(run_id, artifact_id, preview=False):
 
 
 @app.get("/api/runs/{run_id}/artifacts/{artifact_id}/download")
-def api_artifact_download(run_id: str,artifact_id: str):
-    return _artifact_response(run_id,artifact_id)
+def api_artifact_download(run_id: str,artifact_id: str, *, store: StoreDep):
+    return _artifact_response(store,run_id,artifact_id)
 
 
 @app.get("/api/runs/{run_id}/artifacts/{artifact_id}/preview")
-def api_artifact_preview(run_id: str,artifact_id: str):
-    return _artifact_response(run_id,artifact_id,preview=True)
+def api_artifact_preview(run_id: str,artifact_id: str, *, store: StoreDep):
+    return _artifact_response(store,run_id,artifact_id,preview=True)
 
 
 @app.get("/api/runs/{run_id}/execution/logs/{execution_id}")
-def api_execution_log(run_id: str,execution_id: str,stream: str='stdout',cursor: int=0):
+def api_execution_log(run_id: str,execution_id: str,stream: str='stdout',cursor: int=0, *, store: StoreDep):
     _require_valid_run_id(run_id)
-    if STORE.get_meta(run_id) is None: raise HTTPException(404,"run not found")
+    if store.get_meta(run_id) is None: raise HTTPException(404,"run not found")
     if not re.fullmatch(r'exec_[a-f0-9]{32}',execution_id) or stream not in ('stdout','stderr') or cursor<0:
         raise HTTPException(400,"invalid log request")
-    root=STORE._dir(run_id).resolve();path=root/'execution'/'logs'/f'{execution_id}.{stream}'
+    root=store._dir(run_id).resolve();path=root/'execution'/'logs'/f'{execution_id}.{stream}'
     if not path.is_file() or path.resolve()!=path: raise HTTPException(404,"log not found")
     size=path.stat().st_size
     if cursor>size:raise HTTPException(400,"invalid cursor")
@@ -1610,29 +1641,29 @@ def api_execution_log(run_id: str,execution_id: str,stream: str='stdout',cursor:
 
 
 @app.get("/api/runs/{run_id}/simple")
-def api_run_simple(run_id: str) -> dict:
+def api_run_simple(run_id: str, *, store: StoreDep) -> dict:
     """simple 运行的四状态结果（刷新/历史回看与结束时一致）。
 
     非 simple 运行没有这份结果：返回 404，前端据此回退到事件回放，不伪造。
     """
     _require_valid_run_id(run_id)
-    if STORE.get_meta(run_id) is None:
+    if store.get_meta(run_id) is None:
         raise HTTPException(404, "run 不存在")
-    payload = STORE.read_simple_result(run_id)
+    payload = store.read_simple_result(run_id)
     if payload is None:
         raise HTTPException(404, "该运行没有 simple 结果")
     return payload
 
 
 @app.get("/api/runs/{run_id}/context/{checkpoint_id}")
-def api_context_history(run_id: str, checkpoint_id: str, cursor: int = 0) -> dict:
+def api_context_history(run_id: str, checkpoint_id: str, cursor: int = 0, *, store: StoreDep) -> dict:
     """只读分页；ID 限定当前 run 内已落盘整理记录，不接受文件路径。"""
     _require_valid_run_id(run_id)
-    if STORE.get_meta(run_id) is None:
+    if store.get_meta(run_id) is None:
         raise HTTPException(404, "run 不存在")
     if not re.fullmatch(r"ctx-[0-9a-f]{32}", checkpoint_id) or cursor < 0:
         raise HTTPException(400, "整理记录 ID 或 cursor 无效")
-    paths = list((STORE._dir(run_id) / "context").glob(f"*/{checkpoint_id}.json"))
+    paths = list((store._dir(run_id) / "context").glob(f"*/{checkpoint_id}.json"))
     if len(paths) != 1:
         raise HTTPException(404, "整理记录不存在")
     try:
@@ -1648,12 +1679,12 @@ def api_context_history(run_id: str, checkpoint_id: str, cursor: int = 0) -> dic
 
 
 @app.get("/api/runs/{run_id}/materials")
-def api_run_materials(run_id: str) -> dict:
+def api_run_materials(run_id: str, *, store: StoreDep) -> dict:
     """运行期间也可读已持久化卡片；不把未交付草稿当报告。"""
     _require_valid_run_id(run_id)
-    if STORE.get_meta(run_id) is None:
+    if store.get_meta(run_id) is None:
         raise HTTPException(404, "run 不存在")
-    path = STORE._dir(run_id) / "run.json"
+    path = store._dir(run_id) / "run.json"
     if not path.exists():
         return {"sources": [], "cards": []}
     try:
@@ -1692,16 +1723,16 @@ def _highlight_page(run_id: str, ref: str, text: str, start: int, end: int) -> s
 
 
 @app.get("/api/runs/{run_id}/sources/{ref}", response_class=PlainTextResponse)
-def api_run_source(run_id: str, ref: str, hl: str | None = None):
+def api_run_source(run_id: str, ref: str, hl: str | None = None, *, store: StoreDep):
     """读该运行**已保存**的原文快照；不重新联网、不用新抓的网页冒充旧原文。
 
     带 ``?hl=a-b`` 时返回一个把 ``chars=a-b`` 高亮出来的 HTML 视图（引用深链的本地那一半：
     数据全是我们自己的，100% 可靠）。不带参数时保持原样——纯文本，供程序与既有测试消费。
     """
     _require_valid_run_id(run_id)
-    if STORE.get_meta(run_id) is None:
+    if store.get_meta(run_id) is None:
         raise HTTPException(404, "run 不存在")
-    text = STORE.read_source_text(run_id, ref)
+    text = store.read_source_text(run_id, ref)
     if text is None:
         raise HTTPException(404, "该来源不在这个运行里")
     if hl is not None:
@@ -1729,10 +1760,10 @@ def _compact_event(event: dict) -> dict:
 
 
 @app.get("/api/runs/{run_id}/events", response_class=PlainTextResponse)
-def api_run_events(run_id: str, compact: bool = False) -> str:
+def api_run_events(run_id: str, compact: bool = False, *, store: StoreDep) -> str:
     _require_valid_run_id(run_id)
     try:
-        text = STORE.read_events_text(run_id)
+        text = store.read_events_text(run_id)
     except IncompatibleEventSchemaError as exc:
         raise HTTPException(409, str(exc)) from exc
     if text is None:
@@ -1747,15 +1778,15 @@ def api_run_events(run_id: str, compact: bool = False) -> str:
 
 
 @app.get("/api/runs/{run_id}/events/{seq}")
-def api_run_event_detail(run_id: str, seq: int) -> dict:
-    text = api_run_events(run_id)
+def api_run_event_detail(run_id: str, seq: int, *, store: StoreDep) -> dict:
+    text = api_run_events(run_id, store=store)
     try:
         for line in text.splitlines():
             if not line.strip():
                 continue
             event = json.loads(line)
             if isinstance(event, dict) and event.get("seq") == seq:
-                return STORE.tool_event_detail(run_id, event)
+                return store.tool_event_detail(run_id, event)
     except (OSError, ValueError) as exc:
         raise HTTPException(503, "事件记录损坏，无法读取调用详情") from exc
     raise HTTPException(404, "这条调用记录不存在")
@@ -1769,11 +1800,11 @@ def _sse_frame(evt: dict) -> str:
 
 
 @app.get("/api/research/{run_id}/stream")
-async def api_stream(run_id: str, compact: bool = False) -> StreamingResponse:
+async def api_stream(run_id: str, compact: bool = False, *, registry: RegistryDep) -> StreamingResponse:
     """SSE：原子「订阅+快照」后先补发 backlog 再续推 live，按 seq 去重——
     刷新页面 = 重连 = 不丢现场。end 事件后关流（EventSource 侧 close 防自动重连）。"""
     _require_valid_run_id(run_id)
-    h = REGISTRY.runs.get(run_id)
+    h = registry.runs.get(run_id)
     if h is None:
         raise HTTPException(404, "run 不在内存（服务重启过？历史回放走 /api/runs/{id}/events）")
 
@@ -1813,12 +1844,12 @@ def api_demo_events() -> str:
     return _FIXTURE.read_text(encoding="utf-8")
 
 
-def _run_input_snapshot(run_id):
-    h = REGISTRY.runs.get(run_id)
+def _run_input_snapshot(run_id, store: RunStore, registry: "RunRegistry"):
+    h = registry.runs.get(run_id)
     if h is not None and h.user_input is not None:
         return h.user_input.snapshot()
     try:
-        text = STORE.read_events_text(run_id) or ""
+        text = store.read_events_text(run_id) or ""
     except IncompatibleEventSchemaError:
         # 旧协议仍可读 meta/报告；不可回放原因已由 meta 明确返回。
         return replay_input([])
@@ -1844,14 +1875,15 @@ class ResearchMessageReq(_StrictPayload):
 
 
 @app.post("/api/research/{run_id}/messages", status_code=202)
-def api_research_message(run_id: str, req: ResearchMessageReq) -> dict:
+def api_research_message(run_id: str, req: ResearchMessageReq, *, store: StoreDep,
+                         registry: RegistryDep) -> dict:
     _require_valid_run_id(run_id)
     if not req.text.strip():
         raise HTTPException(422, "消息不能为空")
-    meta = STORE.get_meta(run_id)
+    meta = store.get_meta(run_id)
     if meta is None:
         raise HTTPException(404, "run 不存在")
-    h = REGISTRY.runs.get(run_id)
+    h = registry.runs.get(run_id)
     if h is not None and h.user_input is not None:
         try:
             return h.user_input.accept(req.message_id, req.text)
@@ -1860,7 +1892,7 @@ def api_research_message(run_id: str, req: ResearchMessageReq) -> dict:
         except llm.LLMPersistenceError as exc:
             raise HTTPException(503, "消息保存失败，未确认接收；请查看运行状态") from exc
     # 结束/重启后的网络重试可确认原消息，不能以重试为由重启研究。
-    snapshot = _run_input_snapshot(run_id)
+    snapshot = _run_input_snapshot(run_id, store, registry)
     for message in snapshot["messages"]:
         if message["message_id"] == req.message_id:
             if message["text"] != req.text:
@@ -1872,14 +1904,14 @@ def api_research_message(run_id: str, req: ResearchMessageReq) -> dict:
 
 
 @app.post("/api/research/{run_id}/cancel")
-def api_cancel(run_id: str) -> dict:
+def api_cancel(run_id: str, *, store: StoreDep, registry: RegistryDep) -> dict:
     """请求协作式取消，真实研究线程结束后释放名额。"""
     _require_valid_run_id(run_id)
-    h = REGISTRY.runs.get(run_id)
+    h = registry.runs.get(run_id)
     if h is None:
         raise HTTPException(404, "run 不在内存")
     if h.done or not h.busy:
-        meta = STORE.get_meta(run_id) or {}
+        meta = store.get_meta(run_id) or {}
         return {"status": meta.get("status", "unknown")}
     if h.cancel_event is not None:
         h.cancel_event.set()

@@ -49,10 +49,11 @@ def test_api_returns_429_when_capacity_is_full(monkeypatch):
     def reject(*_args, **_kwargs):
         raise web.ActiveRunLimitError("已有研究运行中")
 
-    monkeypatch.setattr(web.REGISTRY, "start_simple_research", reject)
+    monkeypatch.setattr(web.app.state.registry, "start_simple_research", reject)
 
     with pytest.raises(HTTPException) as caught:
-        asyncio.run(web.api_research(web.ResearchReq(query="新问题", mode="simple")))
+        asyncio.run(web.api_research(web.ResearchReq(query="新问题", mode="simple"),
+                                     registry=web.app.state.registry))
 
     assert caught.value.status_code == 429
     assert caught.value.detail == "已有研究运行中"
@@ -61,12 +62,12 @@ def test_api_returns_429_when_capacity_is_full(monkeypatch):
 def test_api_research_forwards_debug_full_io_flag(monkeypatch):
     monkeypatch.setattr(runtime_config, "current", runtime_config._code_defaults)
     start = MagicMock(return_value="run-debug")
-    monkeypatch.setattr(web.REGISTRY, "start_simple_research", start)
+    monkeypatch.setattr(web.app.state.registry, "start_simple_research", start)
 
     result = asyncio.run(web.api_research(web.ResearchReq(
         query="新问题", trace_full_llm_io=True,
         mode="simple",
-    )))
+    ), registry=web.app.state.registry))
 
     assert result == {"run_id": "run-debug", "mode": "simple"}
     start.assert_called_once_with(

@@ -198,9 +198,9 @@ def _adapter_config(provider="test"):
 @pytest.fixture
 def isolated_web(tmp_path, monkeypatch):
     store = RunStore(tmp_path / "runs")
-    monkeypatch.setattr(web, "STORE", store)
-    monkeypatch.setattr(web, "REGISTRY", web.RunRegistry(store, max_active_runs=2))
-    monkeypatch.setattr(web, "PLAN_STORE", PlanAttemptStore(tmp_path / "plans"))
+    monkeypatch.setattr(web.app.state, "store", store)
+    monkeypatch.setattr(web.app.state, "registry", web.RunRegistry(store, max_active_runs=2))
+    monkeypatch.setattr(web.app.state, "plan_store", PlanAttemptStore(tmp_path / "plans"))
     monkeypatch.setattr(runtime_config, "current", runtime_config._code_defaults)
     monkeypatch.setattr(runtime_config, "to_subagent_config", lambda _: _adapter_config())
     return store

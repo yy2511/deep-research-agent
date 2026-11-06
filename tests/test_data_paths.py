@@ -41,8 +41,8 @@ from dra.paths import DATA_DIR
 runtime_config.load()
 print(json.dumps({
     "data": str(DATA_DIR),
-    "runs": str(web.STORE.root),
-    "plans": str(web.PLAN_STORE.root),
+    "runs": str(web.app.state.store.root),
+    "plans": str(web.app.state.plan_store.root),
     "config": str(runtime_config._CONFIG_PATH),
 }))
 """

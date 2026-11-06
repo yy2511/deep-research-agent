@@ -19,7 +19,7 @@ def registry(tmp_path, monkeypatch):
         monkeypatch.delenv(base, raising=False)
     monkeypatch.setattr(runtime_config, '_CONFIG_PATH', tmp_path/'runtime.json')
     monkeypatch.setattr(runtime_config, '_cache', None)
-    monkeypatch.setattr(web.REGISTRY, 'active_count', lambda: 0)
+    monkeypatch.setattr(web.app.state.registry, 'active_count', lambda: 0)
     return pr, TestClient(web.app)
 
 
@@ -91,7 +91,7 @@ def test_used_connection_and_running_research_block_delete(registry,monkeypatch)
     config.subagent.provider=pid
     runtime_config.save(config)
     assert client.delete(f'/api/providers/{pid}').status_code==409
-    monkeypatch.setattr(web.REGISTRY,'active_count',lambda:1)
+    monkeypatch.setattr(web.app.state.registry,'active_count',lambda:1)
     assert client.put(f'/api/providers/{pid}',json={
         'label':'change','base_url':'https://elsewhere.example/v1','api_key':'new-secret'}).status_code==409
 

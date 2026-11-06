@@ -22,8 +22,8 @@ _BAD_IDS = ("%2e%2e", ".hidden", "a%20b")
 
 
 def _spy_store(monkeypatch):
-    spy = MagicMock(wraps=web.STORE)
-    monkeypatch.setattr(web, "STORE", spy)
+    spy = MagicMock(wraps=web.app.state.store)
+    monkeypatch.setattr(web.app.state, "store", spy)
     return spy
 
 
@@ -69,7 +69,7 @@ def test_old_event_schema_replay_returns_409(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     (run_dir / "events.jsonl").write_text('{"type":"scope"}\n', encoding="utf-8")
-    monkeypatch.setattr(web, "STORE", store)
+    monkeypatch.setattr(web.app.state, "store", store)
 
     with TestClient(web.app) as client:
         response = client.get(f"/api/runs/{run_id}/events")

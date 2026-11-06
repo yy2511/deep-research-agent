@@ -388,7 +388,7 @@ def test_web_image_checks_saved_hash_and_serves_binary_original(tmp_path, monkey
     ctx = sr.ToolContext(store, sr.SimpleConfig(vision=vision.VisionConfig()))
     source = original(ctx)
     pixels, info = vision.render(store,source,{})
-    monkeypatch.setattr(web,'STORE',ws)
+    monkeypatch.setattr(web.app.state, 'store',ws)
     with TestClient(web.app) as client:
         response = client.get(f'/api/runs/{parent}/images/{info["image_sha256"]}')
         assert response.status_code==200 and response.content==pixels

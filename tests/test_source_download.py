@@ -287,18 +287,18 @@ def test_web_original_download_matches_bytes_and_checks_hash(tmp_path, monkeypat
     from dra.runstore import RunStore
     from fastapi import HTTPException
     ws = RunStore(tmp_path / 'runs')
-    monkeypatch.setattr(web, 'STORE', ws)
+    monkeypatch.setattr(web.app.state, 'store', ws)
     run_id = ws.create_run('q', None, {'mode': 'simple'})
     ctx = context(ws._dir(run_id))
     fake_http(monkeypatch, [Response()])
     receipt, ok = ctx.execute('download_source', {'url': URL})
     assert ok
     ref = json.loads(receipt)['source_ref']
-    response = web.api_run_original(run_id, ref)
+    response = web.api_run_original(run_id, ref, store=web.app.state.store)
     assert response.body == RAW and response.headers['content-disposition'].startswith('attachment;')
     (ctx.store.sources_dir / f'{ref}.original').write_bytes(b'bad')
     with pytest.raises(HTTPException):
-        web.api_run_original(run_id, ref)
+        web.api_run_original(run_id, ref, store=web.app.state.store)
 
 
 def test_bash_fetch_after_export_ignores_manifest_material(tmp_path, monkeypatch):
