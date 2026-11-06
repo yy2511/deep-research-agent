@@ -358,12 +358,12 @@ def test_http_history_only_reads_current_run_and_pages(tmp_path,monkeypatch):
     checkpoint='ctx-'+'a'*32
     folder=tmp_path/'context'/'lead';folder.mkdir(parents=True)
     (folder/(checkpoint+'.json')).write_text(json.dumps({'messages':[{'content':'x'*9000}]}))
-    monkeypatch.setattr(web,'STORE',SimpleNamespace(get_meta=lambda rid:{} if rid=='run-1' else None,_dir=lambda rid:tmp_path))
-    page=web.api_context_history('run-1',checkpoint)
+    monkeypatch.setattr(web.app.state, 'store',SimpleNamespace(get_meta=lambda rid:{} if rid=='run-1' else None,_dir=lambda rid:tmp_path))
+    page=web.api_context_history('run-1',checkpoint,store=web.app.state.store)
     assert len(page['text'])==8000 and page['next_cursor']==8000
-    assert web.api_context_history('run-1',checkpoint,8000)['next_cursor'] is None
+    assert web.api_context_history('run-1',checkpoint,8000,store=web.app.state.store)['next_cursor'] is None
     for rid,cid,cursor in [('run-1','../../secret',0),('run-1',checkpoint,-1),('another-run',checkpoint,0)]:
-        with pytest.raises(HTTPException):web.api_context_history(rid,cid,cursor)
+        with pytest.raises(HTTPException):web.api_context_history(rid,cid,cursor,store=web.app.state.store)
 
 
 def test_child_compacts_independently_and_does_not_consume_parent_mailbox(tmp_path):

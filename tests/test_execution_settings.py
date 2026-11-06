@@ -114,7 +114,7 @@ def test_status_uses_same_resolution_as_research_start(env_execution, no_docker,
     def start(query, **kwargs):
         started.append(kwargs["config"])
         return "run-execution-off"
-    monkeypatch.setattr(web.REGISTRY, "start_simple_research", start)
+    monkeypatch.setattr(web.app.state.registry, "start_simple_research", start)
     response = client.post("/api/research", json={"query": "q", "mode": "simple"})
     assert response.status_code == 200, response.text
     assert started[0].execution == no_docker[-1]
@@ -129,7 +129,7 @@ def test_status_uses_same_resolution_as_research_start(env_execution, no_docker,
 def test_run_skills_reports_whether_catalog_was_recorded(tmp_path, monkeypatch):
     from dra.runstore import RunStore
     store = RunStore(tmp_path / "runs")
-    monkeypatch.setattr(web, "STORE", store)
+    monkeypatch.setattr(web.app.state, "store", store)
     client = TestClient(web.app)
     old = store.create_run("q", None, {"mode": "simple"})
     assert client.get(f"/api/runs/{old}/skills").json() == {
@@ -146,8 +146,8 @@ def test_lifespan_cleans_pool_created_after_runtime_switch(tmp_path, env_executi
     from dra import execution_pool
     from dra.runstore import RunStore
     store = RunStore(tmp_path / "runs")
-    monkeypatch.setattr(web, "STORE", store)
-    monkeypatch.setattr(web, "REGISTRY", web.RunRegistry(store))
+    monkeypatch.setattr(web.app.state, "store", store)
+    monkeypatch.setattr(web.app.state, "registry", web.RunRegistry(store))
     monkeypatch.setattr(execution_pool, "_POOLS", {})
     reaped, closed = [], []
 
@@ -176,8 +176,8 @@ def test_lifespan_without_pool_or_execution_never_touches_docker(tmp_path, env_e
     from dra import execution_pool
     from dra.runstore import RunStore
     store = RunStore(tmp_path / "runs")
-    monkeypatch.setattr(web, "STORE", store)
-    monkeypatch.setattr(web, "REGISTRY", web.RunRegistry(store))
+    monkeypatch.setattr(web.app.state, "store", store)
+    monkeypatch.setattr(web.app.state, "registry", web.RunRegistry(store))
     monkeypatch.setattr(execution_pool, "_POOLS", {})
     monkeypatch.setattr(execution, "reap_orphans", lambda *a: pytest.fail("不应扫描容器"))
     monkeypatch.setattr(execution, "docker_client", lambda *a, **k: pytest.fail("不应访问 Docker"))
@@ -191,8 +191,8 @@ def test_lifespan_does_not_hide_broken_settings_file(tmp_path, env_execution, mo
     from dra import execution_pool
     from dra.runstore import RunStore
     store = RunStore(tmp_path / "runs")
-    monkeypatch.setattr(web, "STORE", store)
-    monkeypatch.setattr(web, "REGISTRY", web.RunRegistry(store))
+    monkeypatch.setattr(web.app.state, "store", store)
+    monkeypatch.setattr(web.app.state, "registry", web.RunRegistry(store))
     monkeypatch.setattr(execution_pool, "_POOLS", {})
     env_execution(False)
     rc._CONFIG_PATH.write_text("{broken", encoding="utf-8")
@@ -205,8 +205,8 @@ def test_lifespan_keeps_environment_cleanup_when_default_enabled(tmp_path, env_e
     from dra import execution_pool
     from dra.runstore import RunStore
     store = RunStore(tmp_path / "runs")
-    monkeypatch.setattr(web, "STORE", store)
-    monkeypatch.setattr(web, "REGISTRY", web.RunRegistry(store))
+    monkeypatch.setattr(web.app.state, "store", store)
+    monkeypatch.setattr(web.app.state, "registry", web.RunRegistry(store))
     monkeypatch.setattr(execution_pool, "_POOLS", {})
     reaped, closed = [], []
 
@@ -239,7 +239,7 @@ def test_backend_saved_selection_old_client_and_start_share_resolution(env_execu
     status=client.get('/api/execution/status').json()
     assert status['backend']=='native' and status['image'] is None
     seen=[]
-    monkeypatch.setattr(web.REGISTRY,'start_simple_research',lambda query,**kwargs:seen.append(kwargs['config']) or 'native-run')
+    monkeypatch.setattr(web.app.state.registry,'start_simple_research',lambda query,**kwargs:seen.append(kwargs['config']) or 'native-run')
     assert client.post('/api/research',json={'query':'q','mode':'simple'}).status_code==200
     assert seen[0].execution==no_docker[-1]
     response=client.put('/api/config',json={**body,'execution_backend':None})

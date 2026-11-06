@@ -62,7 +62,7 @@ def test_verbatim_newlines_survive_internal_and_http_reads(tmp_path, monkeypatch
     assert (store.sources_dir / f"{snap.ref}.txt").read_bytes() == raw.encode()
     assert store.read_source_text(snap.ref) == raw
     assert ws.read_source_text(run_id, snap.ref) == raw
-    monkeypatch.setattr(web, "STORE", ws)
+    monkeypatch.setattr(web.app.state, "store", ws)
     start, end = raw.index("second"), raw.index("second") + len("second")
     with TestClient(web.app) as client:
         url = f"/api/runs/{run_id}/sources/{snap.ref}"

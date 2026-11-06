@@ -8,8 +8,8 @@ from dra import web
 
 
 def test_healthz_reports_capacity_without_external_calls(monkeypatch):
-    monkeypatch.setattr(web.REGISTRY, "active_count", lambda: 1)
-    monkeypatch.setattr(web.REGISTRY, "max_active_runs", 2)
+    monkeypatch.setattr(web.app.state.registry, "active_count", lambda: 1)
+    monkeypatch.setattr(web.app.state.registry, "max_active_runs", 2)
     blocked_llm = MagicMock(side_effect=AssertionError("healthz 不得调用模型"))
     monkeypatch.setattr(web.llm, "chat", blocked_llm)
 

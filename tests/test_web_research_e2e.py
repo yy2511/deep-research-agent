@@ -45,9 +45,9 @@ def isolated_web(tmp_path, monkeypatch):
     """隔离运行目录与注册表；simple 预算走测试配置。"""
     store = RunStore(tmp_path / "runs")
     registry = web.RunRegistry(store, max_active_runs=1)
-    monkeypatch.setattr(web, "STORE", store)
-    monkeypatch.setattr(web, "REGISTRY", registry)
-    monkeypatch.setattr(web, "PLAN_STORE", PlanAttemptStore(tmp_path / "plans"))
+    monkeypatch.setattr(web.app.state, "store", store)
+    monkeypatch.setattr(web.app.state, "registry", registry)
+    monkeypatch.setattr(web.app.state, "plan_store", PlanAttemptStore(tmp_path / "plans"))
     monkeypatch.setattr(runtime_config, "current", runtime_config._code_defaults)
     # 主线只要子 Agent 配置，走的是独立入口；夹具要跟随 runtime_config 的对外接口。
     monkeypatch.setattr(runtime_config, "to_subagent_config", lambda _: _adapter_config())

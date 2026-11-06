@@ -18,8 +18,8 @@ from test_document_library import library, add
 def test_two_followups_preserve_original_and_import_provenance(tmp_path, monkeypatch, call_limits_enabled):
     store, parent, _, raw = history_fixture(tmp_path)
     registry = web.RunRegistry(store, max_active_runs=1)
-    monkeypatch.setattr(web, "STORE", store)
-    monkeypatch.setattr(web, "REGISTRY", registry)
+    monkeypatch.setattr(web.app.state, "store", store)
+    monkeypatch.setattr(web.app.state, "registry", registry)
     settings = runtime_config._code_defaults().model_copy(update={"call_limits_enabled": call_limits_enabled})
     monkeypatch.setattr(runtime_config, "current", lambda: settings)
     monkeypatch.setattr(runtime_config, "to_subagent_config", lambda _: SimpleConfig().adapter)
@@ -100,7 +100,7 @@ def test_followup_waits_for_worker_and_persistence_failure_does_not_schedule(tmp
 
 def test_materials_are_readable_while_running_and_corruption_is_visible(tmp_path, monkeypatch):
     store, parent, _, _ = history_fixture(tmp_path)
-    monkeypatch.setattr(web, "STORE", store)
+    monkeypatch.setattr(web.app.state, "store", store)
     with TestClient(web.app) as client:
         assert client.get(f"/api/runs/{parent}/materials").json()["cards"]
         assert client.get("/api/runs/missing/materials").status_code == 404
@@ -130,8 +130,8 @@ def test_followup_private_scope_keeps_version_and_rejects_removed_or_missing_ind
 def test_followup_bad_coverage_keeps_body_and_reports_missing_metadata(tmp_path, monkeypatch, mode, max_calls):
     store, parent, _, _ = history_fixture(tmp_path)
     registry = web.RunRegistry(store, max_active_runs=1)
-    monkeypatch.setattr(web, "STORE", store)
-    monkeypatch.setattr(web, "REGISTRY", registry)
+    monkeypatch.setattr(web.app.state, "store", store)
+    monkeypatch.setattr(web.app.state, "registry", registry)
     monkeypatch.setattr(runtime_config, "current", runtime_config._code_defaults)
     monkeypatch.setattr(runtime_config, "to_subagent_config", lambda _: SimpleConfig().adapter)
     scripts = []

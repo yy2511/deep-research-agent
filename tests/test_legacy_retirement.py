@@ -31,7 +31,7 @@ def test_retired_routes_are_not_registered():
 def test_plan_request_does_not_start_research(monkeypatch):
     def unexpected(*args, **kwargs):
         raise AssertionError("旧请求不能启动现役研究")
-    monkeypatch.setattr(web.REGISTRY, "start_simple_research", unexpected)
+    monkeypatch.setattr(web.app.state.registry, "start_simple_research", unexpected)
     client = TestClient(web.app)
     assert client.post("/api/research", json={"query": "旧任务", "mode": "plan", "plan": {}}).status_code == 422
 
@@ -41,7 +41,7 @@ def test_current_report_is_readable(tmp_path, monkeypatch):
     run_id = store.create_run("当前任务", {}, {"mode": "simple"})
     (store._dir(run_id) / "report.md").write_text("# 已有报告\n保留正文。", encoding="utf-8")
     store.finalize(run_id, "done", {})
-    monkeypatch.setattr(web, "STORE", store)
+    monkeypatch.setattr(web.app.state, "store", store)
     client = TestClient(web.app)
     response = client.get(f"/api/runs/{run_id}")
     assert response.status_code == 200

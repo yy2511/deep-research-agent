@@ -31,6 +31,6 @@ def test_plan_sync_reaches_terminal_event_and_history(isolated_web, monkeypatch,
         assert payload["plan_sync_status"] == terminal["plan_sync_status"] == expected
         assert payload["draft"] == FINISH["draft"]
         # 清除活跃记录后，重新读取仍由磁盘结果和事件重建，不依赖内存标记。
-        web.REGISTRY.runs.pop(run_id, None)
+        web.app.state.registry.runs.pop(run_id, None)
         assert client.get(f"/api/runs/{run_id}/simple").json()["plan_sync_status"] == expected
         assert [json.loads(line) for line in client.get(f"/api/runs/{run_id}/events").text.splitlines()] == rows

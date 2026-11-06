@@ -16,7 +16,7 @@ from dra.events import EventType
 def _isolate_plan_store(tmp_path, monkeypatch):
     """每个测试独立 plans/ 目录，避免污染仓库 plans/。"""
     store = web.PlanAttemptStore(tmp_path / "plans")
-    monkeypatch.setattr(web, "PLAN_STORE", store)
+    monkeypatch.setattr(web.app.state, "plan_store", store)
     # 清事件总线与 run_id，防测试间泄漏
     events._sinks.clear()
     events.set_run_id(None)
@@ -53,6 +53,7 @@ def test_capture_planner_step_persists_llm_call_and_returns_trace(tmp_path, monk
 
     result, trace = web._capture_planner_step(
         kind="plan", query="测试问题", cfg=cfg, step_name="research_brief", fn=fake_fn,
+        plan_store=web.app.state.plan_store,
     )
     assert result["goal"] == "测试问题"
     assert trace["plan_id"]
@@ -63,7 +64,7 @@ def test_capture_planner_step_persists_llm_call_and_returns_trace(tmp_path, monk
     assert llm["step"] == "research_brief"
     assert llm["output"].startswith("{")
     # 落盘
-    plan_dir = web.PLAN_STORE.root / trace["plan_id"]
+    plan_dir = web.app.state.plan_store.root / trace["plan_id"]
     meta = json.loads((plan_dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["status"] == "ok"
     text = (plan_dir / "events.jsonl").read_text(encoding="utf-8")
@@ -97,6 +98,7 @@ def test_capture_planner_step_full_io_is_scoped_and_recorded():
         cfg=cfg,
         step_name="research_brief",
         fn=fake_fn,
+        plan_store=web.app.state.plan_store,
         full_llm_io=True,
     )
 
@@ -104,7 +106,7 @@ def test_capture_planner_step_full_io_is_scoped_and_recorded():
     assert call["input"] == f"【system】\n{long_input}"
     assert call["output"] == long_output
     assert call["io_complete"] is True
-    plan_dir = web.PLAN_STORE.root / trace["plan_id"]
+    plan_dir = web.app.state.plan_store.root / trace["plan_id"]
     meta = json.loads((plan_dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["config_summary"]["full_llm_io"] is True
 
@@ -129,11 +131,12 @@ def test_capture_planner_step_attaches_trace_on_failure():
     with pytest.raises(ValueError) as ei:
         web._capture_planner_step(
             kind="plan", query="坏计划", cfg=cfg, step_name="research_brief", fn=boom,
+            plan_store=web.app.state.plan_store,
         )
     trace = ei.value.plan_trace
     assert trace["plan_id"]
     assert any(e["type"] == "llm_call" for e in trace["events"])
-    plan_dir = web.PLAN_STORE.root / trace["plan_id"]
+    plan_dir = web.app.state.plan_store.root / trace["plan_id"]
     meta = json.loads((plan_dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["status"] == "failed"
     assert "requirements" in meta["error"]

@@ -91,7 +91,7 @@ def test_call_limit_switch_saved_and_applied_to_new_research(tmp_path, monkeypat
     def start(query, **kwargs):
         captured.append(kwargs["config"])
         return "offline-run"
-    monkeypatch.setattr(web.REGISTRY, "start_simple_research", start)
+    monkeypatch.setattr(web.app.state.registry, "start_simple_research", start)
     with TestClient(web.app) as client:
         before = client.get("/api/config").json()
         assert before["call_limits_enabled"] is False
@@ -115,7 +115,7 @@ def test_time_limit_switch_saved_and_applied_to_new_research(tmp_path, monkeypat
     monkeypatch.setattr(rc, "_CONFIG_PATH", tmp_path / "runtime_config.json")
     monkeypatch.setattr(rc, "_cache", None)
     captured = []
-    monkeypatch.setattr(web.REGISTRY, "start_simple_research",
+    monkeypatch.setattr(web.app.state.registry, "start_simple_research",
                         lambda query, **kwargs: captured.append(kwargs["config"]) or "offline-run")
     with TestClient(web.app) as client:
         before = client.get("/api/config").json()

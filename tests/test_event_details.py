@@ -9,7 +9,7 @@ from test_research_history import history_fixture
 
 def test_compact_history_and_event_details_preserve_original(tmp_path, monkeypatch):
     store, run_id, _, _ = history_fixture(tmp_path)
-    monkeypatch.setattr(web, "STORE", store)
+    monkeypatch.setattr(web.app.state, "store", store)
     rows = [
         {"type": "llm_usage", "seq": 0, "request_id": "r1", "call_id": "m1",
          "input_tokens": 300, "cache_read_tokens": 240, "io_complete": True,
@@ -43,9 +43,9 @@ def test_compact_history_and_event_details_preserve_original(tmp_path, monkeypat
 
 def test_compact_sse_matches_history_without_mutating_live_buffer(tmp_path, monkeypatch):
     store, run_id, _, _ = history_fixture(tmp_path)
-    monkeypatch.setattr(web, "STORE", store)
+    monkeypatch.setattr(web.app.state, "store", store)
     registry = web.RunRegistry(store)
-    monkeypatch.setattr(web, "REGISTRY", registry)
+    monkeypatch.setattr(web.app.state, "registry", registry)
     handle = web.RunHandle(run_id)
     registry.runs[run_id] = handle
     handle.done = True
@@ -66,7 +66,7 @@ def test_compact_sse_matches_history_without_mutating_live_buffer(tmp_path, monk
 
 def test_tool_detail_reads_full_journal_without_trace_and_matches_call_identity(tmp_path, monkeypatch):
     store, run_id, _, _ = history_fixture(tmp_path)
-    monkeypatch.setattr(web, "STORE", store)
+    monkeypatch.setattr(web.app.state, "store", store)
     event = {"type": "subagent_tool_call", "seq": 0, "call_id": "reused", "phase": "done",
              "tool": "bash", "delegation_id": "sub1", "model_call_id": "sub1-2", "turn": 2,
              "args_summary": "输入摘要", "result_summary": "错误摘要", "ok": False}
@@ -97,7 +97,7 @@ def test_tool_detail_reads_full_journal_without_trace_and_matches_call_identity(
 
 def test_tool_detail_without_journal_preserves_summary_and_reports_corruption(tmp_path, monkeypatch):
     store, run_id, _, _ = history_fixture(tmp_path)
-    monkeypatch.setattr(web, "STORE", store)
+    monkeypatch.setattr(web.app.state, "store", store)
     event = {"type": "subagent_tool_call", "seq": 0, "call_id": "t1", "phase": "done",
              "tool": "read_source", "model_call_id": "lead-1", "turn": 1,
              "result_summary": "旧运行只有摘要"}

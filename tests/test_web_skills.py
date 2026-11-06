@@ -40,7 +40,7 @@ def test_research_receives_prepared_bundle(client, monkeypatch):
     def start(query, **kwargs):
         seen.append(kwargs['config'].skill_bundle)
         return 'test-skills'
-    monkeypatch.setattr(web.REGISTRY, 'start_simple_research', start)
+    monkeypatch.setattr(web.app.state.registry, 'start_simple_research', start)
     response = c.post('/api/research', json={'query':'Which?', 'mode':'simple','skill_selection':bundle['id']})
     assert response.status_code == 200
     assert seen == [bundle]
@@ -63,8 +63,8 @@ def test_http_run_followup_and_history_keep_same_version(client, tmp_path, monke
     c, repo = client
     store = RunStore(tmp_path / 'runs')
     registry = web.RunRegistry(store)
-    monkeypatch.setattr(web, 'STORE', store)
-    monkeypatch.setattr(web, 'REGISTRY', registry)
+    monkeypatch.setattr(web.app.state, 'store', store)
+    monkeypatch.setattr(web.app.state, 'registry', registry)
     monkeypatch.setattr(runtime_config, 'current', runtime_config._code_defaults)
     monkeypatch.setenv('DRA_EXECUTION_ENABLED', '0')
     repo.save('compare', TEXT, {'references/check.md':'Check units.'})
@@ -113,8 +113,8 @@ def test_builtin_method_autoload_through_http_preserves_prefix(tmp_path, monkeyp
     repo = skills.SkillRepository(tmp_path / 'data')
     store = RunStore(tmp_path / 'runs')
     monkeypatch.setattr(web, 'skill_repository', lambda: repo)
-    monkeypatch.setattr(web, 'STORE', store)
-    monkeypatch.setattr(web, 'REGISTRY', web.RunRegistry(store))
+    monkeypatch.setattr(web.app.state, 'store', store)
+    monkeypatch.setattr(web.app.state, 'registry', web.RunRegistry(store))
     monkeypatch.setattr(runtime_config, 'current', runtime_config._code_defaults)
     monkeypatch.setenv('DRA_EXECUTION_ENABLED', '0')
     original = research.run_minimal_research
