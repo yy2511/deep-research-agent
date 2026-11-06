@@ -1,7 +1,7 @@
 """多个路由共用的小工具：公开 ID 校验、严格请求体基类、原件响应、事件精简投影。"""
 from __future__ import annotations
 
-import re
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
 
@@ -9,11 +9,36 @@ from fastapi import HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 
+from dra.api.services.errors import (
+    CapacityFull,
+    Conflict,
+    InvalidRequest,
+    NotFound,
+    ServiceError,
+    Unavailable,
+)
+from dra.api.services.ids import RUN_ID_RE as _RUN_ID_RE
+
 _ROOT = Path(__file__).resolve().parents[3]
 
+# 业务层错误 → HTTP 状态码。业务层不认识状态码，翻译只在这里做一次。
+_STATUS_BY_ERROR: tuple[tuple[type[ServiceError], int], ...] = (
+    (NotFound, 404),
+    (InvalidRequest, 400),
+    (Conflict, 409),
+    (Unavailable, 503),
+    (CapacityFull, 429),
+)
 
-_PUBLIC_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
-_RUN_ID_RE = re.compile(_PUBLIC_ID_PATTERN)
+
+@contextmanager
+def service_errors():
+    """把业务层错误翻译成 ``HTTPException``，提示文字原样作为 ``detail``。"""
+    try:
+        yield
+    except ServiceError as exc:
+        status = next(code for kind, code in _STATUS_BY_ERROR if isinstance(exc, kind))
+        raise HTTPException(status, str(exc)) from exc
 
 
 def _require_valid_run_id(run_id: str) -> None:
