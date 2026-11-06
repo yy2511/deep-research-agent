@@ -4,12 +4,13 @@ from fastapi.testclient import TestClient
 import pytest
 from dra import web
 from dra.runstore import RunStore
+from dra.api.services import runs as run_service
 
 
 @pytest.fixture
 def artifacts_web(tmp_path,monkeypatch):
     store=RunStore(tmp_path/'runs');monkeypatch.setattr(web.app.state, 'store',store)
-    monkeypatch.setattr(web.app.state, 'registry',web.RunRegistry(store))
+    monkeypatch.setattr(web.app.state, 'registry',run_service.RunRegistry(store))
     rid=store.create_run('q',None,{'mode':'simple'})
     aid='a_'+'1'*32;data=(Path(__file__).parent/'fixtures/interactive-report.html').read_bytes()
     folder=store._dir(rid)/'artifacts'/aid;folder.mkdir(parents=True)
@@ -66,7 +67,7 @@ def test_http_research_generates_files_and_records_commands(tmp_path,monkeypatch
     from dra.evidence_judge import JudgeConfig
     from test_simple_research import Script,_turn,_full_sequence,_doc
     from test_web_research_e2e import _wait_done
-    store=RunStore(tmp_path/'runs');registry=web.RunRegistry(store)
+    store=RunStore(tmp_path/'runs');registry=run_service.RunRegistry(store)
     monkeypatch.setattr(web.app.state, 'store',store);monkeypatch.setattr(web.app.state, 'registry',registry)
     monkeypatch.setattr(runtime_config,'current',runtime_config._code_defaults)
     monkeypatch.setattr(runtime_config,'to_simple_config',lambda settings,**kw:sr.SimpleConfig(execution=ExecutionConfig(enabled=True),evidence_judge=JudgeConfig(enabled=False),**kw))
@@ -102,7 +103,7 @@ def test_http_native_html_only_keeps_layout_and_source_links(tmp_path,monkeypatc
     from test_simple_research import Script,_turn,_full_sequence,_doc
     from test_web_research_e2e import _wait_done
     page=(Path(__file__).parent/'fixtures/interactive-report.html').read_text()
-    store=RunStore(tmp_path/'runs');registry=web.RunRegistry(store)
+    store=RunStore(tmp_path/'runs');registry=run_service.RunRegistry(store)
     monkeypatch.setattr(web.app.state, 'store',store);monkeypatch.setattr(web.app.state, 'registry',registry)
     monkeypatch.setattr(runtime_config,'current',runtime_config._code_defaults)
     monkeypatch.setattr(runtime_config,'to_simple_config',lambda settings,**kw:sr.SimpleConfig(
@@ -147,7 +148,7 @@ def test_http_followups_edit_same_workspace_and_old_deliveries_survive_restart(t
     from dra.evidence_judge import JudgeConfig
     from test_simple_research import Script,_turn
     from test_web_research_e2e import _wait_done
-    store=RunStore(tmp_path/'runs');registry=web.RunRegistry(store)
+    store=RunStore(tmp_path/'runs');registry=run_service.RunRegistry(store)
     monkeypatch.setattr(web.app.state, 'store',store);monkeypatch.setattr(web.app.state, 'registry',registry)
     monkeypatch.setattr(runtime_config,'current',runtime_config._code_defaults)
     monkeypatch.setattr(runtime_config,'to_simple_config',lambda settings,**kw:sr.SimpleConfig(
@@ -199,7 +200,7 @@ def test_http_followups_edit_same_workspace_and_old_deliveries_survive_restart(t
         assert json.loads(calls[1].context.receipts[0]['payload'])['content']==body(1)
         assert 'report.md' in str(calls[1].seen[0]) and first in str(calls[1].seen[0])
     # lifespan 已关闭旧池；模拟新进程的运行注册表，保持磁盘数据。
-    registry=web.RunRegistry(store);monkeypatch.setattr(web.app.state, 'registry',registry)
+    registry=run_service.RunRegistry(store);monkeypatch.setattr(web.app.state, 'registry',registry)
     with TestClient(web.app) as client:
         response=client.post(f'/api/research/{second}/followup',json={'request_id':'edit-3','text':'把报告改成版本 3'})
         assert response.status_code==202,response.text

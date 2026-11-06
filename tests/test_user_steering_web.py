@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from dra import research, web
 from test_web_research_e2e import isolated_web, _wait_done
 from test_budget_wrapup import _turn
+from dra.api.services import runs as run_service
 
 
 def test_live_input_idempotency_finish_and_history(isolated_web, monkeypatch):
@@ -120,7 +121,7 @@ def test_user_and_worker_events_reach_sse_in_persisted_order(isolated_web):
     from queue import SimpleQueue
     store, registry = isolated_web
     run_id = store.create_run('并发事件', None, {'mode': 'simple'})
-    handle = web.RunHandle(run_id)
+    handle = run_service.RunHandle(run_id)
     registry.runs[run_id] = handle
     second_allowed, second_done = threading.Event(), threading.Event()
     mutex = threading.Lock()

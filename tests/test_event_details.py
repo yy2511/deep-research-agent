@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from dra import web
 from test_research_history import history_fixture
+from dra.api.services import runs as run_service
 
 
 def test_compact_history_and_event_details_preserve_original(tmp_path, monkeypatch):
@@ -44,9 +45,9 @@ def test_compact_history_and_event_details_preserve_original(tmp_path, monkeypat
 def test_compact_sse_matches_history_without_mutating_live_buffer(tmp_path, monkeypatch):
     store, run_id, _, _ = history_fixture(tmp_path)
     monkeypatch.setattr(web.app.state, "store", store)
-    registry = web.RunRegistry(store)
+    registry = run_service.RunRegistry(store)
     monkeypatch.setattr(web.app.state, "registry", registry)
-    handle = web.RunHandle(run_id)
+    handle = run_service.RunHandle(run_id)
     registry.runs[run_id] = handle
     handle.done = True
     handle.buffer = [

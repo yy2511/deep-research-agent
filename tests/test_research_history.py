@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from dra import web
 from dra.runstore import RunStore as WebStore
 from dra.simple_research import RunStore, ToolContext, SimpleConfig, EvidenceCard
 from dra.models import RetrievedDoc
 from dra.research_history import prepare_context, ResearchHistory, HistoryError
 from dra.durable import atomic_json
+from dra.api.services import runs as run_service
 
 
 def history_fixture(tmp_path, *, answer="已有结论 [c1]", status="done"):
@@ -182,7 +182,7 @@ def test_constraint_overflow_rejected_before_start(tmp_path):
 
 def test_followup_durable_idempotency_latest_guard_and_config_freeze(tmp_path, monkeypatch):
     ws, parent, _, _ = history_fixture(tmp_path)
-    registry=web.RunRegistry(ws,max_active_runs=2)
+    registry=run_service.RunRegistry(ws,max_active_runs=2)
     async def exercise():
         release=asyncio.Event()
         async def fake(run_id,*args,**kwargs):
@@ -203,7 +203,7 @@ def test_followup_durable_idempotency_latest_guard_and_config_freeze(tmp_path, m
             registry.start_followup(parent,"req-other","旧页提交",config=config)
         release.set()
         await registry.runs[one].task
-        restarted=web.RunRegistry(ws)
+        restarted=run_service.RunRegistry(ws)
         assert restarted.start_followup(parent,"req-id","继续",config=config) == one
     asyncio.run(exercise())
 
@@ -236,11 +236,11 @@ def test_failed_turn_without_result_keeps_last_effective_constraints(tmp_path):
 
 def test_start_failure_is_terminal_and_same_request_does_not_start_again(tmp_path, monkeypatch):
     ws, parent, _, _ = history_fixture(tmp_path)
-    registry = web.RunRegistry(ws)
+    registry = run_service.RunRegistry(ws)
     class NoLoop:
         def create_task(self, coro):
             raise RuntimeError("cannot schedule")
-    monkeypatch.setattr(web.asyncio, "get_running_loop", lambda: NoLoop())
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: NoLoop())
     with pytest.raises(RuntimeError, match="cannot schedule"):
         registry.start_followup(parent, "fail-start", "继续", config=SimpleConfig())
     latest = ws.conversation_turns(parent)[-1]

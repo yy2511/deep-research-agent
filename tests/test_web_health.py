@@ -5,13 +5,15 @@ from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 
 from dra import web
+from dra.api.routers import health as health_api
+from dra import llm
 
 
 def test_healthz_reports_capacity_without_external_calls(monkeypatch):
     monkeypatch.setattr(web.app.state.registry, "active_count", lambda: 1)
     monkeypatch.setattr(web.app.state.registry, "max_active_runs", 2)
     blocked_llm = MagicMock(side_effect=AssertionError("healthz 不得调用模型"))
-    monkeypatch.setattr(web.llm, "chat", blocked_llm)
+    monkeypatch.setattr(llm, "chat", blocked_llm)
 
     with TestClient(web.app) as client:
         response = client.get("/healthz")
@@ -26,7 +28,7 @@ def test_healthz_reports_capacity_without_external_calls(monkeypatch):
 
 
 def test_healthz_returns_503_without_exposing_server_path(monkeypatch):
-    monkeypatch.setattr(web, "_first_unwritable_data_dir", lambda: "plans")
+    monkeypatch.setattr(health_api, "_first_unwritable_data_dir", lambda: "plans")
 
     with TestClient(web.app) as client:
         response = client.get("/healthz")
@@ -43,17 +45,17 @@ def test_writability_probe_cleans_up_temporary_files(tmp_path, monkeypatch):
     plans_dir = data_dir / "plans"
     runs_dir.mkdir(parents=True)
     plans_dir.mkdir()
-    monkeypatch.setattr(web, "DATA_DIR", data_dir)
-    monkeypatch.setattr(web, "RUNS_DIR", runs_dir)
-    monkeypatch.setattr(web, "PLANS_DIR", plans_dir)
+    monkeypatch.setattr(health_api, "DATA_DIR", data_dir)
+    monkeypatch.setattr(health_api, "RUNS_DIR", runs_dir)
+    monkeypatch.setattr(health_api, "PLANS_DIR", plans_dir)
 
-    assert web._first_unwritable_data_dir() is None
+    assert health_api._first_unwritable_data_dir() is None
     assert list(data_dir.rglob(".dra-health-*")) == []
 
 
 def test_writability_probe_identifies_missing_directory(tmp_path, monkeypatch):
-    monkeypatch.setattr(web, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(web, "RUNS_DIR", tmp_path / "missing-runs")
-    monkeypatch.setattr(web, "PLANS_DIR", tmp_path / "missing-plans")
+    monkeypatch.setattr(health_api, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(health_api, "RUNS_DIR", tmp_path / "missing-runs")
+    monkeypatch.setattr(health_api, "PLANS_DIR", tmp_path / "missing-plans")
 
-    assert web._first_unwritable_data_dir() == "runs"
+    assert health_api._first_unwritable_data_dir() == "runs"

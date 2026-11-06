@@ -12,12 +12,14 @@ from test_research_history import history_fixture
 from test_web_research_e2e import _wait_done
 from test_budget_wrapup import Script, _turn
 from test_document_library import library, add
+import asyncio
+from dra.api.services import runs as run_service
 
 
 @pytest.mark.parametrize("call_limits_enabled", [False, True])
 def test_two_followups_preserve_original_and_import_provenance(tmp_path, monkeypatch, call_limits_enabled):
     store, parent, _, raw = history_fixture(tmp_path)
-    registry = web.RunRegistry(store, max_active_runs=1)
+    registry = run_service.RunRegistry(store, max_active_runs=1)
     monkeypatch.setattr(web.app.state, "store", store)
     monkeypatch.setattr(web.app.state, "registry", registry)
     settings = runtime_config._code_defaults().model_copy(update={"call_limits_enabled": call_limits_enabled})
@@ -77,8 +79,8 @@ def test_followup_waits_for_worker_and_persistence_failure_does_not_schedule(tmp
     from dra import durable
     from dra.research_history import HistoryError
     store, parent, _, _ = history_fixture(tmp_path)
-    registry = web.RunRegistry(store)
-    h = web.RunHandle(parent)
+    registry = run_service.RunRegistry(store)
+    h = run_service.RunHandle(parent)
     h.busy = True
     registry.runs[parent] = h
     with pytest.raises(HistoryError, match="保存结果"):
@@ -90,7 +92,7 @@ def test_followup_waits_for_worker_and_persistence_failure_does_not_schedule(tmp
             raise OSError("disk full")
         original(path, data)
     monkeypatch.setattr(durable, "atomic_json", fail)
-    monkeypatch.setattr(web.asyncio, "get_running_loop", lambda: pytest.fail("不可启动外部执行"))
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: pytest.fail("不可启动外部执行"))
     with pytest.raises(OSError, match="disk full"):
         registry.start_followup(parent, "disk", "继续", config=SimpleConfig())
     latest = store.conversation_turns(parent)[-1]
@@ -129,7 +131,7 @@ def test_followup_private_scope_keeps_version_and_rejects_removed_or_missing_ind
 @pytest.mark.parametrize("mode,max_calls", [("normal", 5), ("wrapup", 2)])
 def test_followup_bad_coverage_keeps_body_and_reports_missing_metadata(tmp_path, monkeypatch, mode, max_calls):
     store, parent, _, _ = history_fixture(tmp_path)
-    registry = web.RunRegistry(store, max_active_runs=1)
+    registry = run_service.RunRegistry(store, max_active_runs=1)
     monkeypatch.setattr(web.app.state, "store", store)
     monkeypatch.setattr(web.app.state, "registry", registry)
     monkeypatch.setattr(runtime_config, "current", runtime_config._code_defaults)

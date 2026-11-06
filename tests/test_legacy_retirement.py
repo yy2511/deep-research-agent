@@ -23,7 +23,7 @@ assert not (retired & {name.removeprefix('dra.') for name in sys.modules if name
 
 
 def test_retired_routes_are_not_registered():
-    routes = {route.path for route in web.app.routes}
+    routes = set(web.app.openapi()["paths"])
     assert not {"/api/plan", "/api/plan/revise", "/api/research/{run_id}/resume"} & routes
     assert {"/api/brief", "/api/brief/plan", "/api/research"} <= routes
 

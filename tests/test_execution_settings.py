@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dra import execution, runtime_config as rc, simple_research as sr, web
+from dra.api.services import runs as run_service
 
 
 @pytest.fixture
@@ -147,7 +148,7 @@ def test_lifespan_cleans_pool_created_after_runtime_switch(tmp_path, env_executi
     from dra.runstore import RunStore
     store = RunStore(tmp_path / "runs")
     monkeypatch.setattr(web.app.state, "store", store)
-    monkeypatch.setattr(web.app.state, "registry", web.RunRegistry(store))
+    monkeypatch.setattr(web.app.state, "registry", run_service.RunRegistry(store))
     monkeypatch.setattr(execution_pool, "_POOLS", {})
     reaped, closed = [], []
 
@@ -177,7 +178,7 @@ def test_lifespan_without_pool_or_execution_never_touches_docker(tmp_path, env_e
     from dra.runstore import RunStore
     store = RunStore(tmp_path / "runs")
     monkeypatch.setattr(web.app.state, "store", store)
-    monkeypatch.setattr(web.app.state, "registry", web.RunRegistry(store))
+    monkeypatch.setattr(web.app.state, "registry", run_service.RunRegistry(store))
     monkeypatch.setattr(execution_pool, "_POOLS", {})
     monkeypatch.setattr(execution, "reap_orphans", lambda *a: pytest.fail("不应扫描容器"))
     monkeypatch.setattr(execution, "docker_client", lambda *a, **k: pytest.fail("不应访问 Docker"))
@@ -192,7 +193,7 @@ def test_lifespan_does_not_hide_broken_settings_file(tmp_path, env_execution, mo
     from dra.runstore import RunStore
     store = RunStore(tmp_path / "runs")
     monkeypatch.setattr(web.app.state, "store", store)
-    monkeypatch.setattr(web.app.state, "registry", web.RunRegistry(store))
+    monkeypatch.setattr(web.app.state, "registry", run_service.RunRegistry(store))
     monkeypatch.setattr(execution_pool, "_POOLS", {})
     env_execution(False)
     rc._CONFIG_PATH.write_text("{broken", encoding="utf-8")
@@ -206,7 +207,7 @@ def test_lifespan_keeps_environment_cleanup_when_default_enabled(tmp_path, env_e
     from dra.runstore import RunStore
     store = RunStore(tmp_path / "runs")
     monkeypatch.setattr(web.app.state, "store", store)
-    monkeypatch.setattr(web.app.state, "registry", web.RunRegistry(store))
+    monkeypatch.setattr(web.app.state, "registry", run_service.RunRegistry(store))
     monkeypatch.setattr(execution_pool, "_POOLS", {})
     reaped, closed = [], []
 

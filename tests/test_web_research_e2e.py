@@ -23,6 +23,7 @@ from dra import llm, runtime_config, web
 from dra.runstore import PlanAttemptStore, RunStore
 
 from test_budget_wrapup import QUERY, Script, _doc, _FINISH_SEQUENCE, _turn
+from dra.api.services import runs as run_service
 
 
 def _config(**overrides):
@@ -44,7 +45,7 @@ def _config(**overrides):
 def isolated_web(tmp_path, monkeypatch):
     """隔离运行目录与注册表；simple 预算走测试配置。"""
     store = RunStore(tmp_path / "runs")
-    registry = web.RunRegistry(store, max_active_runs=1)
+    registry = run_service.RunRegistry(store, max_active_runs=1)
     monkeypatch.setattr(web.app.state, "store", store)
     monkeypatch.setattr(web.app.state, "registry", registry)
     monkeypatch.setattr(web.app.state, "plan_store", PlanAttemptStore(tmp_path / "plans"))

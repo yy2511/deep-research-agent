@@ -10,12 +10,14 @@ import dra.events as events
 import dra.timing as timing
 import dra.web as web
 from dra.events import EventType
+from dra.api.services import planning as planning_service
+from dra import runstore
 
 
 @pytest.fixture(autouse=True)
 def _isolate_plan_store(tmp_path, monkeypatch):
     """每个测试独立 plans/ 目录，避免污染仓库 plans/。"""
-    store = web.PlanAttemptStore(tmp_path / "plans")
+    store = runstore.PlanAttemptStore(tmp_path / "plans")
     monkeypatch.setattr(web.app.state, "plan_store", store)
     # 清事件总线与 run_id，防测试间泄漏
     events._sinks.clear()
@@ -51,7 +53,7 @@ def test_capture_planner_step_persists_llm_call_and_returns_trace(tmp_path, monk
             "requirements": [{"node_id": "m1"}],
         }
 
-    result, trace = web._capture_planner_step(
+    result, trace = planning_service._capture_planner_step(
         kind="plan", query="测试问题", cfg=cfg, step_name="research_brief", fn=fake_fn,
         plan_store=web.app.state.plan_store,
     )
@@ -92,7 +94,7 @@ def test_capture_planner_step_full_io_is_scoped_and_recorded():
         )
         return {"goal": "q", "items": [], "requirements": []}
 
-    _, trace = web._capture_planner_step(
+    _, trace = planning_service._capture_planner_step(
         kind="plan",
         query="q",
         cfg=cfg,
@@ -129,7 +131,7 @@ def test_capture_planner_step_attaches_trace_on_failure():
         raise ValueError("planner 输出缺少有效 requirements")
 
     with pytest.raises(ValueError) as ei:
-        web._capture_planner_step(
+        planning_service._capture_planner_step(
             kind="plan", query="坏计划", cfg=cfg, step_name="research_brief", fn=boom,
             plan_store=web.app.state.plan_store,
         )
