@@ -2,11 +2,14 @@ from fastapi.testclient import TestClient
 import pytest
 from dra import web, skills
 from test_skills import TEXT
+from dra.api.routers import planning as planning_api
+from dra.api.services import runs as run_service
+from dra.api.routers import skills as skills_api
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     repo = skills.SkillRepository(tmp_path, builtin_dir=tmp_path / 'none')
-    monkeypatch.setattr(web, 'skill_repository', lambda: repo)
+    monkeypatch.setattr(skills_api, 'skill_repository', lambda: repo)
     with TestClient(web.app) as c:
         yield c, repo
 
@@ -23,7 +26,7 @@ def test_edit_enable_prepare_and_planning_snapshot(client, monkeypatch):
     def brief(q, **kwargs):
         captured.append(kwargs['source_context'])
         return {'kind':'clarify','gaps':[]}, {}
-    monkeypatch.setattr(web, '_brief_payload', brief)
+    monkeypatch.setattr(planning_api, '_brief_payload', brief)
     res = c.post('/api/brief', json={'query':'Which?', 'skill_selection':identity})
     assert res.status_code == 200
     assert 'Compare costs' in captured[0] and 'NEW costs' not in captured[0]
@@ -62,7 +65,7 @@ def test_http_run_followup_and_history_keep_same_version(client, tmp_path, monke
     import time
     c, repo = client
     store = RunStore(tmp_path / 'runs')
-    registry = web.RunRegistry(store)
+    registry = run_service.RunRegistry(store)
     monkeypatch.setattr(web.app.state, 'store', store)
     monkeypatch.setattr(web.app.state, 'registry', registry)
     monkeypatch.setattr(runtime_config, 'current', runtime_config._code_defaults)
@@ -112,9 +115,9 @@ def test_builtin_method_autoload_through_http_preserves_prefix(tmp_path, monkeyp
 
     repo = skills.SkillRepository(tmp_path / 'data')
     store = RunStore(tmp_path / 'runs')
-    monkeypatch.setattr(web, 'skill_repository', lambda: repo)
+    monkeypatch.setattr(skills_api, 'skill_repository', lambda: repo)
     monkeypatch.setattr(web.app.state, 'store', store)
-    monkeypatch.setattr(web.app.state, 'registry', web.RunRegistry(store))
+    monkeypatch.setattr(web.app.state, 'registry', run_service.RunRegistry(store))
     monkeypatch.setattr(runtime_config, 'current', runtime_config._code_defaults)
     monkeypatch.setenv('DRA_EXECUTION_ENABLED', '0')
     original = research.run_minimal_research

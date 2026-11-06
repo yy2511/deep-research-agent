@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from dra import llm, web
 
 from test_web_research_e2e import QUERY, _install_boundaries, _wait_done, isolated_web  # noqa: F401
+from dra.api.routers import planning as planning_api
 
 BRIEF = {
     "original_query": QUERY,
@@ -376,7 +377,7 @@ def test_planner_stream_stops_background_work_when_browser_leaves():
         async def is_disconnected(self):
             return started.is_set()
 
-    response = web._planner_stream(work, LeftPage())
+    response = planning_api._planner_stream(work, LeftPage())
 
     async def drain():
         return [chunk async for chunk in response.body_iterator]
