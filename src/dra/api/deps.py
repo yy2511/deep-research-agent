@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 
 from dra.api.services.runs import RunRegistry
+from dra.db import Database
 from dra.runstore import PlanAttemptStore, RunStore
 
 
@@ -24,6 +25,15 @@ def get_registry(request: Request) -> RunRegistry:
     return request.app.state.registry
 
 
+def get_db(request: Request) -> Database | None:
+    """数据库对象（连接池）。会话由业务层按操作自己开关，接口不持有会话（ADR 0006）。
+
+    启动检查通过前为 None。
+    """
+    return request.app.state.db
+
+
 StoreDep = Annotated[RunStore, Depends(get_store)]
 PlanStoreDep = Annotated[PlanAttemptStore, Depends(get_plan_store)]
 RegistryDep = Annotated[RunRegistry, Depends(get_registry)]
+DatabaseDep = Annotated[Database | None, Depends(get_db)]

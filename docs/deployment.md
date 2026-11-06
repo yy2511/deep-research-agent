@@ -46,10 +46,10 @@ container/
 
 [`.github/workflows/container-image.yml`](../.github/workflows/container-image.yml) 在 pull request、`main` 的运行相关文件变化或人工触发时执行：
 
-1. `uv sync --locked` 后运行 `uv run pytest`，再构建执行沙箱镜像并跑真实 Docker 执行测试；
+1. `uv sync --locked` 后运行 `uv run pytest`（每个测试用临时 SQLite），再用 `--run-postgres` 在 PostgreSQL 服务上把同一批测试跑一遍，然后构建执行沙箱镜像并跑真实 Docker 执行测试；
 2. `npm ci` 后运行 `npm test`、`npm run lint`、`npm run build`；
 3. 非 PR 事件构建 `linux/amd64` 镜像并发布完整 SHA tag；
-4. 从 GHCR 拉回镜像，检查架构、`/healthz`、首页、非 root 用户、生产依赖；浏览器所需的 Node、Playwright MCP 和 Chromium 必须存在，npm、uv、`.env` 和前端源码不应存在；
+4. 从 GHCR 拉回镜像，在临时 Docker 网络里起一个 PostgreSQL，用镜像执行 `python -m dra.admin migrate`，再带 `DRA_DATABASE_URL` 启动，检查架构、`/healthz`、首页、非 root 用户、生产依赖；浏览器所需的 Node、Playwright MCP 和 Chromium 必须存在，npm、uv、`.env` 和前端源码不应存在；
 5. 全部通过后，`main` 分支的构建才把 `main` 便利 tag 指向同一 digest。
 
 服务器版本必须使用完整 `sha-<40 位 Git SHA>` tag 和 digest，不能使用会移动的便利 tag。服务器只保存 GHCR 只读凭据；Actions 使用任务级 `GITHUB_TOKEN` 发布。
@@ -87,7 +87,7 @@ cd /home/deploy/apps/deep-research-agent/container
 
 ## 本地容器验证
 
-本地 `.env` 和持久目录必须先存在；`compose.yaml` 设置 `create_host_path: false`，路径拼错时会明确失败，避免 Docker 静默创建 root 所有的空目录。
+本地 `.env` 和持久目录必须先存在；`.env` 里的 `DRA_DATABASE_URL` 必须是容器内能访问的地址（容器里的 `127.0.0.1` 指容器自己，访问宿主机上的 `compose.dev-db.yaml` 数据库要用宿主机地址），并已执行过迁移。`compose.yaml` 设置 `create_host_path: false`，路径拼错时会明确失败，避免 Docker 静默创建 root 所有的空目录。
 
 ```bash
 cp .env.example .env
@@ -109,9 +109,10 @@ curl --fail http://127.0.0.1:8765/
 
 - Web 进程可响应；
 - active run 计数可读取；
-- `data/runs/plans` 三个持久目录可创建并清理探针文件。
+- `data/runs/plans` 三个持久目录可创建并清理探针文件；
+- 数据库可连接（`SELECT 1`）。
 
-它不读取模型配置，也不调用 LLM、搜索或研究编排。容器内部正常返回 200，持久目录不可写时返回 503；公网访问仍由 Caddy Basic Auth 保护，因此匿名访问 `/healthz` 返回 401 是预期行为。
+它不读取模型配置，也不调用 LLM、搜索或研究编排。容器内部正常返回 200，持久目录不可写或数据库连不上时返回 503；数据库缺失、不是 PostgreSQL 或迁移不是最新时，Web 进程直接拒绝启动；公网访问仍由 Caddy Basic Auth 保护，因此匿名访问 `/healthz` 返回 401 是预期行为。
 
 一次生产切换至少核对：
 
@@ -124,6 +125,7 @@ curl --fail http://127.0.0.1:8765/
 
 ## 当前未覆盖
 
+- **数据库（阶段 1 起，#28）**：`compose.yaml`、`container_release.py` 和生产机尚未包含 PostgreSQL 与迁移步骤，按[总体方案](design/后端扩展总体方案.md)在第 5 阶段补上。在那之前用本流程发布包含 #28 的版本，canary 会因没有数据库而启动失败；线上继续使用旧版本。
 - **线上运行代码**：应用跑在容器里，研究中的 Bash 需要宿主机 Docker 和执行沙箱镜像（`compose.execution.yaml`）。`container_release.py` 目前只使用单个 `compose.yaml`，不带这份叠加文件，所以按本流程发布的线上实例不能运行代码，网页“运行代码”需保持关闭。
 - **浏览器**：镜像内已带 Chromium，只能用独立后台浏览器；“复用已登录 Chrome”的扩展模式需要与用户桌面同机，线上不可用。
 

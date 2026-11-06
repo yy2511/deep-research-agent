@@ -34,6 +34,7 @@ from dra.api.routers import (
     skills,
 )
 from dra.api.services.runs import RunRegistry
+from dra.db import Database, DatabaseConfigError, DatabaseNotReady
 from dra.paths import PLANS_DIR, RUNS_DIR
 from dra.runstore import PlanAttemptStore, RunStore
 
@@ -46,11 +47,25 @@ app = FastAPI(title="DRA 研究工作台")
 app.state.store = RunStore(RUNS_DIR)
 app.state.plan_store = PlanAttemptStore(PLANS_DIR)
 app.state.registry = RunRegistry(app.state.store)
+# 数据库在启动时按 DRA_DATABASE_URL 创建（ADR 0006）；测试预先放入自己的库，启动时沿用。
+app.state.db = None
 
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    """扫描中断运行和孤儿容器，管理会话容器池，退出时清理执行资源。"""
+    """检查数据库，扫描中断运行和孤儿容器，管理会话容器池，退出时清理执行资源。"""
+    owns_db = _app.state.db is None
+    try:
+        if owns_db:
+            _app.state.db = Database.from_env()
+        # 连不上或迁移不是最新就拒绝启动，不静默降级，也不自动迁移（设计 §7）。
+        await asyncio.to_thread(_app.state.db.check_ready)
+    except (DatabaseConfigError, DatabaseNotReady) as exc:
+        print(f"❌ 数据库未就绪，服务不启动：{exc}")
+        if owns_db and _app.state.db is not None:
+            _app.state.db.dispose()
+            _app.state.db = None
+        raise
     _app.state.registry.loop = asyncio.get_running_loop()
     n = _app.state.store.mark_orphans()
     if n:
@@ -76,6 +91,9 @@ async def _lifespan(_app: FastAPI):
                 await asyncio.to_thread(reap_orphans, _app.state.store.root, execution_config)
         except Exception:
             print("执行工作区清理未确认，将在下次启动重试")
+        if owns_db:
+            _app.state.db.dispose()
+            _app.state.db = None
 
 
 app.router.lifespan_context = _lifespan

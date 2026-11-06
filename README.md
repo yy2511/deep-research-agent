@@ -33,15 +33,19 @@
 # 安装后端与开发依赖
 uv sync
 
-# 配置 LLM 与检索 provider
+# 配置数据库地址、LLM 与检索 provider
 cp .env.example .env
+
+# 数据库：本机用 Docker 起 PostgreSQL，再升级到最新迁移
+docker compose -f compose.dev-db.yaml up -d
+uv run python -m dra.admin migrate
 
 # Web 工作台：两个终端分别启动后端和前端
 uv run python -m dra.web
 cd web && npm ci && npm run dev
 ```
 
-Web 后端默认监听 `http://127.0.0.1:8765`，Vite 开发服务器默认监听 `http://127.0.0.1:5173`。生产形态先运行 `cd web && npm run build`，随后只启动后端，由 FastAPI 直接服务 `web/dist/`。
+Web 后端需要 PostgreSQL：地址取环境变量 `DRA_DATABASE_URL`，没有时读 `.env` 中的同名项；连不上或迁移不是最新时拒绝启动并提示原因。Web 后端默认监听 `http://127.0.0.1:8765`，Vite 开发服务器默认监听 `http://127.0.0.1:5173`。生产形态先运行 `cd web && npm run build`，随后只启动后端，由 FastAPI 直接服务 `web/dist/`。
 
 默认 Web 检索会并发尝试 Tavily 与 Exa，建议同时配置两者；两者都失败时会尝试无密钥的 DuckDuckGo 兜底。完整环境变量见 [.env.example](.env.example)。
 
@@ -171,8 +175,11 @@ uv run python scripts/run_research.py "研究问题" --mode simple --run-live
 ## 验证
 
 ```bash
-# 后端：默认跳过联网和付费用例
+# 后端：默认跳过联网和付费用例；每个测试使用临时 SQLite，不需要启动数据库
 uv run pytest
+
+# 同一批测试改连 PostgreSQL（库名须含 test，会被清空）
+DRA_TEST_DATABASE_URL=postgresql+psycopg://dra:dra@127.0.0.1:5432/dra_test uv run pytest --run-postgres
 
 # 本机 Chromium + 自建本机测试页面；不访问外部网页或调用模型
 uv run pytest tests/test_delivery_browser.py --run-browser

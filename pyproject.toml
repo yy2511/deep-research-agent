@@ -23,6 +23,9 @@ dependencies = [
     "pypdfium2>=5.14.0",
     "pillow>=12.3.0",
     "pillow-heif>=1.8.0",
+    "sqlalchemy>=2.0", # 数据库访问（ADR 0006：同步写法）
+    "alembic>=1.13", # 表结构迁移
+    "psycopg[binary]>=3.2", # PostgreSQL 驱动（psycopg 3）
 ]
 
 # 启用私域资料索引/检索/重排时安装；纯网页研究无需 Torch。
@@ -58,6 +61,7 @@ markers = [
     "native: 真实 macOS OS 沙箱验收，需要 --run-native",
     "docker: 真实本机容器验收，需要 --run-docker",
     "live: 需要联网 / 真实 API 调用的集成测试（默认跳过，加 --run-live 才跑）",
+    "postgres: 只适用于 PostgreSQL 的测试，需要 --run-postgres 和 DRA_TEST_DATABASE_URL",
 ]
 
 [tool.ruff]

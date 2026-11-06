@@ -4,10 +4,80 @@
 联网 / 付费 API 测试用 @pytest.mark.live 标注，加 --run-live 才执行。
 """
 
+import os
+import shutil
 from pathlib import Path
 
 import pytest
 from dotenv import load_dotenv
+
+TEST_DATABASE_URL_ENV = "DRA_TEST_DATABASE_URL"
+
+
+@pytest.fixture(scope="session")
+def _database_source(request, tmp_path_factory):
+    """测试数据库来源（ADR 0006）。
+
+    默认：迁移一次到临时 SQLite 模板，每个测试复制一份，互不影响，不需要启动任何服务。
+    --run-postgres：连 DRA_TEST_DATABASE_URL，开始时清空并迁移一次，每个测试后清空数据。
+    """
+    from dra.db import Database
+
+    if request.config.getoption("--run-postgres"):
+        database = Database.from_url(os.environ[TEST_DATABASE_URL_ENV])
+        _reset_postgres_schema(database)
+        database.upgrade()
+        yield "postgres", database
+        database.dispose()
+        return
+    template = tmp_path_factory.mktemp("database") / "template.sqlite"
+    database = Database.from_url(f"sqlite:///{template}", allow_sqlite=True)
+    database.upgrade()
+    database.dispose()
+    yield "sqlite", template
+
+
+def _reset_postgres_schema(database) -> None:
+    from sqlalchemy import text
+
+    with database.engine.begin() as connection:
+        connection.execute(text("DROP SCHEMA public CASCADE"))
+        connection.execute(text("CREATE SCHEMA public"))
+
+
+def _truncate_postgres(database) -> None:
+    from sqlalchemy import text
+
+    from dra.db_tables import Base
+
+    names = ", ".join(table.name for table in Base.metadata.sorted_tables)
+    with database.engine.begin() as connection:
+        connection.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+
+
+@pytest.fixture(autouse=True)
+def database(_database_source, tmp_path, monkeypatch):
+    """每个测试一份已迁移到最新的数据库，并放进 Web 应用（app.state.db）。"""
+    from dra.api.app import app
+    from dra.db import Database
+
+    # 本机 .env 里的开发库地址不参与离线测试。
+    monkeypatch.setattr("dra.db.ENV_FILE", tmp_path / "no-such.env")
+    kind, source = _database_source
+    if kind == "sqlite":
+        path = tmp_path / "dra-test.sqlite"
+        shutil.copyfile(source, path)
+        db = Database.from_url(f"sqlite:///{path}", allow_sqlite=True)
+    else:
+        db = source
+    monkeypatch.setattr(app.state, "db", db)
+    try:
+        yield db
+    finally:
+        if kind == "sqlite":
+            db.dispose()
+        else:
+            _truncate_postgres(db)
 
 
 @pytest.fixture(autouse=True)
@@ -88,16 +158,42 @@ def pytest_addoption(parser):
         default=False,
         help="同时运行标了 @pytest.mark.live 的联网/付费集成测试",
     )
+    parser.addoption(
+        "--run-postgres",
+        action="store_true",
+        default=False,
+        help=f"改连 PostgreSQL（地址取 {TEST_DATABASE_URL_ENV}，库名须含 test），并运行 postgres 测试",
+    )
 
 
 def pytest_configure(config):
     """只有显式运行 live 测试时才加载真实凭据；普通测试保持干净、可复现。"""
+    if config.getoption("--run-postgres"):
+        _check_test_database_url()
     if config.getoption("--run-live"):
         # override=True：live 测试以项目 .env 为准，避免被 shell 历史变量污染。
         load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=True)
 
 
+def _check_test_database_url() -> None:
+    """--run-postgres 会清空整个 public schema：没给地址不静默改回 SQLite，库名不含 test 拒绝执行。"""
+    from sqlalchemy.engine import make_url
+
+    raw = os.environ.get(TEST_DATABASE_URL_ENV, "").strip()
+    if not raw:
+        raise pytest.UsageError(f"--run-postgres 需要设置 {TEST_DATABASE_URL_ENV}")
+    name = make_url(raw).database or ""
+    if "test" not in name:
+        raise pytest.UsageError(
+            f"{TEST_DATABASE_URL_ENV} 的库名须含 test（当前 {name!r}）：测试会清空整个库"
+        )
+
+
 def pytest_collection_modifyitems(config, items):
+    if not config.getoption("--run-postgres"):
+        for item in items:
+            if "postgres" in item.keywords:
+                item.add_marker(pytest.mark.skip(reason="需要 --run-postgres 才跑"))
     if not config.getoption('--run-browser'):
         for item in items:
             if 'browser' in item.keywords:item.add_marker(pytest.mark.skip(reason='需要 --run-browser 才跑'))
