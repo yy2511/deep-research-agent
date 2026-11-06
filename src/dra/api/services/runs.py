@@ -1,4 +1,7 @@
-"""研究运行管理：内存运行注册表、名额控制、后台研究线程与收尾（从 web.py 原样迁入，#20 继续整理）。"""
+"""研究运行管理：内存运行注册表、名额控制、后台研究线程与收尾，以及发起、追问、发消息、取消、订阅进度这些业务操作。
+
+不依赖 FastAPI：报错用 ``dra.api.services.errors`` 里的类型，由接口层翻译成 HTTP 状态码。
+"""
 from __future__ import annotations
 
 import asyncio
@@ -7,14 +10,21 @@ import json
 import os
 import threading
 import time as _time
+import unicodedata
+
+from pydantic import ValidationError
 
 from dra import events, llm, mcp_client
-from dra.api.common import _RUN_ID_RE
+from dra.api.services.errors import CapacityFull, Conflict, InvalidRequest, NotFound, Unavailable
+from dra.api.services.ids import RUN_ID_RE as _RUN_ID_RE
+from dra.api.services.planning import _strip_plan_trace
+from dra.api.services.skills import skill_bundle as resolve_skill_bundle
 from dra.events import EventType
-from dra.library import get_library
-from dra.research_brief import render_brief_context
+from dra.library import LibraryError, get_library
+from dra.research_brief import ResearchBrief, render_brief_context
 from dra.research_input import ResearchInput, replay_input
 from dra.runstore import IncompatibleEventSchemaError, RunStore
+from dra.site_filter import normalize_blocked_sites
 
 
 def _positive_env_int(name: str, default: int) -> int:
@@ -48,7 +58,7 @@ class RunHandle:
         self.user_input: ResearchInput | None = None
 
 
-class ActiveRunLimitError(RuntimeError):
+class ActiveRunLimitError(CapacityFull, RuntimeError):
     """全站 active run 已达上限；必须在创建 run 和付费调用前拒绝。"""
 
 
@@ -509,3 +519,149 @@ def _run_input_snapshot(run_id, store: RunStore, registry: "RunRegistry"):
         if isinstance(event, dict):
             rows.append(event)
     return replay_input(rows)
+
+
+# ----- 业务操作：接口层与以后的 Worker 都从这里调用 -----
+
+def _normalise_plan_identity(text: str) -> str:
+    return " ".join(unicodedata.normalize("NFC", text).split())
+
+
+def start_research(
+    registry: RunRegistry,
+    query: str,
+    *,
+    brief: dict | None,
+    skill_selection: str | None,
+    source_mode: str,
+    document_ids: list[str],
+    library_rerank: bool,
+    mcp_server_ids: list[str],
+    blocked_sites: list[str],
+    full_llm_io: bool,
+) -> str:
+    """校验已确认的计划与来源范围，按当前模型设置开始一次研究，返回 run_id。"""
+    from dra import runtime_config
+
+    typed_brief = None
+    if brief is not None:
+        try:
+            typed_brief = ResearchBrief.model_validate(_strip_plan_trace(brief))
+        except (ValidationError, TypeError, ValueError) as exc:
+            raise InvalidRequest(f"brief 非法：{exc}") from exc
+        if _normalise_plan_identity(query) != _normalise_plan_identity(typed_brief.original_query):
+            raise InvalidRequest("query 与已确认 brief 的 original_query 不一致")
+    # 主、子 Agent 共用研究模型配置。
+    simple_settings = runtime_config.current()
+    skill_bundle = resolve_skill_bundle(skill_selection)
+    try:
+        selection = get_library().pin(document_ids) if source_mode != "web" else {}
+        external = mcp_client.pin_servers(mcp_server_ids)
+        if external and source_mode == "library":
+            raise mcp_client.MCPError("仅资料模式不允许外部 MCP，请切换网页或混合研究")
+        normalized_sites = normalize_blocked_sites(blocked_sites)
+    except (LibraryError, mcp_client.MCPError, ValueError) as exc:
+        raise InvalidRequest(str(exc)) from exc
+    return registry.start_simple_research(
+        query,
+        config=runtime_config.to_simple_config(simple_settings, source_mode=source_mode,
+                            library_selection=selection, library_rerank=library_rerank,
+                            mcp_servers=external, skill_bundle=skill_bundle,
+                            blocked_sites=normalized_sites),
+        requirements=typed_brief.to_run_requirements() if typed_brief is not None else None,
+        brief=typed_brief,
+        full_llm_io=full_llm_io,
+    )
+
+
+def start_followup(store: RunStore, registry: RunRegistry, run_id: str, request_id: str, text: str) -> dict:
+    """在已有运行之后追问，开始新一轮研究；返回新一轮的身份信息。"""
+    from dra import runtime_config
+    from dra.research_history import HistoryError
+    if store.get_meta(run_id) is None:
+        raise NotFound("run 不存在")
+    try:
+        config=runtime_config.to_simple_config(runtime_config.current())
+        new_id=registry.start_followup(run_id,request_id,text,config=config)
+    except (HistoryError, LibraryError, mcp_client.MCPError) as exc:
+        raise Conflict(str(exc)) from exc
+    meta=store.get_meta(new_id)
+    return {k:meta[k] for k in ("run_id","conversation_id","turn_index","status","parent_run_id")}
+
+
+def post_message(store: RunStore, registry: RunRegistry, run_id: str, message_id: str, text: str) -> dict:
+    """研究进行中给它补充一条消息；同一消息 ID 重发时确认原消息，不重复接收。"""
+    meta = store.get_meta(run_id)
+    if meta is None:
+        raise NotFound("run 不存在")
+    h = registry.runs.get(run_id)
+    if h is not None and h.user_input is not None:
+        try:
+            return h.user_input.accept(message_id, text)
+        except ValueError as exc:
+            raise Conflict(str(exc)) from exc
+        except llm.LLMPersistenceError as exc:
+            raise Unavailable("消息保存失败，未确认接收；请查看运行状态") from exc
+    # 结束/重启后的网络重试可确认原消息，不能以重试为由重启研究。
+    snapshot = _run_input_snapshot(run_id, store, registry)
+    for message in snapshot["messages"]:
+        if message["message_id"] == message_id:
+            if message["text"] != text:
+                raise Conflict("重复消息 ID 对应的正文不同")
+            return {"accepted": True, "message": message, "state": "closed"}
+    if snapshot.get("error"):
+        raise Unavailable("消息记录不完整，暂时无法确认是否已接收")
+    raise Conflict("研究正在收尾或已结束，未接收新消息")
+
+
+def cancel(store: RunStore, registry: RunRegistry, run_id: str) -> str:
+    """请求协作式取消，真实研究线程结束后才释放名额。返回取消后的状态。"""
+    h = registry.runs.get(run_id)
+    if h is None:
+        raise NotFound("run 不在内存")
+    if h.done or not h.busy:
+        meta = store.get_meta(run_id) or {}
+        return meta.get("status", "unknown")
+    if h.cancel_event is not None:
+        h.cancel_event.set()
+    if h.user_input is not None:
+        h.user_input.close("cancelled")
+    return "cancelling"
+
+
+def follow_events(registry: RunRegistry, run_id: str):
+    """订阅运行中的事件：先补发已有事件，再推送新事件，按 seq 去重，到 end 事件结束。
+
+    运行不在内存时立即报错（在开始推送之前）；返回的是异步迭代器，用完或中途放弃都要 ``aclose()``。
+    """
+    h = registry.runs.get(run_id)
+    if h is None:
+        raise NotFound("run 不在内存（服务重启过？历史回放走 /api/runs/{id}/events）")
+    return _follow(h)
+
+
+async def _follow(h: RunHandle):
+    q: asyncio.Queue = asyncio.Queue()
+    with h.lock:
+        backlog = list(h.buffer)
+        h.subscribers.add(q)
+    try:
+        last = -1
+        for e in backlog:
+            if e["type"] == EventType.END.value and (not h.done or e is not backlog[-1]):
+                continue
+            yield e
+            last = e["seq"]
+        if h.done and backlog and backlog[-1]["type"] == EventType.END.value:
+            return
+        while True:
+            e = await q.get()
+            if e["seq"] <= last:
+                continue
+            yield e
+            if e["type"] == EventType.END.value:
+                return
+    finally:
+        with h.lock:
+            h.subscribers.discard(q)
+

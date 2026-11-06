@@ -4,12 +4,12 @@ from dra import web, skills
 from test_skills import TEXT
 from dra.api.routers import planning as planning_api
 from dra.api.services import runs as run_service
-from dra.api.routers import skills as skills_api
+from dra.api.services import skills as skills_service
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     repo = skills.SkillRepository(tmp_path, builtin_dir=tmp_path / 'none')
-    monkeypatch.setattr(skills_api, 'skill_repository', lambda: repo)
+    monkeypatch.setattr(skills_service, 'skill_repository', lambda: repo)
     with TestClient(web.app) as c:
         yield c, repo
 
@@ -115,7 +115,7 @@ def test_builtin_method_autoload_through_http_preserves_prefix(tmp_path, monkeyp
 
     repo = skills.SkillRepository(tmp_path / 'data')
     store = RunStore(tmp_path / 'runs')
-    monkeypatch.setattr(skills_api, 'skill_repository', lambda: repo)
+    monkeypatch.setattr(skills_service, 'skill_repository', lambda: repo)
     monkeypatch.setattr(web.app.state, 'store', store)
     monkeypatch.setattr(web.app.state, 'registry', run_service.RunRegistry(store))
     monkeypatch.setattr(runtime_config, 'current', runtime_config._code_defaults)

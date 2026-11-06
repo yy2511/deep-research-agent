@@ -6,30 +6,11 @@ import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from dra import skills
-from dra.api.common import _require_valid_run_id
+from dra.api.common import _require_valid_run_id, service_errors
 from dra.api.deps import StoreDep
+from dra.api.services import skills as skill_service
 
 router = APIRouter()
-
-
-def skill_repository():
-    from dra.paths import DATA_DIR
-    return skills.SkillRepository(DATA_DIR)
-
-
-def _skill_operation(fn, *args):
-    try:
-        return fn(*args)
-    except skills.SkillError as exc:
-        raise HTTPException(400, str(exc)) from None
-    except OSError:
-        raise HTTPException(503, "技能文件读写失败，请检查数据目录；未确认保存成功") from None
-
-
-def _skill_bundle(identity):
-    repo = skill_repository()
-    return _skill_operation(repo.resolve, identity) if identity else {}
 
 
 class SkillWriteReq(BaseModel):
@@ -48,24 +29,27 @@ class SkillPrepareReq(BaseModel):
 
 @router.get("/api/skills")
 def api_skills():
-    return _skill_operation(skill_repository().list)
+    with service_errors():
+        return skill_service.list_skills()
 
 
 @router.put("/api/skills/enabled")
 def api_skills_enabled(req: SkillEnabledReq):
-    _skill_operation(skill_repository().set_enabled, req.enabled)
+    with service_errors():
+        skill_service.set_enabled(req.enabled)
     return api_skills()
 
 
 @router.post("/api/skills/prepare")
 def api_skills_prepare(req: SkillPrepareReq):
-    bundle = _skill_operation(skill_repository().prepare, req.selected)
-    return {"skill_selection": bundle["id"], "selected": bundle["selected"]}
+    with service_errors():
+        return skill_service.prepare(req.selected)
 
 
 @router.put("/api/skills/packages/{name}")
 def api_skills_write(name: str, req: SkillWriteReq):
-    return _skill_operation(skill_repository().save, name, req.text, req.references)
+    with service_errors():
+        return skill_service.save(name, req.text, req.references)
 
 
 @router.get("/api/runs/{run_id}/skills")
