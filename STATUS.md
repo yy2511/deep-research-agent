@@ -20,10 +20,19 @@
 
 ## 当前边界
 
+- Web 服务需要 PostgreSQL（2026-11-06 起）；账号、登录与按用户隔离正在按阶段 1 设计实施，尚未完成。
 - 中断后的研究断点恢复尚未实现。取消、查看历史和继续追问有各自的现役路径。
 - 全新副本没有真实 provider 密钥或模型选择；界面与离线测试可以验证，真实研究需先配置自己的连接。
 - 本副本不含历史 `review_runs/` 或旧 Git 历史。发布脚本与 CI 已恢复（见 [docs/deployment.md](docs/deployment.md)），线上仍是 2026-08-10 的旧版本，新版本尚未发布；按现有发布脚本上线的实例不能运行代码。
 - 不将离线测试通过推断为真实模型研究质量已通过。
+
+## 接入 PostgreSQL（2026-11-06，#28）
+
+- 后端扩展第 1 阶段第 1 步（[设计](docs/design/阶段1-数据库与用户.md)、ADR 0005/0006）。新增 SQLAlchemy（同步写法）+ Alembic + psycopg 3；建 `users`、`invites`、`sessions` 三张表，迁移在 `src/dra/migrations/`，用 `python -m dra.admin migrate` 执行。账号、登录和归属尚未实现，现有功能与接口行为不变。
+- **Web 必须配置 PostgreSQL 才能启动**：地址取 `DRA_DATABASE_URL`，没有时读 `.env` 同名项；缺失、不是 PostgreSQL 或迁移不是最新时拒绝启动并提示。`/healthz` 增加数据库检查，连不上返回 503。本机用 `compose.dev-db.yaml` 起库。
+- 生产发布流程尚未包含数据库（第 5 阶段），在那之前不要按 `container_release.py` 发布包含本改动的版本，见 [deployment.md](docs/deployment.md#当前未覆盖)。
+- 测试：默认每个测试一份临时 SQLite；`--run-postgres` 配合 `DRA_TEST_DATABASE_URL`（库名须含 test）把同一批测试改连 PostgreSQL；CI 两种都跑，镜像冒烟检查改为临时 PostgreSQL + 镜像内迁移。
+- 验证（云端开发环境，离线）：默认后端 **1528 passed、43 skipped**；`--run-postgres`（PostgreSQL 16）**1530 passed、41 skipped**；CI 的 ruff 检查通过；本机启动 Web：无地址时拒绝启动并提示、有地址时 `/healthz` 200、停掉数据库时 503、恢复后 200。CI 镜像冒烟检查只在 `main` 和手动触发时运行，本 PR 未实际跑过。未调用真实模型或付费搜索。
 
 ## 总时限内预留交稿时间（2026-10-13）
 

@@ -1,0 +1,32 @@
+# 本机开发用 PostgreSQL（docs/design/阶段1-数据库与用户.md §6）。不用于生产，生产部署第 5 阶段再定。
+#
+#   docker compose -f compose.dev-db.yaml up -d
+#   uv run python -m dra.admin migrate
+#
+# .env 中写：
+#   DRA_DATABASE_URL=postgresql+psycopg://dra:dra@127.0.0.1:5432/dra_dev
+# 跑 PostgreSQL 测试（库名须含 test，测试会清空整个库）：
+#   DRA_TEST_DATABASE_URL=postgresql+psycopg://dra:dra@127.0.0.1:5432/dra_test uv run pytest --run-postgres
+name: research-workbench-dev-db
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: dra
+      POSTGRES_PASSWORD: dra
+      POSTGRES_DB: dra_dev
+    ports:
+      # 只监听本机。
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - dra-dev-db:/var/lib/postgresql/data
+      - ./scripts/dev-db-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "dra", "-d", "dra_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  dra-dev-db:

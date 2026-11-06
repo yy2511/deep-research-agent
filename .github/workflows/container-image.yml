@@ -53,6 +53,22 @@ jobs:
     # The execution sandbox image (Node, Poppler, ImageMagick, compilers) takes longer to build.
     timeout-minutes: 30
 
+    # The same suite runs a second time against PostgreSQL (ADR 0006); the default run uses SQLite.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dra
+          POSTGRES_PASSWORD: dra
+          POSTGRES_DB: dra_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U dra -d dra_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,6 +86,11 @@ jobs:
 
       - name: Run backend tests
         run: uv run pytest
+
+      - name: Run backend tests on PostgreSQL
+        env:
+          DRA_TEST_DATABASE_URL: postgresql+psycopg://dra:dra@127.0.0.1:5432/dra_test
+        run: uv run pytest --run-postgres
 
       - name: Build execution sandbox
         run: docker build -t dra-sandbox:local sandbox_image
@@ -157,6 +178,8 @@ jobs:
           set -Eeuo pipefail
 
           container="dra-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          db_container="dra-smoke-db-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          network="dra-smoke-net-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           data_dir="$(mktemp -d)"
           chmod 0777 "$data_dir"
 
@@ -164,8 +187,10 @@ jobs:
             status=$?
             if (( status != 0 )); then
               docker logs "$container" 2>/dev/null || true
+              docker logs "$db_container" 2>/dev/null || true
             fi
-            docker rm --force "$container" >/dev/null 2>&1 || true
+            docker rm --force "$container" "$db_container" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
             rm -rf -- "$data_dir"
             exit "$status"
           }
@@ -174,7 +199,29 @@ jobs:
           docker pull "$IMAGE"
           test "$(docker image inspect --format '{{.Architecture}}' "$IMAGE")" = "amd64"
 
-          docker run --detach --name "$container" \
+          # The web service refuses to start without PostgreSQL at the latest migration
+          # (docs/design/阶段1-数据库与用户.md §6-§7): throwaway database, migrate with the image itself.
+          docker network create "$network" >/dev/null
+          docker run --detach --name "$db_container" --network "$network" \
+            --env POSTGRES_USER=dra --env POSTGRES_PASSWORD=dra --env POSTGRES_DB=dra \
+            postgres:16 >/dev/null
+          # TCP check: the image's init phase runs a socket-only server before the real one.
+          db_ready=""
+          for _ in $(seq 1 30); do
+            if docker exec "$db_container" pg_isready -h 127.0.0.1 -U dra -d dra >/dev/null 2>&1; then
+              db_ready=yes
+              break
+            fi
+            sleep 2
+          done
+          test "$db_ready" = "yes"
+          database_url="postgresql+psycopg://dra:dra@${db_container}:5432/dra"
+
+          docker run --rm --network "$network" --env DRA_DATABASE_URL="$database_url" \
+            "$IMAGE" python -m dra.admin migrate
+
+          docker run --detach --name "$container" --network "$network" \
+            --env DRA_DATABASE_URL="$database_url" \
             --mount "type=bind,source=$data_dir,target=/data" \
             "$IMAGE" >/dev/null
 

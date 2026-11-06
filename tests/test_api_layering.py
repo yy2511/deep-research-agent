@@ -56,3 +56,15 @@ def test_research_engine_does_not_import_api_or_web():
         if bad:
             offenders[str(relative)] = bad
     assert offenders == {}
+
+
+def test_routers_do_not_touch_database_sessions():
+    """ADR 0006 规则 6：接口层不直接接触数据库会话，只调用业务层。"""
+    offenders = {}
+    for path in (SRC / "api" / "routers").glob("*.py"):
+        bad = sorted(m for m in _imported_modules(path)
+                     if m == "sqlalchemy" or m.startswith("sqlalchemy.")
+                     or m in ("dra.db_tables", "dra.db") or m.startswith(("dra.db.", "dra.db_tables.")))
+        if bad:
+            offenders[path.name] = bad
+    assert offenders == {}
