@@ -49,7 +49,8 @@ def test_research_engine_does_not_import_api_or_web():
     offenders = {}
     for path in SRC.rglob("*.py"):
         relative = path.relative_to(SRC)
-        if relative.parts[0] == "api" or relative == Path("web.py"):
+        # web.py、admin.py 是入口（Web 服务、管理命令），可以调用接口层和业务层。
+        if relative.parts[0] == "api" or relative in (Path("web.py"), Path("admin.py")):
             continue
         bad = sorted(m for m in _imported_modules(path)
                      if m in ("dra.web", "dra.api") or m.startswith("dra.api."))

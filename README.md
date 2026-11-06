@@ -40,10 +40,15 @@ cp .env.example .env
 docker compose -f compose.dev-db.yaml up -d
 uv run python -m dra.admin migrate
 
+# 第一个账号：管理员（密码交互输入两次）
+uv run python -m dra.admin create-admin --email you@example.com
+
 # Web 工作台：两个终端分别启动后端和前端
 uv run python -m dra.web
 cd web && npm ci && npm run dev
 ```
+
+打开工作台后用这个账号登录。别人要用时，用 `uv run python -m dra.admin create-invite` 生成邀请码（只显示一次、默认 14 天有效），对方在登录页“注册账号”里填写；忘记密码由管理员执行 `reset-password --email ...` 重设，`disable-user` / `enable-user` 停用或恢复账号。
 
 Web 后端需要 PostgreSQL：地址取环境变量 `DRA_DATABASE_URL`，没有时读 `.env` 中的同名项；连不上或迁移不是最新时拒绝启动并提示原因。Web 后端默认监听 `http://127.0.0.1:8765`，Vite 开发服务器默认监听 `http://127.0.0.1:5173`。生产形态先运行 `cd web && npm run build`，随后只启动后端，由 FastAPI 直接服务 `web/dist/`。
 

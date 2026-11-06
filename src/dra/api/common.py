@@ -12,9 +12,11 @@ from pydantic import BaseModel, ConfigDict
 from dra.api.services.errors import (
     CapacityFull,
     Conflict,
+    Forbidden,
     InvalidRequest,
     NotFound,
     ServiceError,
+    Unauthorized,
     Unavailable,
 )
 from dra.api.services.ids import RUN_ID_RE as _RUN_ID_RE
@@ -23,6 +25,8 @@ _ROOT = Path(__file__).resolve().parents[3]
 
 # 业务层错误 → HTTP 状态码。业务层不认识状态码，翻译只在这里做一次。
 _STATUS_BY_ERROR: tuple[tuple[type[ServiceError], int], ...] = (
+    (Unauthorized, 401),
+    (Forbidden, 403),
     (NotFound, 404),
     (InvalidRequest, 400),
     (Conflict, 409),

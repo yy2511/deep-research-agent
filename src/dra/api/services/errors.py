@@ -10,6 +10,14 @@ class ServiceError(Exception):
     """业务层错误的基类；``str(exc)`` 是给用户看的中文说明。"""
 
 
+class Unauthorized(ServiceError):
+    """没有登录，或登录凭据不对。接口层对应 401。"""
+
+
+class Forbidden(ServiceError):
+    """已识别身份，但不允许这个操作（如账号已停用）。接口层对应 403。"""
+
+
 class NotFound(ServiceError):
     """要操作的对象不存在。接口层对应 404。"""
 

@@ -17,12 +17,14 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from dra.api.common import _ROOT
+from dra.api.deps import current_user, same_origin
 from dra.api.routers import (
+    auth,
     conversations,
     health,
     library,
@@ -98,8 +100,12 @@ async def _lifespan(_app: FastAPI):
 
 app.router.lifespan_context = _lifespan
 
-for _module in (skills, settings, planning, providers, health, research, runs, conversations, library):
-    app.include_router(_module.router)
+# 除健康检查和注册、登录外，全部 /api/* 要求登录（设计 §2）；修改类请求另做 Origin 检查。
+# tests/test_auth.py 遍历路由表，检查没有遗漏。
+app.include_router(health.router)
+app.include_router(auth.router, dependencies=[Depends(same_origin)])
+for _module in (skills, settings, planning, providers, research, runs, conversations, library):
+    app.include_router(_module.router, dependencies=[Depends(same_origin), Depends(current_user)])
 
 
 # mount("/") 铁律：StaticFiles 挂 "/" 会吞掉其后注册的所有路由（含 404 兜底），

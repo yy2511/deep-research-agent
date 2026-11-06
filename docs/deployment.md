@@ -125,6 +125,7 @@ curl --fail http://127.0.0.1:8765/
 
 ## 当前未覆盖
 
+- **账号（阶段 1，#29）**：应用自身已要求登录，但线上 Caddy Basic Auth 暂时保留，第 5 阶段新版上线、账号可用后再去掉（见[阶段 1 设计](design/阶段1-数据库与用户.md)“待定事项”）。新部署时先用 `python -m dra.admin create-admin` 建管理员。
 - **数据库（阶段 1 起，#28）**：`compose.yaml`、`container_release.py` 和生产机尚未包含 PostgreSQL 与迁移步骤，按[总体方案](design/后端扩展总体方案.md)在第 5 阶段补上。在那之前用本流程发布包含 #28 的版本，canary 会因没有数据库而启动失败；线上继续使用旧版本。
 - **线上运行代码**：应用跑在容器里，研究中的 Bash 需要宿主机 Docker 和执行沙箱镜像（`compose.execution.yaml`）。`container_release.py` 目前只使用单个 `compose.yaml`，不带这份叠加文件，所以按本流程发布的线上实例不能运行代码，网页“运行代码”需保持关闭。
 - **浏览器**：镜像内已带 Chromium，只能用独立后台浏览器；“复用已登录 Chrome”的扩展模式需要与用户桌面同机，线上不可用。
