@@ -16,6 +16,8 @@
 | [0002](0002-postgres-task-queue.md) | PostgreSQL 存业务数据，任务表兼作队列，不引入 Kafka | 已接受 |
 | [0003](0003-free-quota-and-own-keys.md) | 内测：免费额度限一个模型，另支持用户自带 key | 已接受 |
 | [0004](0004-known-providers-only.md) | 用户自带 key 只能从已知服务商中选择 | 已接受 |
+| [0005](0005-login-server-session-cookie.md) | 登录用服务端会话 + HttpOnly Cookie，不用 JWT | 已接受 |
+| [0006](0006-sqlalchemy-alembic-sync.md) | 数据库访问用 SQLAlchemy（同步）+ Alembic，离线测试默认用 SQLite | 已接受 |
 
 ## 模板
 
