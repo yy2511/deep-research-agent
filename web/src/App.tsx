@@ -19,6 +19,7 @@ import {
 import "./styles.css";
 import type { RunView, ResearchInputSnapshot, ResearchUserMessage, ResearchInputState } from "./types";
 import { type PlanTrace } from "./types";
+import type { Account } from "./auth";
 
 // 刷新恢复"当前运行的"钥匙：运行中与已结束的历史都记，刷新后回到同一条 run。
 // 与 URL 的 ?run= 互为备份（URL 便于分享/前进后退，localStorage 兼容旧会话）。
@@ -56,7 +57,8 @@ type RunDetail = {
   research_input?: ResearchInputSnapshot;
 };
 
-function App() {
+/** account / onLogout 由 AuthGate 传入（main.tsx）；行为测试直接调用 App() 时可以不传。 */
+function App({ account, onLogout }: { account?: Account; onLogout?: () => void } = {}) {
   const [view, setView] = useState<RunView>(initialView());
   const [selectedSkills,setSelectedSkills] = useState<string[]>([]);
   const [sourceSelection,setSourceSelection] = useState<SourceSelection>(() => ({
@@ -663,6 +665,15 @@ function App() {
             onSelectLive={openLiveRun} onSelectReplay={openHistoryRun} showReplay={prefs.showReplay}
           />
         </div>
+        {account && (
+          <div className="sidebar-account">
+            <span className="sidebar-account-email" title={account.email}>{account.email}</span>
+            {account.role === "admin" && <span className="sidebar-account-role">管理员</span>}
+            <button className="icon-btn" aria-label="退出登录" title="退出登录" onClick={onLogout}>
+              <Icon name="logout" size={16} />
+            </button>
+          </div>
+        )}
         <button className={`sidebar-settings${page === "settings" ? " is-active" : ""}`} aria-label="设置"
           aria-current={page === "settings" ? "page" : undefined} onClick={() => setPage(page === "settings" ? "research" : "settings")}>
           <Icon name="sliders" size={16} /><span>设置</span>

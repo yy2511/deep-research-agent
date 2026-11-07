@@ -24,6 +24,9 @@ from dra.db import (
 )
 from dra.db_tables import Base, LoginSession, User, utcnow
 
+# 这里测数据库本身，不需要默认的测试管理员（它会多出一行 users）。
+pytestmark = pytest.mark.real_auth
+
 
 def _user(email: str = "a@example.com", **fields) -> User:
     return User(email=email, password_hash="x", **fields)

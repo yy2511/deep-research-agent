@@ -148,6 +148,36 @@ def _block_real_exa(monkeypatch, request):
     monkeypatch.setattr("dra.subagent.exa_search", _fail, raising=False)
 
 
+TEST_ADMIN_EMAIL = "admin@test.local"
+
+
+@pytest.fixture(autouse=True)
+def logged_in_user(database, request):
+    """默认让请求以一个管理员身份通过登录检查（设计 §6），现有接口测试不用各自登录。
+
+    库里真有这个用户（以后的归属记录要引用它），密码哈希是占位值、不能用来登录。
+    标了 ``real_auth`` 的测试不用这个默认，走真实的注册、登录与 Cookie。
+    """
+    if "real_auth" in request.keywords:
+        yield None
+        return
+    from dra.api.app import app
+    from dra.api.deps import current_user
+    from dra.api.services.auth import UserInfo
+    from dra.db_tables import User
+
+    with database.session() as session:
+        user = User(email=TEST_ADMIN_EMAIL, password_hash="!test-only", role="admin")
+        session.add(user)
+        session.flush()
+        info = UserInfo(id=user.id, email=user.email, role=user.role)
+    app.dependency_overrides[current_user] = lambda: info
+    try:
+        yield info
+    finally:
+        app.dependency_overrides.pop(current_user, None)
+
+
 def pytest_addoption(parser):
     parser.addoption('--run-browser', action='store_true', default=False, help='真实本机浏览器，测试页面仅在本机，不调用模型或外部网站')
     parser.addoption("--run-native", action="store_true", default=False, help="运行真实 macOS OS 沙箱验收（无模型、无外网调用）")

@@ -1,3 +1,5 @@
+import { notifyUnauthorized } from "./session";
+
 /** 规划失败 422 时后端可在 detail 里附带 trace（llm_call 等），挂在 Error 上供调试 UI。 */
 export class ApiError extends Error {
   trace?: { plan_id?: string | null; events?: any[] };
@@ -18,6 +20,7 @@ function apiError(detail: unknown, fallback: string): ApiError {
 
 export async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
+  if (res.status === 401) notifyUnauthorized();
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw apiError(body.detail, res.statusText);
@@ -40,6 +43,7 @@ export async function postStream<T>(url: string, body: unknown, onEvent: (e: Pla
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  if (res.status === 401) notifyUnauthorized();
   if (!res.ok || !res.body) {
     const data = await res.json().catch(() => ({}));
     throw apiError(data.detail, res.statusText);
@@ -88,9 +92,17 @@ export async function putJSON<T>(url: string, body: unknown): Promise<T> {
 
 export async function fetchNdjson(url: string): Promise<any[]> {
   const res = await fetch(url);
+  if (res.status === 401) notifyUnauthorized();
   if (!res.ok) throw new Error(res.statusText);
   const text = await res.text();
   return text.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+}
+
+/** 用 /api/me 判断登录是否失效；失效时发出通知。网络错误交给连接提示处理。 */
+export async function probeSession(): Promise<void> {
+  try {
+    if ((await fetch("/api/me")).status === 401) notifyUnauthorized();
+  } catch { /* 网络断开由连接提示处理 */ }
 }
 
 export function openStream(
@@ -109,6 +121,8 @@ export function openStream(
   es.onerror = () => {
     if (gotEnd) return;   // 我们自己 close() 触发的收尾错误，不是真掉线
     onDrop();
+    // EventSource 看不到状态码：顺带确认是不是登录失效（失效时回到登录页）。
+    void probeSession();
     // 未收到 end 就掉线：不主动 close，交给 EventSource 自身重连
     // （服务端补发 backlog + reducer 按 seq 去重兜底，见 Task 6）
   };
