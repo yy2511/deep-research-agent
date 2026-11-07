@@ -17,6 +17,7 @@ type GateState =
  */
 export function AuthGate({ children }: { children: (account: Account, onLogout: () => void) => ReactNode }) {
   const [state, setState] = useState<GateState>({ kind: "checking" });
+  const [logoutError, setLogoutError] = useState<string | null>(null);
 
   const check = useCallback(async () => {
     setState({ kind: "checking" });
@@ -32,11 +33,23 @@ export function AuthGate({ children }: { children: (account: Account, onLogout: 
   useEffect(() => onUnauthorized(() => setState((s) =>
     s.kind === "ready" ? { kind: "anonymous", notice: "登录已过期，请重新登录。进行中的研究不受影响。" } : s)), []);
 
+  // 只有服务端确认退出才回到登录页；失败时保持登录并提示重试（#34 审查）。
   const handleLogout = useCallback(() => {
-    void logout().catch(() => undefined).finally(() => setState({ kind: "anonymous" }));
+    setLogoutError(null);
+    logout().then(
+      () => setState({ kind: "anonymous" }),
+      (e) => setLogoutError(e instanceof Error ? e.message : "请求失败"),
+    );
   }, []);
 
-  if (state.kind === "ready") return <>{children(state.account, handleLogout)}</>;
+  if (state.kind === "ready") {
+    return (
+      <>
+        {logoutError && <LogoutError message={logoutError} onRetry={handleLogout} onDismiss={() => setLogoutError(null)} />}
+        {children(state.account, handleLogout)}
+      </>
+    );
+  }
   if (state.kind === "checking") return <div className="auth-shell"><Icon name="loading" className="icon-spin" size={20} /></div>;
   if (state.kind === "error") {
     return (
@@ -49,6 +62,17 @@ export function AuthGate({ children }: { children: (account: Account, onLogout: 
     );
   }
   return <AuthPage notice={state.notice} onAuthed={(account) => setState({ kind: "ready", account })} />;
+}
+
+export function LogoutError({ message, onRetry, onDismiss }: { message: string; onRetry: () => void; onDismiss: () => void }) {
+  return (
+    <div className="auth-toast" role="alert">
+      <Icon name="warning" size={15} />
+      <span>退出登录失败（{message}），当前仍处于登录状态。</span>
+      <button className="link-btn" onClick={onRetry}>重试</button>
+      <button className="icon-btn" aria-label="关闭" onClick={onDismiss}><Icon name="close" size={14} /></button>
+    </div>
+  );
 }
 
 const EMPTY: AuthFields = { email: "", password: "", confirm: "", invite: "" };

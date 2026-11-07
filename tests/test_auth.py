@@ -235,6 +235,95 @@ def test_reset_password_and_disable_revoke_existing_sessions(client, alice, data
     assert client.get("/api/me").status_code == 401
 
 
+def _run_between_verify_and_issue(monkeypatch, action):
+    """在登录校验完密码、签发会话之前插入一个操作（#34 审查：确定性重现竞争）。"""
+    original = auth._verify
+    done = []
+
+    def verify_then_act(password_hash, password):
+        ok = original(password_hash, password)
+        if not done:
+            done.append(True)
+            action()
+        return ok
+
+    monkeypatch.setattr(auth, "_verify", verify_then_act)
+
+
+def _sessions_of(database, user_id):
+    with database.session() as session:
+        return session.scalars(select(LoginSession).where(LoginSession.user_id == user_id)).all()
+
+
+def test_reset_finished_after_verify_blocks_the_old_password(alice, database, monkeypatch):
+    """重设先完成：校验时用的是旧哈希，签发前复核发现哈希已变，拒绝，且不留下会话。"""
+    _run_between_verify_and_issue(
+        monkeypatch, lambda: auth.reset_password(database, alice.email, "a brand new password"))
+    with pytest.raises(auth.Unauthorized, match=auth.LOGIN_FAILED):
+        auth.login(database, alice.email, PASSWORD)
+    assert _sessions_of(database, alice.id) == []
+
+
+def test_disable_finished_after_verify_blocks_login(alice, database, monkeypatch):
+    _run_between_verify_and_issue(
+        monkeypatch, lambda: auth.set_user_status(database, alice.email, "disabled"))
+    with pytest.raises(auth.Forbidden, match=auth.ACCOUNT_DISABLED):
+        auth.login(database, alice.email, PASSWORD)
+    assert _sessions_of(database, alice.id) == []
+
+
+def test_login_finished_before_reset_is_revoked_by_the_reset(alice, database):
+    """登录先完成：会话已签发，随后的重设把它吊销。"""
+    token = auth.login(database, alice.email, PASSWORD).token
+    assert auth.resolve_session(database, token) is not None
+    auth.reset_password(database, alice.email, "a brand new password")
+    assert auth.resolve_session(database, token) is None
+
+
+@pytest.mark.postgres
+def test_login_waits_for_an_uncommitted_reset_and_then_fails(alice, database):
+    """真实并发：重设已改了这一行但还没提交时，登录签发前要等它的行锁，提交后读到新哈希而拒绝。
+
+    不加行锁时，登录读到的是已提交的旧哈希，立即签发会话、不会等待，下面的等待检查会超时失败。
+    """
+    import time
+
+    from sqlalchemy import text
+
+    new_hash = auth._hasher.hash("a brand new password")
+    outcome = {}
+    with database.engine.connect() as reset:
+        tx = reset.begin()
+        reset.execute(text("UPDATE users SET password_hash = :h WHERE id = :id"),
+                      {"h": new_hash, "id": alice.id})
+
+        def run_login():
+            try:
+                outcome["token"] = auth.login(database, alice.email, PASSWORD).token
+            except Exception as exc:  # noqa: BLE001 - 记录给主线程断言
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=run_login)
+        thread.start()
+        waiting = 0
+        deadline = time.monotonic() + 10
+        with database.engine.connect() as observer:
+            while time.monotonic() < deadline and thread.is_alive():
+                waiting = observer.execute(text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE datname = current_database() AND wait_event_type = 'Lock'")).scalar()
+                if waiting:
+                    break
+                time.sleep(0.02)
+        reset.execute(text("UPDATE sessions SET revoked_at = now() "
+                           "WHERE user_id = :id AND revoked_at IS NULL"), {"id": alice.id})
+        tx.commit()
+    thread.join(10)
+    assert waiting == 1, "登录签发会话前没有等待重设的行锁"
+    assert isinstance(outcome.get("error"), auth.Unauthorized)
+    assert _sessions_of(database, alice.id) == []
+
+
 def test_session_expires_after_30_idle_days(client, alice, monkeypatch):
     _login(client)
     _shift_clock(monkeypatch, timedelta(days=30, seconds=1))
@@ -325,6 +414,14 @@ def test_cross_site_writes_are_rejected(client, alice):
     # 跨站读取不受影响；同站写入正常。
     assert client.get("/api/me", headers={"Origin": "https://evil.example"}).status_code == 200
     assert client.post("/api/auth/logout", headers={"Origin": "http://testserver"}).status_code == 200
+
+
+def test_login_through_dev_proxy_is_same_site(client, alice):
+    """前端 5173 经 Vite 代理到后端：代理保留浏览器的 Host（web/src/devProxy.ts），Origin 与 Host 同站。"""
+    response = client.post("/api/auth/login",
+                           headers={"Host": "127.0.0.1:5173", "Origin": "http://127.0.0.1:5173"},
+                           json={"email": alice.email, "password": PASSWORD})
+    assert response.status_code == 200
 
 
 def test_cross_site_login_is_rejected(client, alice):

@@ -318,6 +318,7 @@ select:focus { outline: none; border-color: var(--accent); }
 .auth-title { margin: 0; font-family: var(--serif); font-size: 20px; font-weight: 600; }
 .auth-notice { margin: 0; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--ink-2); font-size: 14px; line-height: 1.6; }
 .auth-submit { width: 100%; height: 40px; }
+.auth-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 32px); padding: 10px 12px 10px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-pop); font-size: 14px; color: var(--ink-2); }
 .auth-switch { margin: 0; display: flex; gap: 6px; justify-content: center; font-size: 14px; color: var(--muted); }
 
 /* ---------------- 首页 ---------------- */

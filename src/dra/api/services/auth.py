@@ -190,12 +190,21 @@ def login(db: Database, email: str, password: str) -> LoginResult:
     new_hash = _hasher.hash(password) if _hasher.check_needs_rehash(password_hash) else None
     now = utcnow()
     with _database_errors(), db.session() as session:
+        # 慢的密码校验在事务外做完；签发会话前，在这一行的锁下复核密码和状态没有在这期间被改。
+        # 重设密码、停用账号先改这一行再吊销会话（同一事务），两边按行锁排队：
+        # - 重设先提交：这里读到新哈希，拒绝；
+        # - 这里先提交：新会话已存在，随后的重设会把它一并吊销。
+        # （#34 审查发现：没有复核时，校验后、签发前完成的重设挡不住旧密码登录。）
+        user = session.scalars(select(User).where(User.id == user_id).with_for_update()).first()
+        if user is None or user.password_hash != password_hash:
+            raise Unauthorized(LOGIN_FAILED)
+        if user.status != "active":
+            raise Forbidden(ACCOUNT_DISABLED)
         if new_hash is not None:
-            session.execute(update(User).where(User.id == user_id)
-                            .values(password_hash=new_hash, updated_at=now)
-                            .execution_options(synchronize_session=False))
+            user.password_hash = new_hash
+            user.updated_at = now
         token = _open_session(session, user_id, now)
-        info = _info(session.get(User, user_id))
+        info = _info(user)
     return LoginResult(info, token)
 
 

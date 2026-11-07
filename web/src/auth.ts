@@ -42,8 +42,19 @@ export function register(inviteCode: string, email: string, password: string): P
   return postAuth("/api/auth/register", { invite_code: inviteCode, email, password });
 }
 
+/**
+ * 退出登录。只有服务端确认会话已失效才算退出：成功，或 401（本来就已失效）。
+ * 其他错误（如数据库暂时不可用、网络断开）抛出，会话和 Cookie 可能仍然有效，界面不能当成已退出。
+ */
 export async function logout(): Promise<void> {
-  await fetch("/api/auth/logout", { method: "POST" });
+  let res: Response;
+  try {
+    res = await fetch("/api/auth/logout", { method: "POST" });
+  } catch {
+    throw new ApiError("网络连接失败");
+  }
+  if (res.ok || res.status === 401) return;
+  throw await errorOf(res, "服务暂时不可用");
 }
 
 export type AuthMode = "login" | "register";

@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getJSON, probeSession } from "./api";
-import { fetchMe, login, register, validateAuthForm } from "./auth";
-import { AuthPage } from "./components/AuthGate";
+import { fetchMe, login, logout, register, validateAuthForm } from "./auth";
+import { AuthPage, LogoutError } from "./components/AuthGate";
 import { onUnauthorized } from "./session";
 
 function stubFetch(status: number, body: unknown = {}) {
@@ -110,5 +110,29 @@ describe("登录状态", () => {
     await probeSession();
     expect(fired).toBe(1);
     off();
+  });
+});
+
+describe("退出登录", () => {
+  it("服务端确认退出或会话本已失效，才算退出", async () => {
+    const calls = stubFetch(200, { logged_out: true });
+    await expect(logout()).resolves.toBeUndefined();
+    expect(calls[0]).toMatchObject({ url: "/api/auth/logout", init: { method: "POST" } });
+    stubFetch(401, { detail: "未登录或登录已过期" });
+    await expect(logout()).resolves.toBeUndefined();
+  });
+
+  it("服务暂时不可用或网络失败时报错，不当成已退出", async () => {
+    stubFetch(503, { detail: "数据库暂时不可用，请稍后再试" });
+    await expect(logout()).rejects.toThrow("数据库暂时不可用，请稍后再试");
+    stubFetch(500, {});
+    await expect(logout()).rejects.toThrow("服务暂时不可用");
+    vi.stubGlobal("fetch", async () => { throw new TypeError("network down"); });
+    await expect(logout()).rejects.toThrow("网络连接失败");
+  });
+
+  it("失败提示说明仍处于登录状态，并提供重试", () => {
+    const html = renderToStaticMarkup(<LogoutError message="网络连接失败" onRetry={() => {}} onDismiss={() => {}} />);
+    for (const text of ["退出登录失败（网络连接失败）", "当前仍处于登录状态", "重试", 'role="alert"']) expect(html).toContain(text);
   });
 });
