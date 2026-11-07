@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -122,8 +123,13 @@ def import_legacy(db: Database, runs_root: Path, owner_email: str) -> ImportRepo
         owner_id = owner.id
         known = set(session.scalars(select(RunAttempt.run_id)))
 
+    def at(ts: float):
+        if not math.isfinite(ts):
+            raise ValueError(f"started_at 不是有效时间：{ts}")
+        return datetime.fromtimestamp(ts, UTC) if ts > 0 else utcnow()
+
     report = ImportReport()
-    turns: list[tuple[str, int, float, str, str]] = []  # (对话, 轮次, 开始时间, run_id, 问题)
+    turns: list[tuple[str, int, datetime, str, str]] = []  # (对话, 轮次, 开始时间, run_id, 问题)
     root = Path(runs_root)
     for directory in sorted(root.iterdir()) if root.is_dir() else []:
         if not directory.is_dir() or directory.name.startswith("."):
@@ -142,24 +148,24 @@ def import_legacy(db: Database, runs_root: Path, owner_email: str) -> ImportRepo
             conversation_id = str(meta.get("conversation_id") or run_id)
             if not RUN_ID_RE.fullmatch(conversation_id):
                 raise ValueError("conversation_id 格式不对")
+            # 时间在逐目录检查时就转换好：坏值（毫秒、无穷大、NaN……）只跳过这一个目录，
+            # 不在后面的整批事务里报错、把正常目录一起回滚（#36 审查）。
+            started_at = at(float(meta.get("started_at") or 0))
             turns.append((conversation_id, int(meta.get("turn_index") or 1),
-                          float(meta.get("started_at") or 0), run_id, str(meta.get("query") or "")))
-        except (OSError, ValueError, TypeError) as exc:
+                          started_at, run_id, str(meta.get("query") or "")))
+        except (OSError, ValueError, TypeError, OverflowError) as exc:
             report.unreadable.append((run_id, f"{exc.__class__.__name__}: {exc}"))
-
-    def at(ts: float):
-        return datetime.fromtimestamp(ts, UTC) if ts > 0 else utcnow()
 
     turns.sort(key=lambda t: (t[0], t[1], t[2]))
     with database_errors(), db.session() as session:
         for conversation_id, _turn, started, run_id, query in turns:
             if session.get(Conversation, conversation_id) is None:
-                session.add(Conversation(id=conversation_id, user_id=owner_id, created_at=at(started)))
+                session.add(Conversation(id=conversation_id, user_id=owner_id, created_at=started))
                 session.flush()
             task = ResearchTask(user_id=owner_id, conversation_id=conversation_id, query=query,
-                                created_at=at(started))
+                                created_at=started)
             session.add(task)
             session.flush()
-            session.add(RunAttempt(task_id=task.id, run_id=run_id, created_at=at(started)))
+            session.add(RunAttempt(task_id=task.id, run_id=run_id, created_at=started))
             report.imported.append(run_id)
     return report

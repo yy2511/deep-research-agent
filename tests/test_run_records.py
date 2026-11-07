@@ -269,3 +269,73 @@ def test_migrations_create_run_record_tables(database):
     assert {"conversations", "research_tasks", "run_attempts"} <= tables
     with database.session() as session:
         assert session.scalar(select(func.count()).select_from(RunAttempt)) == 0
+
+
+# ---- #36 审查：取消与坏时间戳 -------------------------------------------------------
+
+def _cancel_during_reservation(monkeypatch, name, start_owned):
+    """把真实的占位卡在写库前，取消请求，再放行；返回启动次数。"""
+    import asyncio
+    import threading
+
+    from dra.api.services import runs as run_service
+
+    entered, gate = threading.Event(), threading.Event()
+    real = getattr(run_records, name)
+
+    def slow(*args):
+        entered.set()
+        assert gate.wait(5)
+        return real(*args)
+
+    monkeypatch.setattr(run_records, name, slow)
+    started = []
+    monkeypatch.setattr(run_service, "start_research", lambda *a, **k: started.append(1) or "x")
+    monkeypatch.setattr(run_service, "start_followup", lambda *a, **k: started.append(1) or {"run_id": "x"})
+
+    async def scenario():
+        task = asyncio.create_task(start_owned(run_service))
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        gate.set()  # 占位线程这时才提交
+        await asyncio.gather(*list(run_service._pending_cleanups))
+
+    asyncio.run(scenario())
+    return started
+
+
+def test_cancelled_new_research_leaves_no_reservation(monkeypatch, database, logged_in_user):
+    started = _cancel_during_reservation(
+        monkeypatch, "reserve_new_run",
+        lambda rs: rs.start_owned_research(database, None, logged_in_user.id, "问题"))
+    assert started == []
+    assert _empty(database)
+
+
+def test_cancelled_followup_leaves_no_reservation(tmp_path, monkeypatch, database, logged_in_user):
+    from dra.runstore import RunStore
+
+    store = RunStore(tmp_path / "runs")
+    parent = store.create_run("首问", None, {"mode": "simple"})
+    run_records.reserve_new_run(database, logged_in_user.id, parent, "首问")
+    started = _cancel_during_reservation(
+        monkeypatch, "reserve_followup",
+        lambda rs: rs.start_owned_followup(database, store, None, logged_in_user.id, parent, "r1", "追问"))
+    assert started == []
+    assert _rows(database)["attempts"] == [parent]
+
+
+@pytest.mark.parametrize("bad", [1_700_000_000_000, "inf", "nan", "not-a-number"])
+def test_one_bad_timestamp_does_not_roll_back_the_batch(tmp_path, database, logged_in_user, bad):
+    root = tmp_path / "runs"
+    for run_id, started in (("20260901-100000-aaaaaaaa", 1_756_720_800.0),
+                            ("20260902-100000-bbbbbbbb", bad)):
+        (root / run_id).mkdir(parents=True)
+        (root / run_id / "meta.json").write_text(
+            json.dumps({"run_id": run_id, "query": "q", "started_at": started}), encoding="utf-8")
+    report = run_records.import_legacy(database, root, logged_in_user.email)
+    assert report.imported == ["20260901-100000-aaaaaaaa"]
+    assert [r for r, _ in report.unreadable] == ["20260902-100000-bbbbbbbb"]
+    assert _rows(database)["attempts"] == ["20260901-100000-aaaaaaaa"]

@@ -586,6 +586,34 @@ def start_research(
     )
 
 
+# 被取消的请求留下的“等占位写完再撤销”后台任务；保留引用，避免任务在完成前被回收。
+_pending_cleanups: set[asyncio.Task] = set()
+
+
+async def _reserve(db: Database, run_id: str, reserve, *args) -> None:
+    """在线程里占位。等待期间请求被取消（客户端断开、服务关闭）时，线程仍会把占位写完；
+    这里安排一个后台任务：等线程真正结束，写入成功就撤销，主流程照常按取消退出（#36 审查）。
+
+    不能在取消时立刻撤销：撤销可能早于线程提交，删了个空，随后占位才写进去。
+    """
+    reservation = asyncio.ensure_future(asyncio.to_thread(reserve, *args))
+    try:
+        await asyncio.shield(reservation)
+    except asyncio.CancelledError:
+        cleanup = asyncio.ensure_future(_release_after(reservation, db, run_id))
+        _pending_cleanups.add(cleanup)
+        cleanup.add_done_callback(_pending_cleanups.discard)
+        raise
+
+
+async def _release_after(reservation: asyncio.Future, db: Database, run_id: str) -> None:
+    try:
+        await reservation
+    except Exception:  # noqa: BLE001 - 占位本身没写成，没有要撤销的
+        return
+    await asyncio.to_thread(run_records.release_quietly, db, run_id)
+
+
 async def start_owned_research(db: Database, registry: RunRegistry, user_id: int, query: str,
                                **options) -> str:
     """先在数据库占位（线程里的短事务），再在事件循环上启动研究；启动失败就撤销占位。
@@ -593,7 +621,7 @@ async def start_owned_research(db: Database, registry: RunRegistry, user_id: int
     设计 §3.2、ADR 0006 规则 3。写库失败时（Unavailable → 503）研究不会启动，也不建运行目录。
     """
     run_id = new_run_id()
-    await asyncio.to_thread(run_records.reserve_new_run, db, user_id, run_id, query)
+    await _reserve(db, run_id, run_records.reserve_new_run, db, user_id, run_id, query)
     try:
         return start_research(registry, query, run_id=run_id, user_id=user_id, **options)
     except BaseException:
@@ -610,7 +638,7 @@ async def start_owned_followup(db: Database, store: RunStore, registry: RunRegis
     if store.get_meta(parent_run_id) is None:
         raise NotFound("run 不存在")
     run_id = new_run_id()
-    await asyncio.to_thread(run_records.reserve_followup, db, user_id, parent_run_id, run_id, text)
+    await _reserve(db, run_id, run_records.reserve_followup, db, user_id, parent_run_id, run_id, text)
     try:
         result = start_followup(store, registry, parent_run_id, request_id, text,
                                 reserved_run_id=run_id, user_id=user_id)
