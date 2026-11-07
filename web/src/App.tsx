@@ -682,7 +682,8 @@ function App({ account, onLogout }: { account?: Account; onLogout?: () => void }
       <main className="workbench">
         {streamDropped && <div className="conn-warn"><Icon name="warning" size={15} />连接中断，浏览器正在自动重连…</div>}
         {page === "settings" ? (
-          <SettingsPage tab={settingsTab} onTab={setSettingsTab} prefs={prefs} onPrefs={updatePrefs} onDemo={playDemo} />
+          <SettingsPage tab={settingsTab} onTab={setSettingsTab} prefs={prefs} onPrefs={updatePrefs} onDemo={playDemo}
+            isAdmin={account?.role === "admin"} />
         ) : !hasContent ? (
           <div className="stage-main">
             {brief !== null || gaps !== null ? (

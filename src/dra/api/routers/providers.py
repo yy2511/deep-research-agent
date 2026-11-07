@@ -4,10 +4,12 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import ValidationError
 
-from dra.api.deps import RegistryDep
+from dra.api.deps import ADMIN_ONLY, RegistryDep
 from dra.api.services.runs import RunRegistry
 
 router = APIRouter()
+# 增删改服务商、刷新模型目录：分组上统一要求管理员（#32）。
+admin_router = APIRouter(dependencies=ADMIN_ONLY)
 
 
 @router.get("/api/providers")
@@ -16,7 +18,7 @@ def api_providers() -> list[dict]:
     return [p.model_dump() for p in provider_registry.list_status()]
 
 
-@router.post("/api/providers/refresh")
+@admin_router.post("/api/providers/refresh")
 def api_providers_refresh(*, registry: RegistryDep) -> list[dict]:
     _provider_edit_guard(registry)
     from concurrent.futures import ThreadPoolExecutor
@@ -39,7 +41,7 @@ def _provider_input(model, body):
         raise HTTPException(400,'连接参数不合法：'+details)
 
 
-@router.post('/api/providers')
+@admin_router.post('/api/providers')
 def api_provider_create(body: dict, *, registry: RegistryDep):
     from dra import provider_registry as pr
     _provider_edit_guard(registry)
@@ -47,7 +49,7 @@ def api_provider_create(body: dict, *, registry: RegistryDep):
     except ValueError as exc:raise HTTPException(400,str(exc))
 
 
-@router.put('/api/providers/{provider}')
+@admin_router.put('/api/providers/{provider}')
 def api_provider_update(provider: str, body: dict, *, registry: RegistryDep):
     from dra import provider_registry as pr
     _provider_edit_guard(registry)
@@ -55,7 +57,7 @@ def api_provider_update(provider: str, body: dict, *, registry: RegistryDep):
     except ValueError as exc:raise HTTPException(400,str(exc))
 
 
-@router.delete('/api/providers/{provider}')
+@admin_router.delete('/api/providers/{provider}')
 def api_provider_delete(provider: str, *, registry: RegistryDep):
     from dra import provider_registry as pr, runtime_config
     _provider_edit_guard(registry)
@@ -66,7 +68,7 @@ def api_provider_delete(provider: str, *, registry: RegistryDep):
     return {'ok':True}
 
 
-@router.post('/api/providers/{provider}/refresh')
+@admin_router.post('/api/providers/{provider}/refresh')
 def api_provider_refresh(provider: str, *, registry: RegistryDep):
     from dra import provider_registry as pr
     _provider_edit_guard(registry)
@@ -74,14 +76,14 @@ def api_provider_refresh(provider: str, *, registry: RegistryDep):
     except ValueError as exc:raise HTTPException(400,str(exc))
 
 
-@router.put('/api/providers/{provider}/model-metadata')
+@admin_router.put('/api/providers/{provider}/model-metadata')
 def api_provider_model_metadata(provider: str, body: dict):
     from dra import provider_registry as pr
     try:return pr.save_override(provider,_provider_input(pr.ModelOverride,body)).model_dump()
     except ValueError as exc:raise HTTPException(400,str(exc))
 
 
-@router.post('/api/model-catalog/refresh')
+@admin_router.post('/api/model-catalog/refresh')
 def api_model_catalog_refresh(body: dict):
     from dra import provider_registry as pr
     return pr.refresh_catalog(force=body.get('force') is True)

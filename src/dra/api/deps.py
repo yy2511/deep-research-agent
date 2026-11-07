@@ -140,3 +140,17 @@ def visible_runs(request: Request, user: CurrentUserDep):
 VisibleRunsDep = Annotated[object, Depends(visible_runs)]
 OWNED_RUN = [Depends(owned_run)]
 OWNED_CONVERSATION = [Depends(owned_conversation)]
+
+
+# ---- 管理员权限（阶段 1 第 5 步 #32；设计 §4） -------------------------------------------
+# 改全站设置（模型、服务商、外部资料服务、技能）的接口放进各 router 文件的 admin_router 分组，
+# 在分组上统一挂这个检查；tests/test_admin_permissions.py 遍历这类接口，检查没有遗漏。
+
+def require_admin(user: CurrentUserDep) -> UserInfo:
+    """先要求登录（未登录仍是 401），再要求管理员身份。"""
+    if not user.is_admin:
+        raise HTTPException(403, "需要管理员权限")
+    return user
+
+
+ADMIN_ONLY = [Depends(require_admin)]

@@ -108,8 +108,10 @@ app.include_router(health.router)
 app.include_router(auth.router, dependencies=[Depends(same_origin)])
 # 带研究编号 / 对话编号的分组另外挂归属检查（#31，在各自 router 文件里）；
 # tests/test_run_ownership.py 遍历这类接口，检查没有遗漏。
-for _router in (skills.router, skills.run_router, settings.router, planning.router,
-                providers.router, research.router, research.run_router, runs.router,
+# 改全站设置的 admin_router 分组另外要求管理员（#32）；tests/test_admin_permissions.py 检查没有遗漏。
+for _router in (skills.router, skills.run_router, skills.admin_router, settings.router, settings.admin_router,
+                planning.router, providers.router, providers.admin_router,
+                research.router, research.run_router, runs.router,
                 runs.run_router, conversations.router, conversations.conversation_router,
                 library.router):
     app.include_router(_router, dependencies=[Depends(same_origin), Depends(current_user)])
