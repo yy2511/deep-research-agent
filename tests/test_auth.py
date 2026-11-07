@@ -6,13 +6,13 @@
 from __future__ import annotations
 
 import io
+import pathlib
 import threading
 from datetime import timedelta
 
 import pytest
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
-from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -357,26 +357,80 @@ def test_garbage_cookie_is_unauthorised(alice):
 
 # ---- 全部接口要求登录 --------------------------------------------------------------
 
-def _dependency_calls(dependant) -> set:
-    calls = set()
-    for sub in dependant.dependencies:
-        calls.add(sub.call)
-        calls |= _dependency_calls(sub)
-    return calls
+# 按行为检查，不读 FastAPI 的内部路由结构：0.139 起 include_router 的子路由包在私有的
+# _IncludedRouter 里，只遍历 app.routes 会一条都查不到（#34 复审发现原检查空跑）。
+_SAMPLE_PATH_VALUES = {"run_id": "20990101-000000-deadbeef",
+                       "conversation_id": "20990101-000000-deadbeef", "seq": "1"}
 
 
-def test_every_api_route_requires_login_except_register_and_login():
+def _api_operations(target_app) -> list[tuple[str, str]]:
+    """从 OpenAPI 文档列出全部 /api/* 接口与方法，路径参数填上合法形态的样例值。"""
+    import re
+
+    operations = []
+    for path, methods in target_app.openapi()["paths"].items():
+        if not path.startswith("/api/"):
+            continue
+        concrete = re.sub(r"\{([^}]+)\}", lambda m: _SAMPLE_PATH_VALUES.get(m.group(1), "x"), path)
+        for method in methods:
+            if method in {"get", "post", "put", "patch", "delete"}:
+                operations.append((method.upper(), concrete, path))
+    return operations
+
+
+def anonymous_access_failures(target_app) -> tuple[list[str], int]:
+    """不带登录逐个请求；除注册、登录外，没返回 401 的就是漏了登录要求。返回 (问题列表, 检查数)。"""
+    anonymous = TestClient(target_app)
+    failures = []
+    operations = _api_operations(target_app)
+    for method, concrete, template in operations:
+        status = anonymous.request(method, concrete, json={}).status_code
+        if template in PUBLIC_API:
+            if status == 401:
+                failures.append(f"{method} {template} 应公开，却要求登录")
+        elif status != 401:
+            failures.append(f"{method} {template} 匿名访问返回 {status}")
+    return failures, len(operations)
+
+
+def test_every_api_operation_requires_login_except_register_and_login():
     """新加接口忘了要求登录，这里会失败（设计 §2）。"""
-    missing = []
-    for route in app.routes:
-        if not isinstance(route, APIRoute) or not route.path.startswith("/api/"):
-            continue
-        if route.path in PUBLIC_API:
-            assert current_user not in _dependency_calls(route.dependant)
-            continue
-        if current_user not in _dependency_calls(route.dependant):
-            missing.append(f"{sorted(route.methods)} {route.path}")
-    assert missing == []
+    failures, checked = anonymous_access_failures(app)
+    assert failures == []
+    # 防止再次空跑：确实查到了全部接口（当前 57 个接口/方法；新增接口只会更多）。
+    assert checked >= 57
+    paths = {template for _, _, template in _api_operations(app)}
+    assert {"/api/runs/{run_id}", "/api/research/{run_id}/stream", "/api/config",
+            "/api/library/documents/{document_id}", "/api/me"} <= paths
+
+
+def test_routes_stay_visible_to_the_check():
+    """上面的检查靠 OpenAPI 列出接口；被排除在文档外的接口会漏查，所以不允许这样做。"""
+    sources = (pathlib.Path(__file__).resolve().parents[1] / "src" / "dra" / "api").rglob("*.py")
+    assert [str(s) for s in sources if "include_in_schema" in s.read_text(encoding="utf-8")] == []
+
+
+def test_the_check_catches_a_sub_router_without_login(database):
+    """变异用例：漏挂登录的子路由必须被抓到，挂了的不报。"""
+    from fastapi import APIRouter, Depends
+
+    probe = FastAPI()
+    probe.state.db = database
+    guarded, forgotten = APIRouter(), APIRouter()
+
+    @guarded.get("/api/probe/guarded")
+    def _guarded():
+        return {}
+
+    @forgotten.get("/api/probe/forgotten/{run_id}")
+    def _forgotten(run_id: str):
+        return {}
+
+    probe.include_router(guarded, dependencies=[Depends(current_user)])
+    probe.include_router(forgotten)
+    failures, checked = anonymous_access_failures(probe)
+    assert checked == 2
+    assert failures == ["GET /api/probe/forgotten/{run_id} 匿名访问返回 200"]
 
 
 @pytest.mark.parametrize("method,path", [
