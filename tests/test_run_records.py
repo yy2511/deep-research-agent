@@ -245,9 +245,10 @@ def test_imported_research_can_be_followed_up(tmp_path, database, logged_in_user
     root = tmp_path / "runs"
     _legacy_runs(root)
     run_records.import_legacy(database, root, logged_in_user.email)
-    conversation = run_records.reserve_followup(database, logged_in_user.id, "20260901-110000-bbbbbbbb",
-                                                "20261107-000000-ffffffff", "第三轮")
+    conversation, counted = run_records.reserve_followup(
+        database, logged_in_user.id, "20260901-110000-bbbbbbbb", "20261107-000000-ffffffff", "第三轮")
     assert conversation == "20260901-100000-aaaaaaaa"
+    assert counted == {"20260901-100000-aaaaaaaa", "20260901-110000-bbbbbbbb"}
 
 
 def test_import_legacy_command(tmp_path, database, logged_in_user, monkeypatch, capsys):

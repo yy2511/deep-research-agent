@@ -44,11 +44,15 @@ def reserve_new_run(db: Database, user_id: int, run_id: str, query: str) -> None
         session.add(RunAttempt(task_id=task.id, run_id=run_id, created_at=now))
 
 
-def reserve_followup(db: Database, user_id: int, parent_run_id: str, run_id: str, query: str) -> str:
-    """追问：在父研究所在的对话下加一个请求 + 一条执行记录；返回对话 id。
+def reserve_followup(db: Database, user_id: int, parent_run_id: str, run_id: str,
+                     query: str) -> tuple[str, set[str]]:
+    """追问：在父研究所在的对话下加一个请求 + 一条执行记录。
+
+    返回（对话 id，本次占位之前该对话已登记的 run_id 集合）。后者交给追问的
+    “重复提交”和“是否最新一轮”判断，残留的未登记目录不算（#39 审查）。
 
     父研究还没登记（旧数据未导入）时拒绝，不自动认领（用户 2026-11-07 确认）。
-    第 3 步不检查对话属于谁，第 4 步（#31）统一做归属校验。
+    对话不属于当前用户时按不存在处理（#31）；接口层的归属检查已先挡住，这里再守一道。
     """
     now = utcnow()
     with database_errors(), db.session() as session:
@@ -59,12 +63,17 @@ def reserve_followup(db: Database, user_id: int, parent_run_id: str, run_id: str
         )
         if conversation_id is None:
             raise Conflict(LEGACY_NOT_IMPORTED)
+        # 第 4 步（#31）：对话必须属于当前用户；不属于与不存在同样处理。
+        owner = session.scalar(select(Conversation.user_id).where(Conversation.id == conversation_id))
+        if owner != user_id:
+            raise NotFound("run 不存在")
+        counted = conversation_run_ids(session, conversation_id)
         task = ResearchTask(user_id=user_id, conversation_id=conversation_id, query=query,
                             created_at=now)
         session.add(task)
         session.flush()
         session.add(RunAttempt(task_id=task.id, run_id=run_id, created_at=now))
-    return conversation_id
+    return conversation_id, counted
 
 
 def release(db: Database, run_id: str) -> None:
@@ -91,6 +100,41 @@ def release_quietly(db: Database, run_id: str) -> None:
         release(db, run_id)
     except Exception:
         log.warning("撤销研究 %s 的数据库占位失败，留下了没有运行目录的记录", run_id, exc_info=True)
+
+
+# ---- 归属查询（第 4 步 #31；设计 §3.1） -----------------------------------------------
+
+def run_owner(db: Database, run_id: str) -> int | None:
+    """研究属于谁；没登记过返回 None。"""
+    with database_errors(), db.session() as session:
+        return session.scalar(
+            select(ResearchTask.user_id)
+            .join(RunAttempt, RunAttempt.task_id == ResearchTask.id)
+            .where(RunAttempt.run_id == run_id)
+        )
+
+
+def conversation_owner(db: Database, conversation_id: str) -> int | None:
+    with database_errors(), db.session() as session:
+        return session.scalar(select(Conversation.user_id).where(Conversation.id == conversation_id))
+
+
+def owned_run_ids(db: Database, user_id: int) -> set[str]:
+    with database_errors(), db.session() as session:
+        return set(session.scalars(
+            select(RunAttempt.run_id)
+            .join(ResearchTask, ResearchTask.id == RunAttempt.task_id)
+            .where(ResearchTask.user_id == user_id)
+        ))
+
+
+def conversation_run_ids(session, conversation_id: str) -> set[str]:
+    """对话里登记过的全部 run_id（在调用方的会话里查）。"""
+    return set(session.scalars(
+        select(RunAttempt.run_id)
+        .join(ResearchTask, ResearchTask.id == RunAttempt.task_id)
+        .where(ResearchTask.conversation_id == conversation_id)
+    ))
 
 
 # ---- 旧数据导入（设计 §5） ---------------------------------------------------------

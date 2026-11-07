@@ -106,8 +106,13 @@ app.router.lifespan_context = _lifespan
 # tests/test_auth.py 遍历路由表，检查没有遗漏。
 app.include_router(health.router)
 app.include_router(auth.router, dependencies=[Depends(same_origin)])
-for _module in (skills, settings, planning, providers, research, runs, conversations, library):
-    app.include_router(_module.router, dependencies=[Depends(same_origin), Depends(current_user)])
+# 带研究编号 / 对话编号的分组另外挂归属检查（#31，在各自 router 文件里）；
+# tests/test_run_ownership.py 遍历这类接口，检查没有遗漏。
+for _router in (skills.router, skills.run_router, settings.router, planning.router,
+                providers.router, research.router, research.run_router, runs.router,
+                runs.run_router, conversations.router, conversations.conversation_router,
+                library.router):
+    app.include_router(_router, dependencies=[Depends(same_origin), Depends(current_user)])
 
 
 # mount("/") 铁律：StaticFiles 挂 "/" 会吞掉其后注册的所有路由（含 404 兜底），

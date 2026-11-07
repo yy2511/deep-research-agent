@@ -88,3 +88,55 @@ def same_origin(request: Request) -> None:
         return
     if urlsplit(origin).netloc != request.headers.get("host", ""):
         raise HTTPException(403, "跨站请求被拒绝")
+
+
+# ---- 归属检查（阶段 1 第 4 步 #31；设计 §3.1） -----------------------------------------
+# 带研究编号 / 对话编号的接口放进单独的路由分组，在分组上统一挂下面的检查；
+# 新接口放进分组就自动受保护。不属于当前用户与不存在返回同一个 404，不透露是否存在。
+
+_RUN_NOT_FOUND = "run 不存在"
+_CONVERSATION_NOT_FOUND = "研究会话不存在"
+
+
+def owned_run(run_id: str, request: Request, user: CurrentUserDep) -> str:
+    """路径里的 run_id 必须属于当前用户。普通 def：在线程里开短会话，查完即关（ADR 0006 规则 5）。"""
+    from dra.api.services import run_records
+    from dra.api.services.ids import RUN_ID_RE
+
+    if not RUN_ID_RE.fullmatch(run_id):
+        raise HTTPException(404, _RUN_NOT_FOUND)
+    with service_errors():
+        owner = run_records.run_owner(require_db(request), run_id)
+    if owner != user.id:
+        raise HTTPException(404, _RUN_NOT_FOUND)
+    return run_id
+
+
+def owned_conversation(conversation_id: str, request: Request, user: CurrentUserDep) -> str:
+    from dra.api.services import run_records
+    from dra.api.services.ids import RUN_ID_RE
+
+    if not RUN_ID_RE.fullmatch(conversation_id):
+        raise HTTPException(404, _CONVERSATION_NOT_FOUND)
+    with service_errors():
+        owner = run_records.conversation_owner(require_db(request), conversation_id)
+    if owner != user.id:
+        raise HTTPException(404, _CONVERSATION_NOT_FOUND)
+    return conversation_id
+
+
+def visible_runs(request: Request, user: CurrentUserDep):
+    """列表与对话汇总用：判断某个 run_id 是否登记给当前用户的函数。
+
+    对话也按它过滤轮次：没登记的轮次（如启动失败后残留的目录）不算进对话（#39 审查）。
+    """
+    from dra.api.services import run_records
+
+    with service_errors():
+        ids = run_records.owned_run_ids(require_db(request), user.id)
+    return ids.__contains__
+
+
+VisibleRunsDep = Annotated[object, Depends(visible_runs)]
+OWNED_RUN = [Depends(owned_run)]
+OWNED_CONVERSATION = [Depends(owned_conversation)]

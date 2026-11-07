@@ -303,8 +303,13 @@ def test_artifact_http_download_and_preview_preserve_actual_bytes(tmp_path, monk
     (ctx.execution.workspace.path / 'output' / name).write_bytes(data)
     artifacts.prepare_finish(ctx, {'draft': '完整正文。', 'artifacts': [{'path': name, 'title': '文件'}]})
     records = artifacts.publish(ctx, '完整正文。')
-    monkeypatch.setattr(web.app.state, 'store', N(get_meta=lambda run: {}, _dir=lambda run: tmp_path,
-                                     read_simple_result=lambda run: {'artifacts': records, 'stop_reason': 'finished'}))
+    # 真实 RunStore（文件读取走 #23 收进来的方法），只把运行目录指到本测试的工作区。
+    from dra.runstore import RunStore
+    store = RunStore(tmp_path / 'runs-root')
+    store._dir = lambda run: tmp_path
+    store.get_meta = lambda run: {}
+    store.read_simple_result = lambda run: {'artifacts': records, 'stop_reason': 'finished'}
+    monkeypatch.setattr(web.app.state, 'store', store)
     client = TestClient(web.app)
     route = '/api/runs/delivery/artifacts/' + records[0]['artifact_id']
     downloaded = client.get(route + '/download')

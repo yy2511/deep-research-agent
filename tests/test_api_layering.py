@@ -69,3 +69,14 @@ def test_routers_do_not_touch_database_sessions():
         if bad:
             offenders[path.name] = bad
     assert offenders == {}
+
+
+def test_routers_do_not_build_run_file_paths():
+    """#23：运行目录里的文件读取收在 RunStore 里，接口层不自己拼 runs/<id>/... 路径。"""
+    offenders = {}
+    for path in (SRC / "api" / "routers").glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        hits = [needle for needle in ("store._dir(", "store.root /", "store.root/") if needle in text]
+        if hits:
+            offenders[path.name] = hits
+    assert offenders == {}

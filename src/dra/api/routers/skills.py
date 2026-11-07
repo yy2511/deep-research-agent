@@ -1,16 +1,16 @@
 """技能接口：技能列表、启用、准备、保存，以及某次运行的技能记录。"""
 from __future__ import annotations
 
-import json
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from dra.api.common import _require_valid_run_id, service_errors
-from dra.api.deps import StoreDep
+from dra.api.deps import OWNED_RUN, StoreDep
 from dra.api.services import skills as skill_service
 
 router = APIRouter()
+# 带研究编号的接口：分组上统一检查归属（#31）。
+run_router = APIRouter(dependencies=OWNED_RUN)
 
 
 class SkillWriteReq(BaseModel):
@@ -52,19 +52,17 @@ def api_skills_write(name: str, req: SkillWriteReq):
         return skill_service.save(name, req.text, req.references)
 
 
-@router.get("/api/runs/{run_id}/skills")
+@run_router.get("/api/runs/{run_id}/skills")
 def api_run_skills(run_id: str, *, store: StoreDep):
     _require_valid_run_id(run_id)
     if store.get_meta(run_id) is None:
         raise HTTPException(404, "run 不存在")
-    directory = store._dir(run_id)
     try:
-        snapshot = directory / "skills.json"
-        bundle = json.loads(snapshot.read_text()) if snapshot.exists() else {"skills": {}, "selected": []}
-        ledger = directory / "run.json"
-        state = json.loads(ledger.read_text()) if ledger.exists() else {}
+        bundle = store.read_skill_snapshot(run_id)
+        state = store.read_ledger(run_id) or {}
         # catalog_recorded=False：开始时没有可用技能，或是早于技能记录的运行；不等于“目录为空”。
-        return {"catalog": bundle, "catalog_recorded": snapshot.exists(),
+        return {"catalog": bundle if bundle is not None else {"skills": {}, "selected": []},
+                "catalog_recorded": bundle is not None,
                 "loaded": state.get("skills", {}).get("loaded", [])}
     except (OSError, ValueError):
         raise HTTPException(503, "本轮技能记录读取失败") from None
