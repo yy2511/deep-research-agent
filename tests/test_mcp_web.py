@@ -82,7 +82,7 @@ def test_brief_receives_external_source_scope_and_library_mode_rejects(monkeypat
     monkeypatch.setattr(mcp_client, '_CONFIG_PATH', tmp_path / 'mcp.json')
     server = config('https://example.org/mcp')
     mcp_client.save_settings(mcp_client.MCPSettings(servers=[server]))
-    assert '研究资料' in planning_api._brief_sources(planning_api.SourceSelectionReq(mcp_server_ids=['notes']))['source_context']
+    assert '研究资料' in planning_api._brief_sources(planning_api.SourceSelectionReq(mcp_server_ids=['notes']), 1)['source_context']
     with TestClient(web.app) as client:
         result = client.post('/api/brief', json={'query': 'test', 'source_mode': 'library', 'mcp_server_ids': ['notes']})
         assert result.status_code == 400

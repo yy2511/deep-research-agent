@@ -5,14 +5,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dra import library as lib, web
+from conftest import install_library
 from test_document_library import TinyEncoder
 from test_web_research_e2e import isolated_web
 
 
 @pytest.fixture
-def library_web(tmp_path, monkeypatch, isolated_web):
-    store = lib.LibraryStore(tmp_path / "library", encoder=TinyEncoder())
-    monkeypatch.setattr(lib, "_library", store)
+def library_web(tmp_path, monkeypatch, isolated_web, logged_in_user):
+    # 当前测试用户自己的资料库（#37）。
+    store = install_library(lib.LibraryStore(lib.user_library_root(logged_in_user.id), encoder=TinyEncoder()),
+                            logged_in_user.id)
     with TestClient(web.app) as client:
         yield client, store, isolated_web
     store.close()
@@ -66,7 +68,8 @@ def test_history_original_and_highlight_survive_library_changes(library_web):
     version = library.import_bytes("policy.pdf", raw, wait=True)
     run_id = store.create_run("backup?", None, {"mode": "simple"})
     inner = sr.RunStore(store.root / run_id, run_id=run_id, query="backup?")
-    ctx = sr.ToolContext(inner, sr.SimpleConfig(source_mode="library",library_selection=library.pin([version["document_id"]])))
+    ctx = sr.ToolContext(inner, sr.SimpleConfig(source_mode="library",library_selection=library.pin([version["document_id"]]),
+                                                library_root=str(library.root)))
     result, _ = ctx.search_sources({"query":"backup"})
     ref = json.loads(result)["results"][0]["source_ref"]
     result, ok = ctx.read_source({"source_ref":ref,"find":"17 days"})

@@ -215,6 +215,7 @@ def source_context(
     source_mode: str,
     document_ids: list[str],
     mcp_server_ids: list[str],
+    user_id: int | None = None,
 ) -> dict:
     """把用户选的技能、外部资料服务和本地资料写成规划提示里的来源说明。"""
     skill_hint = skills.selected_prompt(skill_bundle(skill_selection))
@@ -230,7 +231,9 @@ def source_context(
     if source_mode == "web":
         return {"source_context": mcp_hint} if mcp_hint else {}
     try:
-        library = get_library()
+        if user_id is None:
+            raise LibraryError("资料研究需要登录用户的资料库")
+        library = get_library(user_id)  # 当前用户自己的资料库（#37）
         selection = library.pin(document_ids)
         names = [library.read_version(v)["file_name"] for v in selection["version_ids"]]
     except LibraryError as exc:

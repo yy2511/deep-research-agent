@@ -124,15 +124,35 @@ class LocalEncoder:
             return self.reranker.predict(pairs, batch_size=4)
 
 
+# ---- 全进程共用（#37）：资料库按用户分目录后，嵌入模型、导入线程、导入名额不随用户数增加。
+# 数值沿用原来每个资料库的设置：导入线程 1 个，排队中的导入最多 4 份（现在是全站合计）。
+_shared_lock = threading.Lock()
+_shared_encoder: "LocalEncoder | None" = None
+_SHARED_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="library-import")
+_SHARED_SLOTS = threading.BoundedSemaphore(4)
+
+
+def shared_encoder() -> "LocalEncoder":
+    """嵌入模型全进程只加载一份（约 2GB）。"""
+    global _shared_encoder
+    with _shared_lock:
+        if _shared_encoder is None:
+            _shared_encoder = LocalEncoder()
+        return _shared_encoder
+
+
 class LibraryStore:
-    def __init__(self, root: Path, *, encoder=None):
+    def __init__(self, root: Path, *, encoder=None, shared: bool = False):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "versions").mkdir(exist_ok=True)
         self.lock = threading.RLock()
         self._encoder = encoder
-        self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="library-import")
-        self.slots = threading.BoundedSemaphore(4)
+        # shared=True（经 library_at 打开的正式资料库）：嵌入模型、导入线程、导入名额全进程共用；
+        # 直接构造的（测试、单独脚本）各用自己的，行为同从前。
+        self._shared = shared
+        self.pool = _SHARED_POOL if shared else ThreadPoolExecutor(max_workers=1, thread_name_prefix="library-import")
+        self.slots = _SHARED_SLOTS if shared else threading.BoundedSemaphore(4)
         self.state = json.loads((self.root / "manifest.json").read_text()) if (self.root / "manifest.json").exists() else {"generation": 0, "documents": {}, "versions": {}}
         for version in self.state["versions"].values():
             if version["status"] in {"queued", "parsing", "indexing"}:
@@ -140,13 +160,14 @@ class LibraryStore:
         self._commit()
 
     def close(self):
-        self.pool.shutdown(wait=True)
+        if not self._shared:
+            self.pool.shutdown(wait=True)
 
     @property
     def encoder(self):
         with self.lock:
             if self._encoder is None:
-                self._encoder = LocalEncoder()
+                self._encoder = shared_encoder() if self._shared else LocalEncoder()
             return self._encoder
 
     def _commit(self):
@@ -438,13 +459,58 @@ class LibraryStore:
         return docs
 
 
-_library: LibraryStore | None = None
-_library_lock = threading.Lock()
+# ---- 每个用户一个资料库（#37；设计 §3.4） -----------------------------------------
+LIBRARY_BASE = DATA_DIR / "library"
+_libraries: dict[Path, LibraryStore] = {}
+_libraries_lock = threading.Lock()
 
 
-def get_library() -> LibraryStore:
-    global _library
-    with _library_lock:
-        if _library is None:
-            _library = LibraryStore(DATA_DIR / "library")
-        return _library
+def user_library_root(user_id: int) -> Path:
+    return LIBRARY_BASE / "users" / str(int(user_id))
+
+
+def library_at(root: Path | str) -> LibraryStore:
+    """按目录取资料库，同一目录全进程只开一个。研究引擎只认目录，不认“用户”。"""
+    key = Path(root).resolve()
+    with _libraries_lock:
+        if key not in _libraries:
+            _libraries[key] = LibraryStore(key, shared=True)
+        return _libraries[key]
+
+
+def get_library(user_id: int) -> LibraryStore:
+    """当前用户自己的资料库。别人的资料编号在这里找不到，自然就是“不存在”。"""
+    return library_at(user_library_root(user_id))
+
+
+def library_is_empty(root: Path) -> bool:
+    manifest = root / "manifest.json"
+    if manifest.exists():
+        state = json.loads(manifest.read_text())
+        if state.get("documents") or state.get("versions"):
+            return False
+    versions = root / "versions"
+    return not versions.exists() or not any(versions.iterdir())
+
+
+def adopt_legacy_library(base: Path, owner_root: Path) -> str:
+    """把旧的全站资料库（base/manifest.json + base/versions/）移到管理员目录。
+
+    只移动、不复制不改写；目标已有资料时拒绝，空目录（登录后自动建的）允许替换。
+    返回给人看的结果说明。服务停止时执行，避免运行中的进程还读着旧位置。
+    """
+    manifest, versions = base / "manifest.json", base / "versions"
+    if not manifest.exists() and not (versions.exists() and any(versions.iterdir())):
+        return "没有旧的全站资料库，无需搬移"
+    if owner_root.exists() and not library_is_empty(owner_root):
+        raise LibraryError(f"{owner_root} 里已有资料，未搬移旧资料库；请手工核对后再处理")
+    owner_root.mkdir(parents=True, exist_ok=True)
+    for name in ("manifest.json", "versions"):
+        target = owner_root / name
+        if target.is_dir():
+            target.rmdir()  # library_is_empty 已确认为空
+        elif target.exists():
+            target.unlink()
+        if (base / name).exists():
+            os.replace(base / name, target)
+    return f"旧资料库已移到 {owner_root}"

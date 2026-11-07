@@ -165,7 +165,7 @@ def test_original_ref_checks_bytes_and_reports_recovery_url(tmp_path, monkeypatc
 def test_selected_library_summary_gets_local_original_without_network(tmp_path, monkeypatch):
     from dra import library as library_module, file_sources
     library = library_module.LibraryStore(tmp_path / 'library', encoder=TinyEncoder())
-    monkeypatch.setattr(library_module, 'get_library', lambda: library)
+    monkeypatch.setattr('dra.simple_research._library_for', lambda config: library)
     monkeypatch.setattr(file_sources, 'fetch_original', lambda *a, **kw: pytest.fail('library contacted network'))
     data = b'county,value\r\nAlpha,5\r\n'
     try:
@@ -310,7 +310,7 @@ def test_selected_image_can_be_seen_and_cited_in_library_research(tmp_path, monk
     from dra.library import LibraryStore
     from test_budget_wrapup import _turn
     library = LibraryStore(tmp_path / 'library', encoder=TinyEncoder())
-    monkeypatch.setattr(library_module, 'get_library', lambda: library)
+    monkeypatch.setattr('dra.simple_research._library_for', lambda config: library)
     monkeypatch.setattr(provider_registry, 'capacity_snapshot', lambda *a: {})
     monkeypatch.setattr(vision.llm, 'chat', lambda *a, **k: '图像是红色图块。')
     try:

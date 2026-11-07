@@ -43,7 +43,7 @@ uv run python -m dra.admin migrate
 # 第一个账号：管理员（密码交互输入两次）
 uv run python -m dra.admin create-admin --email you@example.com
 
-# 已有的旧研究登记到管理员名下（只读文件，可重复执行；不登记就看不到旧研究）
+# 已有的旧研究登记到管理员名下、旧资料库移到其目录（服务停止时执行；可重复执行，不覆盖已有资料）
 uv run python -m dra.admin import-legacy --owner you@example.com
 
 # Web 工作台：两个终端分别启动后端和前端
