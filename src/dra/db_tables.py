@@ -12,6 +12,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     MetaData,
     String,
@@ -109,3 +110,41 @@ class LoginSession(Base):
     last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+# ---- 研究记录的归属（阶段 1 第 3 步，#30；设计 §1） --------------------------------
+# 第 1 阶段运行状态仍以 runs/<run_id>/meta.json 为准，这里只记“属于谁、在哪个对话里”。
+
+class Conversation(Base):
+    """一串来回追问。id 沿用文件里的 conversation_id（即首轮的 run_id）。"""
+
+    __tablename__ = "conversations"
+    __table_args__ = (Index("ix_conversations_user_id_created_at", "user_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class ResearchTask(Base):
+    """用户提的一个问题（首问或追问）。"""
+
+    __tablename__ = "research_tasks"
+    __table_args__ = (Index("ix_research_tasks_user_id_created_at", "user_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
+    query: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class RunAttempt(Base):
+    """一次实际执行，对应 runs/<run_id>/。第 1 阶段每个任务恰好一条。"""
+
+    __tablename__ = "run_attempts"
+
+    id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("research_tasks.id"), index=True)
+    run_id: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)

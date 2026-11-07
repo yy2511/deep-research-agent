@@ -30,6 +30,11 @@ def replay_compatibility(meta: dict) -> tuple[bool, str | None]:
     )
 
 
+def new_run_id() -> str:
+    """研究编号：时间 + 8 位随机十六进制，形如 20261107-120000-deadbeef。"""
+    return time.strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8]
+
+
 class RunStore:
     def __init__(self, root: Path):
         self.root = Path(root)
@@ -45,8 +50,10 @@ class RunStore:
         from dra.durable import atomic_json
         atomic_json(self._meta_path(run_id), meta)
 
-    def create_run(self, query: str, plan: dict | None, config_summary: dict, *, identity: dict | None = None) -> str:
-        run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8]
+    def create_run(self, query: str, plan: dict | None, config_summary: dict, *,
+                   identity: dict | None = None, run_id: str | None = None) -> str:
+        """建运行目录与 meta.json。``run_id`` 可由调用方预先生成（先在数据库占位再启动，#30）。"""
+        run_id = run_id or new_run_id()
         self._dir(run_id).mkdir(parents=True)
         self._write_meta(run_id, {
             "run_id": run_id, "query": query, "plan": plan,
@@ -280,7 +287,7 @@ class PlanAttemptStore:
         self._meta_path(plan_id).write_text(
             json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    def create(self, *, query: str, kind: str, config_summary: dict) -> str:
+    def create(self, *, query: str, kind: str, config_summary: dict, user_id: int | None = None) -> str:
         plan_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8]
         self._dir(plan_id).mkdir(parents=True)
         self._write_meta(plan_id, {
@@ -293,6 +300,7 @@ class PlanAttemptStore:
             "finished_at": None,
             "config_summary": config_summary,
             "error": None,
+            **({"user_id": user_id} if user_id is not None else {}),
         })
         return plan_id
 

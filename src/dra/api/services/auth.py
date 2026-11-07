@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cache
@@ -17,15 +15,15 @@ from functools import cache
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
+from sqlalchemy.exc import IntegrityError
 
+from dra.api.services.db_errors import database_errors as _database_errors
 from dra.api.services.errors import (
     Conflict,
     Forbidden,
     InvalidRequest,
     NotFound,
     Unauthorized,
-    Unavailable,
 )
 from dra.db import Database
 from dra.db_tables import Invite, LoginSession, User, utcnow
@@ -43,7 +41,6 @@ INVITE_INVALID = "邀请码无效或已使用"
 EMAIL_TAKEN = "该邮箱已注册"
 LOGIN_FAILED = "邮箱或密码错误"
 ACCOUNT_DISABLED = "账号已停用"
-DB_UNAVAILABLE = "数据库暂时不可用，请稍后再试"
 
 _hasher = PasswordHasher()
 
@@ -100,15 +97,6 @@ def _verify(password_hash: str, password: str) -> bool:
 
 def _info(user: User) -> UserInfo:
     return UserInfo(id=user.id, email=user.email, role=user.role)
-
-
-@contextmanager
-def _database_errors() -> Iterator[None]:
-    """连接类故障翻译成“暂时不可用”；约束冲突等交给调用方各自处理。"""
-    try:
-        yield
-    except (OperationalError, InterfaceError) as exc:
-        raise Unavailable(DB_UNAVAILABLE) from exc
 
 
 def _open_session(session, user_id: int, now: datetime) -> str:

@@ -18,7 +18,7 @@ from dra.api.common import (
     _StrictPayload,
     service_errors,
 )
-from dra.api.deps import RegistryDep, StoreDep
+from dra.api.deps import CurrentUserDep, ReadyDatabaseDep, RegistryDep, StoreDep
 from dra.api.services import runs as run_service
 from dra.api.services.ids import PUBLIC_ID_PATTERN
 from dra.site_filter import MAX_BLOCKED_SITES
@@ -41,12 +41,13 @@ class ResearchReq(_StrictPayload):
 
 
 @router.post("/api/research")
-async def api_research(req: ResearchReq, *, registry: RegistryDep) -> dict:
+async def api_research(req: ResearchReq, user: CurrentUserDep, *, registry: RegistryDep,
+                       db: ReadyDatabaseDep) -> dict:
     if not req.query.strip():
         raise HTTPException(400, "query 不能为空")
     with service_errors():
-        run_id = run_service.start_research(
-            registry, req.query, brief=req.brief, skill_selection=req.skill_selection,
+        run_id = await run_service.start_owned_research(
+            db, registry, user.id, req.query, brief=req.brief, skill_selection=req.skill_selection,
             source_mode=req.source_mode, document_ids=req.document_ids,
             library_rerank=req.library_rerank, mcp_server_ids=req.mcp_server_ids,
             blocked_sites=req.blocked_sites, full_llm_io=req.trace_full_llm_io,
@@ -60,10 +61,12 @@ class FollowupReq(_StrictPayload):
 
 
 @router.post("/api/research/{run_id}/followup", status_code=202)
-async def api_followup(run_id: str, req: FollowupReq, *, store: StoreDep, registry: RegistryDep):
+async def api_followup(run_id: str, req: FollowupReq, user: CurrentUserDep, *, store: StoreDep,
+                       registry: RegistryDep, db: ReadyDatabaseDep):
     _require_valid_run_id(run_id)
     with service_errors():
-        return run_service.start_followup(store, registry, run_id, req.request_id, req.text)
+        return await run_service.start_owned_followup(
+            db, store, registry, user.id, run_id, req.request_id, req.text)
 
 
 _FIXTURE = _ROOT / "fixtures" / "demo_run" / "events.jsonl"

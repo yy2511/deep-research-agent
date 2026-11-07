@@ -11,8 +11,9 @@ from __future__ import annotations
 import argparse
 import getpass
 import sys
+from pathlib import Path
 
-from dra.api.services import auth
+from dra.api.services import auth, run_records
 from dra.api.services.errors import ServiceError
 from dra.db import Database, DatabaseConfigError, DatabaseNotReady, head_revision
 
@@ -100,6 +101,23 @@ def _set_status(status: str):
     return run
 
 
+def _import_legacy(args: argparse.Namespace) -> int:
+    from dra.paths import RUNS_DIR
+
+    runs_root = args.runs_dir or RUNS_DIR
+    database = _ready_database()
+    try:
+        report = run_records.import_legacy(database, runs_root, args.owner)
+    finally:
+        database.dispose()
+    print(f"运行目录：{runs_root}")
+    print(f"新登记 {len(report.imported)} 条；已登记过、跳过 {len(report.already)} 条；"
+          f"读不了、跳过 {len(report.unreadable)} 条。文件均未改动。")
+    for run_id, reason in report.unreadable:
+        print(f"  读不了：{run_id}（{reason}）")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m dra.admin", description="研究工作台管理命令")
     commands = parser.add_subparsers(dest="command", required=True, metavar="命令")
@@ -127,6 +145,12 @@ def _parser() -> argparse.ArgumentParser:
     reset = commands.add_parser("reset-password", help="重设密码并让该用户所有登录失效")
     with_password(reset)
     reset.set_defaults(handler=_reset_password)
+
+    legacy = commands.add_parser(
+        "import-legacy", help="把 runs/ 下的旧研究登记到指定管理员名下（只读文件，可重复执行）")
+    legacy.add_argument("--owner", required=True, help="管理员邮箱")
+    legacy.add_argument("--runs-dir", type=Path, help="运行目录，默认 <数据目录>/runs")
+    legacy.set_defaults(handler=_import_legacy)
 
     for name, status, text in (("disable-user", "disabled", "停用账号并让其所有登录失效"),
                                ("enable-user", "active", "恢复账号")):

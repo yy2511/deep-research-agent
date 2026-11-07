@@ -45,7 +45,7 @@ def test_registry_requires_positive_capacity(tmp_path):
         run_service.RunRegistry(RunStore(tmp_path), max_active_runs=0)
 
 
-def test_api_returns_429_when_capacity_is_full(monkeypatch):
+def test_api_returns_429_when_capacity_is_full(monkeypatch, database, logged_in_user):
     monkeypatch.setattr(runtime_config, "current", runtime_config._code_defaults)
 
     def reject(*_args, **_kwargs):
@@ -55,13 +55,20 @@ def test_api_returns_429_when_capacity_is_full(monkeypatch):
 
     with pytest.raises(HTTPException) as caught:
         asyncio.run(research_api.api_research(research_api.ResearchReq(query="新问题", mode="simple"),
-                                     registry=web.app.state.registry))
+                                     logged_in_user, registry=web.app.state.registry, db=database))
 
     assert caught.value.status_code == 429
     assert caught.value.detail == "已有研究运行中"
+    # 名额已满：数据库里先占的位已撤销（#30）。
+    from sqlalchemy import func, select
+
+    from dra.db_tables import Conversation, ResearchTask, RunAttempt
+    with database.session() as session:
+        for table in (Conversation, ResearchTask, RunAttempt):
+            assert session.scalar(select(func.count()).select_from(table)) == 0
 
 
-def test_api_research_forwards_debug_full_io_flag(monkeypatch):
+def test_api_research_forwards_debug_full_io_flag(monkeypatch, database, logged_in_user):
     monkeypatch.setattr(runtime_config, "current", runtime_config._code_defaults)
     start = MagicMock(return_value="run-debug")
     monkeypatch.setattr(web.app.state.registry, "start_simple_research", start)
@@ -69,9 +76,10 @@ def test_api_research_forwards_debug_full_io_flag(monkeypatch):
     result = asyncio.run(research_api.api_research(research_api.ResearchReq(
         query="新问题", trace_full_llm_io=True,
         mode="simple",
-    ), registry=web.app.state.registry))
+    ), logged_in_user, registry=web.app.state.registry, db=database))
 
     assert result == {"run_id": "run-debug", "mode": "simple"}
     start.assert_called_once_with(
         "新问题", config=ANY, requirements=None, brief=None, full_llm_io=True,
+        run_id=ANY, user_id=logged_in_user.id,
     )
