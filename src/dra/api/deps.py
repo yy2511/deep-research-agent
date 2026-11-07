@@ -126,7 +126,10 @@ def owned_conversation(conversation_id: str, request: Request, user: CurrentUser
 
 
 def visible_runs(request: Request, user: CurrentUserDep):
-    """列表用：判断某个 run_id 是否属于当前用户的函数。"""
+    """列表与对话汇总用：判断某个 run_id 是否登记给当前用户的函数。
+
+    对话也按它过滤轮次：没登记的轮次（如启动失败后残留的目录）不算进对话（#39 审查）。
+    """
     from dra.api.services import run_records
 
     with service_errors():
@@ -134,15 +137,6 @@ def visible_runs(request: Request, user: CurrentUserDep):
     return ids.__contains__
 
 
-def visible_conversations(request: Request, user: CurrentUserDep):
-    from dra.api.services import run_records
-
-    with service_errors():
-        ids = run_records.owned_conversation_ids(require_db(request), user.id)
-    return ids.__contains__
-
-
 VisibleRunsDep = Annotated[object, Depends(visible_runs)]
-VisibleConversationsDep = Annotated[object, Depends(visible_conversations)]
 OWNED_RUN = [Depends(owned_run)]
 OWNED_CONVERSATION = [Depends(owned_conversation)]

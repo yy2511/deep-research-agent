@@ -210,3 +210,98 @@ def test_ownership_check_returns_the_connection_before_streaming(world, database
     with client.stream("GET", f"/api/probe/{alice_run}/stream") as response:
         assert response.read() == alice_run.encode()
     assert seen == [0]
+
+
+# ---- #39 审查：没登记的轮次在对话汇总和追问判断里都不算 ---------------------------------
+
+def _leftover_turn(store, parent, *, request_id="r1", text="追问"):
+    """模拟启动失败后残留的目录：meta.json 完整、指向父对话，但数据库里没有登记。"""
+    child = store.create_run(text, None, {"mode": "simple"}, identity={
+        "conversation_id": parent, "parent_run_id": parent, "turn_index": 2, "request_id": request_id,
+        "followup_request": {"parent_run_id": parent, "text": text}})
+    store.finalize(child, "failed", None)
+    return child
+
+
+def test_conversations_ignore_unregistered_turns(world):
+    store = world["store"]
+    _, alice_client, alice_run = world["alice"]
+    leftover = _leftover_turn(store, alice_run)
+    summary = alice_client.get("/api/conversations").json()
+    assert [(c["conversation_id"], c["latest_run_id"], c["run_id"], c["turn_count"]) for c in summary] == [
+        (alice_run, alice_run, alice_run, 1)]
+    detail = alice_client.get(f"/api/conversations/{alice_run}").json()
+    assert detail["latest_run_id"] == alice_run and detail["total"] == 1
+    assert [t["run_id"] for t in detail["turns"]] == [alice_run]
+    assert alice_client.get(f"/api/runs/{leftover}").status_code == 404
+
+
+@pytest.fixture
+def failed_followup(tmp_path, monkeypatch, database):
+    """真实追问接口：保存追问上下文时失败一次，留下一个没登记的目录。"""
+    from test_research_history import history_fixture
+
+    import dra.durable
+
+    store, parent, _, _ = history_fixture(tmp_path / "history")
+    registry = run_service.RunRegistry(store, max_active_runs=1)
+    monkeypatch.setattr(web.app.state, "store", store)
+    monkeypatch.setattr(web.app.state, "registry", registry)
+    user = auth.create_user(database, "carol@example.com", PASSWORD)
+    run_records.reserve_new_run(database, user.id, parent, "研究日志与备份")
+    client = TestClient(web.app, raise_server_exceptions=False,
+                        cookies={SESSION_COOKIE: auth.login(database, user.email, PASSWORD).token})
+
+    real_atomic_json = dra.durable.atomic_json
+    failures = []
+
+    def fail_once(path, value):
+        if getattr(path, "name", "") == "followup_context.json" and not failures:
+            failures.append(path)
+            raise OSError("disk full")
+        return real_atomic_json(path, value)
+
+    monkeypatch.setattr(dra.durable, "atomic_json", fail_once)
+    response = client.post(f"/api/research/{parent}/followup", json={"request_id": "r1", "text": "继续"})
+    assert response.status_code == 500
+    leftover = failures[0].parent.name
+    assert store.get_meta(leftover)["status"] == "failed"
+
+    started = []
+
+    def start(query, **kwargs):
+        # 只核对追问判断，不真正开跑研究：按真实流程建好这一轮的目录。
+        context = kwargs["followup_context"]
+        started.append(kwargs["run_id"])
+        return store.create_run(query, None, {"mode": "simple"}, run_id=kwargs["run_id"], identity={
+            **{k: context[k] for k in ("conversation_id", "parent_run_id", "turn_index", "request_id")},
+            "followup_request": {"parent_run_id": context["parent_run_id"], "text": query}})
+
+    monkeypatch.setattr(registry, "start_simple_research", start)
+    return {"client": client, "parent": parent, "leftover": leftover, "started": started}
+
+
+def test_failed_followup_leaves_the_conversation_usable(failed_followup):
+    client, parent, leftover = (failed_followup[k] for k in ("client", "parent", "leftover"))
+    assert client.get(f"/api/runs/{leftover}").status_code == 404
+    summary = client.get("/api/conversations").json()
+    assert [(c["latest_run_id"], c["turn_count"]) for c in summary] == [(parent, 1)]
+    assert client.get(f"/api/conversations/{parent}").json()["latest_run_id"] == parent
+
+
+def test_retrying_the_same_followup_starts_a_reachable_turn(failed_followup):
+    client, parent, leftover = (failed_followup[k] for k in ("client", "parent", "leftover"))
+    response = client.post(f"/api/research/{parent}/followup", json={"request_id": "r1", "text": "继续"})
+    assert response.status_code == 202, response.text
+    new_run = response.json()["run_id"]
+    assert new_run != leftover and failed_followup["started"] == [new_run]
+    assert client.get(f"/api/runs/{new_run}").status_code == 200
+    detail = client.get(f"/api/conversations/{parent}").json()
+    assert [t["run_id"] for t in detail["turns"]] == [parent, new_run]
+
+
+def test_a_different_followup_is_not_blocked_by_the_leftover(failed_followup):
+    client, parent = failed_followup["client"], failed_followup["parent"]
+    response = client.post(f"/api/research/{parent}/followup", json={"request_id": "r2", "text": "换个问法"})
+    assert response.status_code == 202, response.text
+    assert client.get(f"/api/runs/{response.json()['run_id']}").status_code == 200

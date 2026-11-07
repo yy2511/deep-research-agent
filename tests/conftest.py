@@ -191,8 +191,7 @@ def logged_in_user(database, request):
 
     overrides = {current_user: lambda: info, deps.owned_run: owned_run,
                  deps.owned_conversation: owned_conversation,
-                 deps.visible_runs: lambda: (lambda _id: True),
-                 deps.visible_conversations: lambda: (lambda _id: True)}
+                 deps.visible_runs: lambda: (lambda _id: True)}
     app.dependency_overrides.update(overrides)
     try:
         yield info

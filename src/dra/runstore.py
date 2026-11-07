@@ -125,14 +125,20 @@ class RunStore:
             })
         return sorted(enriched, key=lambda m: m.get("started_at") or 0, reverse=True)
 
-    def conversation_turns(self, conversation_id: str) -> list[dict]:
+    def conversation_turns(self, conversation_id: str, *, counted=None) -> list[dict]:
+        """对话里的各轮。``counted(run_id)`` 为假的轮次不算（#39 审查：以数据库登记为准，
+        失败后残留的目录不能出现在对话里）。"""
         return sorted((m for m in self.list_runs()
-                       if m.get("conversation_id", m["run_id"]) == conversation_id),
+                       if m.get("conversation_id", m["run_id"]) == conversation_id
+                       and (counted is None or counted(m["run_id"]))),
                       key=lambda m: (m.get("turn_index", 1), m.get("started_at", 0)))
 
-    def conversations(self) -> list[dict]:
+    def conversations(self, *, counted=None) -> list[dict]:
+        """按对话汇总；只用 ``counted`` 认可的轮次计算轮数、最新一轮与首问。"""
         groups = {}
         for meta in self.list_runs():
+            if counted is not None and not counted(meta["run_id"]):
+                continue
             cid = meta.get("conversation_id", meta["run_id"])
             group = groups.setdefault(cid, {"conversation_id":cid,"turns":[]})
             group["turns"].append(meta)

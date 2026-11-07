@@ -227,7 +227,10 @@ class RunRegistry:
         return run_id
 
     @_admission
-    def start_followup(self, parent_run_id, request_id, text, *, config, run_id=None, user_id=None):
+    def start_followup(self, parent_run_id, request_id, text, *, config, run_id=None, user_id=None,
+                       counted=None):
+        """``counted(run_id)``：哪些轮次算数（以数据库登记为准）。启动失败后残留的目录
+        不参与“重复提交”与“是否最新一轮”的判断（#39 审查）；不传时按文件全部算。"""
         from dra.research_history import HistoryError, ancestors, prepare_context
         if not isinstance(request_id,str) or not _RUN_ID_RE.fullmatch(request_id):
             raise HistoryError("request_id 须为 1–64 位字母、数字、下划线或连字符")
@@ -235,7 +238,7 @@ class RunRegistry:
             raise HistoryError("追问须为 1–6000 字符的非空文字")
         chain = ancestors(self.store, parent_run_id)
         cid = chain[0]["run_id"]
-        turns = self.store.conversation_turns(cid)
+        turns = self.store.conversation_turns(cid, counted=counted)
         body = {"parent_run_id":parent_run_id,"text":text}
         for item in turns:
             if item.get("request_id") == request_id:
@@ -590,7 +593,7 @@ def start_research(
 _pending_cleanups: set[asyncio.Task] = set()
 
 
-async def _reserve(db: Database, run_id: str, reserve, *args) -> None:
+async def _reserve(db: Database, run_id: str, reserve, *args):
     """在线程里占位。等待期间请求被取消（客户端断开、服务关闭）时，线程仍会把占位写完；
     这里安排一个后台任务：等线程真正结束，写入成功就撤销，主流程照常按取消退出（#36 审查）。
 
@@ -598,7 +601,7 @@ async def _reserve(db: Database, run_id: str, reserve, *args) -> None:
     """
     reservation = asyncio.ensure_future(asyncio.to_thread(reserve, *args))
     try:
-        await asyncio.shield(reservation)
+        return await asyncio.shield(reservation)
     except asyncio.CancelledError:
         cleanup = asyncio.ensure_future(_release_after(reservation, db, run_id))
         _pending_cleanups.add(cleanup)
@@ -648,10 +651,12 @@ async def start_owned_followup(db: Database, store: RunStore, registry: RunRegis
     if store.get_meta(parent_run_id) is None:
         raise NotFound("run 不存在")
     run_id = new_run_id()
-    await _reserve(db, run_id, run_records.reserve_followup, db, user_id, parent_run_id, run_id, text)
+    _conversation, counted = await _reserve(
+        db, run_id, run_records.reserve_followup, db, user_id, parent_run_id, run_id, text)
     try:
         result = start_followup(store, registry, parent_run_id, request_id, text,
-                                reserved_run_id=run_id, user_id=user_id)
+                                reserved_run_id=run_id, user_id=user_id,
+                                counted=counted.__contains__)
     except BaseException:
         await asyncio.to_thread(run_records.release_quietly, db, run_id)
         raise
@@ -661,7 +666,8 @@ async def start_owned_followup(db: Database, store: RunStore, registry: RunRegis
 
 
 def start_followup(store: RunStore, registry: RunRegistry, run_id: str, request_id: str, text: str,
-                   *, reserved_run_id: str | None = None, user_id: int | None = None) -> dict:
+                   *, reserved_run_id: str | None = None, user_id: int | None = None,
+                   counted=None) -> dict:
     """在已有运行之后追问，开始新一轮研究；返回新一轮的身份信息。"""
     from dra import runtime_config
     from dra.research_history import HistoryError
@@ -670,7 +676,7 @@ def start_followup(store: RunStore, registry: RunRegistry, run_id: str, request_
     try:
         config=runtime_config.to_simple_config(runtime_config.current())
         new_id=registry.start_followup(run_id,request_id,text,config=config,
-                                       run_id=reserved_run_id,user_id=user_id)
+                                       run_id=reserved_run_id,user_id=user_id,counted=counted)
     except (HistoryError, LibraryError, mcp_client.MCPError) as exc:
         raise Conflict(str(exc)) from exc
     meta=store.get_meta(new_id)
