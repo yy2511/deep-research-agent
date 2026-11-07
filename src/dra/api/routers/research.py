@@ -18,12 +18,14 @@ from dra.api.common import (
     _StrictPayload,
     service_errors,
 )
-from dra.api.deps import CurrentUserDep, ReadyDatabaseDep, RegistryDep, StoreDep
+from dra.api.deps import OWNED_RUN, CurrentUserDep, ReadyDatabaseDep, RegistryDep, StoreDep
 from dra.api.services import runs as run_service
 from dra.api.services.ids import PUBLIC_ID_PATTERN
 from dra.site_filter import MAX_BLOCKED_SITES
 
 router = APIRouter()
+# 带研究编号的接口：分组上统一检查归属（#31）。
+run_router = APIRouter(dependencies=OWNED_RUN)
 
 
 class ResearchReq(_StrictPayload):
@@ -60,7 +62,7 @@ class FollowupReq(_StrictPayload):
     text: str = Field(min_length=1, max_length=6000)
 
 
-@router.post("/api/research/{run_id}/followup", status_code=202)
+@run_router.post("/api/research/{run_id}/followup", status_code=202)
 async def api_followup(run_id: str, req: FollowupReq, user: CurrentUserDep, *, store: StoreDep,
                        registry: RegistryDep, db: ReadyDatabaseDep):
     _require_valid_run_id(run_id)
@@ -76,7 +78,7 @@ def _sse_frame(evt: dict) -> str:
     return f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
 
 
-@router.get("/api/research/{run_id}/stream")
+@run_router.get("/api/research/{run_id}/stream")
 async def api_stream(run_id: str, compact: bool = False, *, registry: RegistryDep) -> StreamingResponse:
     """SSE：原子「订阅+快照」后先补发 backlog 再续推 live，按 seq 去重——
     刷新页面 = 重连 = 不丢现场。end 事件后关流（EventSource 侧 close 防自动重连）。"""
@@ -107,7 +109,7 @@ class ResearchMessageReq(_StrictPayload):
     text: str = Field(min_length=1, max_length=6000)
 
 
-@router.post("/api/research/{run_id}/messages", status_code=202)
+@run_router.post("/api/research/{run_id}/messages", status_code=202)
 def api_research_message(run_id: str, req: ResearchMessageReq, *, store: StoreDep,
                          registry: RegistryDep) -> dict:
     _require_valid_run_id(run_id)
@@ -117,7 +119,7 @@ def api_research_message(run_id: str, req: ResearchMessageReq, *, store: StoreDe
         return run_service.post_message(store, registry, run_id, req.message_id, req.text)
 
 
-@router.post("/api/research/{run_id}/cancel")
+@run_router.post("/api/research/{run_id}/cancel")
 def api_cancel(run_id: str, *, store: StoreDep, registry: RegistryDep) -> dict:
     """请求协作式取消，真实研究线程结束后释放名额。"""
     _require_valid_run_id(run_id)

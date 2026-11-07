@@ -172,10 +172,33 @@ def logged_in_user(database, request):
         session.flush()
         info = UserInfo(id=user.id, email=user.email, role=user.role)
     app.dependency_overrides[current_user] = lambda: info
+    # 现有测试的研究多是直接写文件建的、没在数据库登记；归属检查（#31）默认放行，
+    # 但仍保留编号格式检查。真实的归属行为由标了 real_auth 的 tests/test_run_ownership.py 测。
+    from fastapi import HTTPException
+
+    from dra.api import deps
+    from dra.api.services.ids import RUN_ID_RE
+
+    def owned_run(run_id: str) -> str:
+        if not RUN_ID_RE.fullmatch(run_id):
+            raise HTTPException(404, "run 不存在")
+        return run_id
+
+    def owned_conversation(conversation_id: str) -> str:
+        if not RUN_ID_RE.fullmatch(conversation_id):
+            raise HTTPException(404, "研究会话不存在")
+        return conversation_id
+
+    overrides = {current_user: lambda: info, deps.owned_run: owned_run,
+                 deps.owned_conversation: owned_conversation,
+                 deps.visible_runs: lambda: (lambda _id: True),
+                 deps.visible_conversations: lambda: (lambda _id: True)}
+    app.dependency_overrides.update(overrides)
     try:
         yield info
     finally:
-        app.dependency_overrides.pop(current_user, None)
+        for key in overrides:
+            app.dependency_overrides.pop(key, None)
 
 
 def pytest_addoption(parser):

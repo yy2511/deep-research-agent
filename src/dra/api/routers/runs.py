@@ -1,7 +1,6 @@
 """历史运行接口：列表、详情、事件回放、来源原文、产物、执行日志。"""
 from __future__ import annotations
 
-import hashlib
 import html
 import json
 import re
@@ -11,62 +10,54 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
 from dra.api.common import _compact_event, _original_response, _require_valid_run_id
-from dra.api.deps import RegistryDep, StoreDep
+from dra.api.deps import OWNED_RUN, RegistryDep, StoreDep, VisibleRunsDep
 from dra.api.services.runs import _run_input_snapshot
 from dra.runstore import IncompatibleEventSchemaError, RunStore, replay_compatibility
 
 router = APIRouter()
+# 带研究编号的接口：分组上统一检查归属（#31）。
+run_router = APIRouter(dependencies=OWNED_RUN)
 
 
 @router.get("/api/runs")
-def api_runs(*, store: StoreDep) -> list[dict]:
-    return store.list_runs()
+def api_runs(visible: VisibleRunsDep, *, store: StoreDep) -> list[dict]:
+    return [meta for meta in store.list_runs() if visible(meta["run_id"])]
 
 
-@router.get("/api/runs/{run_id}/mcp-results/{receipt_id}")
+@run_router.get("/api/runs/{run_id}/mcp-results/{receipt_id}")
 def api_mcp_receipt(run_id: str, receipt_id: str, *, store: StoreDep):
     _require_valid_run_id(run_id)
     if not re.fullmatch(r"[a-f0-9]{32}", receipt_id):
         raise HTTPException(404, "MCP 回执不存在")
-    path = store._dir(run_id) / "mcp_results" / f"{receipt_id}.json"
-    if not path.is_file() or path.resolve().parent != path.parent.resolve():
-        raise HTTPException(404, "MCP 回执不存在")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        receipt = store.read_mcp_receipt(run_id, receipt_id)
     except (ValueError, OSError):
         raise HTTPException(503, "MCP 回执读取失败") from None
+    if receipt is None:
+        raise HTTPException(404, "MCP 回执不存在")
+    return receipt
 
 
-@router.get("/api/runs/{run_id}/images/{sha256}")
+@run_router.get("/api/runs/{run_id}/images/{sha256}")
 def api_run_image(run_id: str, sha256: str, *, store: StoreDep):
     _require_valid_run_id(run_id)
     if not re.fullmatch(r"[a-f0-9]{64}", sha256) or store.get_meta(run_id) is None:
         raise HTTPException(404, "图片不存在")
     try:
-        data = (store._dir(run_id) / "images" / (sha256 + ".png")).read_bytes()
-        if hashlib.sha256(data).hexdigest() != sha256:
-            raise ValueError("hash mismatch")
+        data = store.read_image(run_id, sha256)
         return Response(data, media_type="image/png", headers={"X-Content-Type-Options": "nosniff"})
     except (OSError, ValueError) as exc:
         raise HTTPException(404, "图片缺失或校验失败") from exc
 
 
-@router.get("/api/runs/{run_id}/sources/{ref}/original")
+@run_router.get("/api/runs/{run_id}/sources/{ref}/original")
 def api_run_original(run_id: str, ref: str, *, store: StoreDep):
     _require_valid_run_id(run_id)
     if not re.fullmatch(r"s[0-9]{1,6}", ref) or store.get_meta(run_id) is None:
         raise HTTPException(404, "来源不存在")
     try:
-        directory = store.root / run_id
-        ledger = json.loads((directory / "run.json").read_text())
-        source = next(s for s in ledger["sources"] if s["ref"] == ref and s["snapshot_kind"] in ("full", "original"))
+        data, source = store.read_source_original(run_id, ref)
         document = source.get("document") or source.get("download")
-        path = directory / "sources" / f"{ref}.original"
-        if path.resolve().parent != (directory / "sources").resolve():
-            raise ValueError("非法来源路径")
-        data = path.read_bytes()
-        if hashlib.sha256(data).hexdigest() != document["original_sha256"]:
-            raise ValueError("hash mismatch")
         if source.get("download"):
             return Response(data, media_type="application/octet-stream", headers={
                 "Content-Disposition": "attachment; filename*=UTF-8''" + quote(document["filename"]),
@@ -76,7 +67,7 @@ def api_run_original(run_id: str, ref: str, *, store: StoreDep):
         raise HTTPException(404, "该运行未保存资料原件或原件校验失败") from exc
 
 
-@router.get("/api/runs/{run_id}")
+@run_router.get("/api/runs/{run_id}")
 def api_run_detail(run_id: str, *, store: StoreDep, registry: RegistryDep) -> dict:
     _require_valid_run_id(run_id)
     meta = store.get_meta(run_id)
@@ -96,7 +87,7 @@ def api_run_detail(run_id: str, *, store: StoreDep, registry: RegistryDep) -> di
     }
 
 
-@router.get("/api/runs/{run_id}/artifacts")
+@run_router.get("/api/runs/{run_id}/artifacts")
 def api_artifact_list(run_id: str, *, store: StoreDep):
     from dra.artifacts import committed_records
     _require_valid_run_id(run_id)
@@ -105,14 +96,16 @@ def api_artifact_list(run_id: str, *, store: StoreDep):
 
 
 def _artifact_response(store: RunStore, run_id, artifact_id, preview=False):
-    from dra.artifacts import committed_records, read_committed_file, previewable, ExecutionError
-    from fastapi.responses import Response
     from urllib.parse import quote
+
+    from fastapi.responses import Response
+
+    from dra.artifacts import ExecutionError, committed_records, previewable
     _require_valid_run_id(run_id)
     if store.get_meta(run_id) is None: raise HTTPException(404, "run not found")
     item=next((a for a in committed_records(store.read_simple_result(run_id)) if a.get('artifact_id')==artifact_id),None)
     if item is None: raise HTTPException(404, "artifact not found")
-    try: data=read_committed_file(store._dir(run_id),item)
+    try: data=store.read_artifact(run_id,item)
     except ExecutionError as exc: raise HTTPException(409,str(exc)) from exc
     # 个人 demo：按文件本身的浏览器能力预览，不额外封锁脚本和外部资源。
     headers={"X-Content-Type-Options":"nosniff", "Cache-Control":"private, no-store"}
@@ -123,32 +116,31 @@ def _artifact_response(store: RunStore, run_id, artifact_id, preview=False):
     return Response(data,media_type=media,headers=headers)
 
 
-@router.get("/api/runs/{run_id}/artifacts/{artifact_id}/download")
+@run_router.get("/api/runs/{run_id}/artifacts/{artifact_id}/download")
 def api_artifact_download(run_id: str,artifact_id: str, *, store: StoreDep):
     return _artifact_response(store,run_id,artifact_id)
 
 
-@router.get("/api/runs/{run_id}/artifacts/{artifact_id}/preview")
+@run_router.get("/api/runs/{run_id}/artifacts/{artifact_id}/preview")
 def api_artifact_preview(run_id: str,artifact_id: str, *, store: StoreDep):
     return _artifact_response(store,run_id,artifact_id,preview=True)
 
 
-@router.get("/api/runs/{run_id}/execution/logs/{execution_id}")
+@run_router.get("/api/runs/{run_id}/execution/logs/{execution_id}")
 def api_execution_log(run_id: str,execution_id: str,stream: str='stdout',cursor: int=0, *, store: StoreDep):
     _require_valid_run_id(run_id)
     if store.get_meta(run_id) is None: raise HTTPException(404,"run not found")
     if not re.fullmatch(r'exec_[a-f0-9]{32}',execution_id) or stream not in ('stdout','stderr') or cursor<0:
         raise HTTPException(400,"invalid log request")
-    root=store._dir(run_id).resolve();path=root/'execution'/'logs'/f'{execution_id}.{stream}'
-    if not path.is_file() or path.resolve()!=path: raise HTTPException(404,"log not found")
-    size=path.stat().st_size
-    if cursor>size:raise HTTPException(400,"invalid cursor")
-    with path.open('rb') as handle:
-        handle.seek(cursor);data=handle.read(65536)
-    return {"text":data.decode('utf-8','replace'),"next_cursor":cursor+len(data) if cursor+len(data)<size else None,"size":size}
+    try:
+        log=store.read_execution_log(run_id,execution_id,stream,cursor)
+    except ValueError:
+        raise HTTPException(400,"invalid cursor") from None
+    if log is None: raise HTTPException(404,"log not found")
+    return log
 
 
-@router.get("/api/runs/{run_id}/simple")
+@run_router.get("/api/runs/{run_id}/simple")
 def api_run_simple(run_id: str, *, store: StoreDep) -> dict:
     """simple 运行的四状态结果（刷新/历史回看与结束时一致）。
 
@@ -163,7 +155,7 @@ def api_run_simple(run_id: str, *, store: StoreDep) -> dict:
     return payload
 
 
-@router.get("/api/runs/{run_id}/context/{checkpoint_id}")
+@run_router.get("/api/runs/{run_id}/context/{checkpoint_id}")
 def api_context_history(run_id: str, checkpoint_id: str, cursor: int = 0, *, store: StoreDep) -> dict:
     """只读分页；ID 限定当前 run 内已落盘整理记录，不接受文件路径。"""
     _require_valid_run_id(run_id)
@@ -171,11 +163,10 @@ def api_context_history(run_id: str, checkpoint_id: str, cursor: int = 0, *, sto
         raise HTTPException(404, "run 不存在")
     if not re.fullmatch(r"ctx-[0-9a-f]{32}", checkpoint_id) or cursor < 0:
         raise HTTPException(400, "整理记录 ID 或 cursor 无效")
-    paths = list((store._dir(run_id) / "context").glob(f"*/{checkpoint_id}.json"))
-    if len(paths) != 1:
-        raise HTTPException(404, "整理记录不存在")
     try:
-        data = json.loads(paths[0].read_text(encoding="utf-8"))
+        data = store.read_context_checkpoint(run_id, checkpoint_id)
+        if data is None:
+            raise HTTPException(404, "整理记录不存在")
         raw = json.dumps(data.get("raw_exchanges", data["messages"]), ensure_ascii=False)
     except (OSError, ValueError, KeyError):
         raise HTTPException(503, "整理记录暂时无法读取")
@@ -186,19 +177,18 @@ def api_context_history(run_id: str, checkpoint_id: str, cursor: int = 0, *, sto
             "next_cursor": end if end < len(raw) else None}
 
 
-@router.get("/api/runs/{run_id}/materials")
+@run_router.get("/api/runs/{run_id}/materials")
 def api_run_materials(run_id: str, *, store: StoreDep) -> dict:
     """运行期间也可读已持久化卡片；不把未交付草稿当报告。"""
     _require_valid_run_id(run_id)
     if store.get_meta(run_id) is None:
         raise HTTPException(404, "run 不存在")
-    path = store._dir(run_id) / "run.json"
-    if not path.exists():
-        return {"sources": [], "cards": []}
     try:
-        state = json.loads(path.read_text(encoding="utf-8"))
+        state = store.read_ledger(run_id)
     except (ValueError, OSError):
         raise HTTPException(503, "研究材料暂时无法读取")
+    if state is None:
+        return {"sources": [], "cards": []}
     return {"sources": state.get("sources", []), "cards": state.get("cards", [])}
 
 
@@ -230,7 +220,7 @@ def _highlight_page(run_id: str, ref: str, text: str, start: int, end: int) -> s
     )
 
 
-@router.get("/api/runs/{run_id}/sources/{ref}", response_class=PlainTextResponse)
+@run_router.get("/api/runs/{run_id}/sources/{ref}", response_class=PlainTextResponse)
 def api_run_source(run_id: str, ref: str, hl: str | None = None, *, store: StoreDep):
     """读该运行**已保存**的原文快照；不重新联网、不用新抓的网页冒充旧原文。
 
@@ -254,7 +244,7 @@ def api_run_source(run_id: str, ref: str, hl: str | None = None, *, store: Store
     return text
 
 
-@router.get("/api/runs/{run_id}/events", response_class=PlainTextResponse)
+@run_router.get("/api/runs/{run_id}/events", response_class=PlainTextResponse)
 def api_run_events(run_id: str, compact: bool = False, *, store: StoreDep) -> str:
     _require_valid_run_id(run_id)
     try:
@@ -272,7 +262,7 @@ def api_run_events(run_id: str, compact: bool = False, *, store: StoreDep) -> st
     return text
 
 
-@router.get("/api/runs/{run_id}/events/{seq}")
+@run_router.get("/api/runs/{run_id}/events/{seq}")
 def api_run_event_detail(run_id: str, seq: int, *, store: StoreDep) -> dict:
     text = api_run_events(run_id, store=store)
     try:

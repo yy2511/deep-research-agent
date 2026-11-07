@@ -4,17 +4,19 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from dra.api.common import _require_valid_run_id
-from dra.api.deps import StoreDep
+from dra.api.deps import OWNED_CONVERSATION, StoreDep, VisibleConversationsDep
 
 router = APIRouter()
+# 带对话编号的接口：分组上统一检查归属（#31）。
+conversation_router = APIRouter(dependencies=OWNED_CONVERSATION)
 
 
 @router.get("/api/conversations")
-def api_conversations(*, store: StoreDep):
-    return store.conversations()
+def api_conversations(visible: VisibleConversationsDep, *, store: StoreDep):
+    return [c for c in store.conversations() if visible(c["conversation_id"])]
 
 
-@router.get("/api/conversations/{conversation_id}")
+@conversation_router.get("/api/conversations/{conversation_id}")
 def api_conversation(conversation_id: str, cursor: int = 0, *, store: StoreDep):
     _require_valid_run_id(conversation_id)
     if cursor < 0:

@@ -245,6 +245,81 @@ class RunStore:
         p = self._dir(run_id) / "report.md"
         return p.read_text(encoding="utf-8") if p.exists() else None
 
+    # ---- 运行目录里的文件读取（#23：接口层不再自己拼路径） -------------------------
+    # 返回 None 表示“没有”；读坏了（OSError / ValueError 等）照常抛出，由接口层决定状态码。
+
+    def read_ledger(self, run_id: str) -> dict | None:
+        """研究账本 run.json（来源、卡片、技能加载记录）；还没生成时返回 None。"""
+        path = self._dir(run_id) / "run.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def read_skill_snapshot(self, run_id: str) -> dict | None:
+        """开跑时记录的技能目录 skills.json；早于技能记录的运行没有，返回 None。"""
+        path = self._dir(run_id) / "skills.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text())
+
+    def read_mcp_receipt(self, run_id: str, receipt_id: str) -> dict | None:
+        directory = self._dir(run_id) / "mcp_results"
+        path = directory / f"{receipt_id}.json"
+        if not path.is_file() or path.resolve().parent != directory.resolve():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def read_image(self, run_id: str, sha256: str) -> bytes:
+        """按内容哈希读页图或裁剪图；哈希对不上抛 ValueError。"""
+        data = (self._dir(run_id) / "images" / (sha256 + ".png")).read_bytes()
+        if hashlib.sha256(data).hexdigest() != sha256:
+            raise ValueError("hash mismatch")
+        return data
+
+    def read_source_original(self, run_id: str, ref: str) -> tuple[bytes, dict]:
+        """来源原件与账本里的来源记录；没有原件、路径或哈希不对时抛异常。"""
+        directory = self._dir(run_id)
+        ledger = json.loads((directory / "run.json").read_text())
+        source = next(s for s in ledger["sources"]
+                      if s["ref"] == ref and s["snapshot_kind"] in ("full", "original"))
+        document = source.get("document") or source.get("download")
+        path = directory / "sources" / f"{ref}.original"
+        if path.resolve().parent != (directory / "sources").resolve():
+            raise ValueError("非法来源路径")
+        data = path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != document["original_sha256"]:
+            raise ValueError("hash mismatch")
+        return data, source
+
+    def read_artifact(self, run_id: str, item: dict) -> bytes:
+        from dra.artifacts import read_committed_file
+
+        return read_committed_file(self._dir(run_id), item)
+
+    def read_execution_log(self, run_id: str, execution_id: str, stream: str,
+                           cursor: int, chunk: int = 65536) -> dict | None:
+        """分段读执行日志；不存在返回 None，cursor 超出文件大小抛 ValueError。"""
+        root = self._dir(run_id).resolve()
+        path = root / "execution" / "logs" / f"{execution_id}.{stream}"
+        if not path.is_file() or path.resolve() != path:
+            return None
+        size = path.stat().st_size
+        if cursor > size:
+            raise ValueError("invalid cursor")
+        with path.open("rb") as handle:
+            handle.seek(cursor)
+            data = handle.read(chunk)
+        return {"text": data.decode("utf-8", "replace"),
+                "next_cursor": cursor + len(data) if cursor + len(data) < size else None,
+                "size": size}
+
+    def read_context_checkpoint(self, run_id: str, checkpoint_id: str) -> dict | None:
+        """长对话整理记录；找不到或不唯一返回 None。"""
+        paths = list((self._dir(run_id) / "context").glob(f"*/{checkpoint_id}.json"))
+        if len(paths) != 1:
+            return None
+        return json.loads(paths[0].read_text(encoding="utf-8"))
+
     def mark_orphans(self) -> int:
         """重启时把未结束运行标为失败，保留已有结果与材料。"""
         n = 0
