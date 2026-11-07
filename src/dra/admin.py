@@ -115,6 +115,15 @@ def _import_legacy(args: argparse.Namespace) -> int:
           f"读不了、跳过 {len(report.unreadable)} 条。文件均未改动。")
     for run_id, reason in report.unreadable:
         print(f"  读不了：{run_id}（{reason}）")
+    # 旧的全站资料库移到管理员自己的目录（#37）。服务停止时执行。
+    from dra.library import LIBRARY_BASE, LibraryError, adopt_legacy_library, user_library_root
+
+    library_base = args.library_dir or LIBRARY_BASE
+    try:
+        print(f"资料库：{adopt_legacy_library(library_base, user_library_root(report.owner_id))}")
+    except LibraryError as exc:
+        print(f"错误：资料库未搬移：{exc}", file=sys.stderr)
+        return 2
     return 0
 
 
@@ -147,9 +156,11 @@ def _parser() -> argparse.ArgumentParser:
     reset.set_defaults(handler=_reset_password)
 
     legacy = commands.add_parser(
-        "import-legacy", help="把 runs/ 下的旧研究登记到指定管理员名下（只读文件，可重复执行）")
+        "import-legacy",
+        help="把 runs/ 下的旧研究登记到指定管理员名下，并把旧的全站资料库移到其目录（请在服务停止时执行）")
     legacy.add_argument("--owner", required=True, help="管理员邮箱")
     legacy.add_argument("--runs-dir", type=Path, help="运行目录，默认 <数据目录>/runs")
+    legacy.add_argument("--library-dir", type=Path, help="旧的全站资料库目录，默认 <数据目录>/library")
     legacy.set_defaults(handler=_import_legacy)
 
     for name, status, text in (("disable-user", "disabled", "停用账号并让其所有登录失效"),

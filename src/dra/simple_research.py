@@ -110,6 +110,15 @@ from dra import vision
 from dra.vision import VisionConfig
 
 
+def _library_for(config):
+    """按研究配置里的目录打开资料库；没指定就报错，不退回到别的资料库。"""
+    from dra.library import LibraryError, library_at
+
+    if not config.library_root:
+        raise LibraryError("本次研究没有指定资料库目录")
+    return library_at(config.library_root)
+
+
 class SimpleConfig(BaseModel):
     """最小闭环的预算与限额。
 
@@ -130,6 +139,8 @@ class SimpleConfig(BaseModel):
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     source_mode: Literal["web", "library", "mixed"] = "web"
     library_selection: dict = Field(default_factory=dict)
+    # 所选资料所在的资料库目录（#37：每个用户一个）。引擎只认目录，不认“用户”。
+    library_root: str | None = None
     library_rerank: bool = False
     max_llm_calls: int | None = None
     """本 Agent 研究、压缩和收尾的模型调用上限；None 不限制次数，仍统计调用。"""
@@ -2054,6 +2065,7 @@ class ToolContext:
             self.store,
             config.model_copy(update={"source_mode": self.config.source_mode,
                                       "library_selection": self.config.library_selection,
+                                      "library_root": self.config.library_root,
                                       "library_rerank": self.config.library_rerank,
                                       "mcp_servers": self.config.mcp_servers,
                                       "blocked_sites": self.config.blocked_sites,
@@ -3326,9 +3338,7 @@ class ToolContext:
 
     def _search_library(self, query: str) -> list[RetrievedDoc]:
         """首查保留任务原意与改写查询各自的命中，不再次截成 top-8 丢掉补召回。"""
-        from dra.library import get_library
-
-        library = get_library()
+        library = _library_for(self.config)
         def search(text):
             return library.search(text, self.config.library_selection, rerank=self.config.library_rerank)
 
@@ -3420,10 +3430,10 @@ class ToolContext:
         ② 确实只有摘要时，才显式按 URL 取正文（真正的页面提取，不是重新搜索）。
         """
         if summary.get("document"):
-            from dra.library import get_library, LibraryError
+            from dra.library import LibraryError
             try:
                 version_id = summary["document"]["version_id"]
-                library = get_library()
+                library = _library_for(self.config)
                 version = library.read_version(version_id)
                 doc = RetrievedDoc(title=version["file_name"], snippet="", raw_content=version["text"],
                                    document=summary["document"])
@@ -4592,8 +4602,7 @@ def run_lead_loop(
         # 子 Agent 共用 store.query，但检索补查必须采用自己的任务，不能跑回主线范围。
         context.effective_query = mission_text or store.query
     if config.library_selection.get('original_version_ids'):
-        from dra.library import get_library
-        library = get_library()
+        library = _library_for(config)
         for version_id in config.library_selection['original_version_ids']:
             version = library.read_version(version_id)
             if version['status'] == 'original':

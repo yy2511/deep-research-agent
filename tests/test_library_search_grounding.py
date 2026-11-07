@@ -24,7 +24,7 @@ def document(ids, version="v1"):
 def search_spy(monkeypatch, fn):
     class Library:
         search = staticmethod(fn)
-    monkeypatch.setattr(lib, "get_library", lambda: Library())
+    monkeypatch.setattr(sr, "_library_for", lambda config: Library())
 
 
 def test_first_search_keeps_both_rankings_and_one_copy_of_each_chunk(tmp_path, monkeypatch):

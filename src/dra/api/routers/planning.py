@@ -90,10 +90,11 @@ class SourceSelectionReq(BaseModel):
     mcp_server_ids: list[str] = Field(default_factory=list, max_length=4)
 
 
-def _brief_sources(req: SourceSelectionReq) -> dict:
+def _brief_sources(req: SourceSelectionReq, user_id: int) -> dict:
     with service_errors():
         return source_context(skill_selection=req.skill_selection, source_mode=req.source_mode,
-                              document_ids=req.document_ids, mcp_server_ids=req.mcp_server_ids)
+                              document_ids=req.document_ids, mcp_server_ids=req.mcp_server_ids,
+                              user_id=user_id)
 
 
 class BriefReq(SourceSelectionReq):
@@ -126,7 +127,7 @@ def api_brief(req: BriefReq, request: Request, stream: bool = False, *, plan_sto
     """
     if not req.query.strip():
         raise HTTPException(400, "query 不能为空")
-    sources = _brief_sources(req)
+    sources = _brief_sources(req, user.id)
 
     def work() -> dict:
         try:
@@ -145,7 +146,7 @@ def api_brief_plan(req: BriefPlanReq, request: Request, stream: bool = False, *,
     """开跑前的第二段：带着用户对缺口问题的回答生成计划（没答 = 跳过，按假设处理）。"""
     if not req.query.strip():
         raise HTTPException(400, "query 不能为空")
-    sources = _brief_sources(req)
+    sources = _brief_sources(req, user.id)
 
     def work() -> dict:
         try:
@@ -166,7 +167,7 @@ def api_brief_revise(req: ReviseBriefReq, request: Request, stream: bool = False
     """按用户在计划卡上写的意见重新生成计划。原始问题身份必须保持不变。"""
     if not req.feedback.strip():
         raise HTTPException(400, "feedback 不能为空")
-    sources = _brief_sources(req)
+    sources = _brief_sources(req, user.id)
 
     def work() -> dict:
         try:

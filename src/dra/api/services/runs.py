@@ -21,7 +21,7 @@ from dra.api.services.ids import RUN_ID_RE as _RUN_ID_RE
 from dra.api.services.planning import _strip_plan_trace
 from dra.api.services.skills import skill_bundle as resolve_skill_bundle
 from dra.events import EventType
-from dra.library import LibraryError, get_library
+from dra.library import LibraryError, get_library, library_at, user_library_root
 from dra.research_brief import ResearchBrief, render_brief_context
 from dra.research_input import ResearchInput, replay_input
 from dra.db import Database
@@ -254,7 +254,10 @@ class RunRegistry:
         selection = scope.get("library_selection") or {}
         source_mode = scope.get("source_mode", "web")
         if source_mode != "web":
-            get_library().validate_selection(selection)
+            # 追问沿用父研究的资料范围，在当前用户自己的资料库里核对（#37）。
+            if not config.library_root:
+                raise LibraryError("本次研究没有指定资料库目录")
+            library_at(config.library_root).validate_selection(selection)
         config = config.model_copy(deep=True, update={"source_mode":source_mode,
             "library_selection":selection,"library_rerank":bool(scope.get("library_rerank")),
             "mcp_servers":mcp_client.pin_servers(scope.get("mcp_server_ids") or []),
@@ -568,7 +571,10 @@ def start_research(
     simple_settings = runtime_config.current()
     skill_bundle = resolve_skill_bundle(skill_selection)
     try:
-        selection = get_library().pin(document_ids) if source_mode != "web" else {}
+        if source_mode != "web" and user_id is None:
+            raise LibraryError("资料研究需要登录用户的资料库")
+        # 只在当前用户自己的资料库里固定版本：别人的资料编号在这里找不到（#37）。
+        selection = get_library(user_id).pin(document_ids) if source_mode != "web" else {}
         external = mcp_client.pin_servers(mcp_server_ids)
         if external and source_mode == "library":
             raise mcp_client.MCPError("仅资料模式不允许外部 MCP，请切换网页或混合研究")
@@ -580,7 +586,8 @@ def start_research(
         config=runtime_config.to_simple_config(simple_settings, source_mode=source_mode,
                             library_selection=selection, library_rerank=library_rerank,
                             mcp_servers=external, skill_bundle=skill_bundle,
-                            blocked_sites=normalized_sites),
+                            blocked_sites=normalized_sites,
+                            library_root=str(user_library_root(user_id)) if user_id is not None else None),
         requirements=typed_brief.to_run_requirements() if typed_brief is not None else None,
         brief=typed_brief,
         full_llm_io=full_llm_io,
@@ -675,6 +682,8 @@ def start_followup(store: RunStore, registry: RunRegistry, run_id: str, request_
         raise NotFound("run 不存在")
     try:
         config=runtime_config.to_simple_config(runtime_config.current())
+        if user_id is not None:
+            config=config.model_copy(update={"library_root":str(user_library_root(user_id))})
         new_id=registry.start_followup(run_id,request_id,text,config=config,
                                        run_id=reserved_run_id,user_id=user_id,counted=counted)
     except (HistoryError, LibraryError, mcp_client.MCPError) as exc:

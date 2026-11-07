@@ -56,6 +56,28 @@ def _truncate_postgres(database) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_libraries(tmp_path, monkeypatch):
+    """资料库按用户分目录（#37）：测试不碰本机数据目录，按目录缓存每个测试重新开始。"""
+    from dra import library
+
+    monkeypatch.setattr(library, "LIBRARY_BASE", tmp_path / "library-base")
+    monkeypatch.setattr(library, "_libraries", {})
+
+
+def install_library(store, user_id: int | None = None):
+    """把测试用的资料库（通常带 TinyEncoder）装进按目录缓存。
+
+    给了 user_id 时，store 必须建在该用户的资料库目录（library.user_library_root）。
+    """
+    from dra import library
+
+    if user_id is not None:
+        assert store.root.resolve() == library.user_library_root(user_id).resolve()
+    library._libraries[store.root.resolve()] = store
+    return store
+
+
+@pytest.fixture(autouse=True)
 def database(_database_source, tmp_path, monkeypatch):
     """每个测试一份已迁移到最新的数据库，并放进 Web 应用（app.state.db）。"""
     from dra.api.app import app

@@ -144,6 +144,7 @@ class ImportReport:
     imported: list[str] = field(default_factory=list)
     already: list[str] = field(default_factory=list)
     unreadable: list[tuple[str, str]] = field(default_factory=list)
+    owner_id: int | None = None
 
 
 def _read_meta(directory: Path) -> dict:
@@ -172,7 +173,7 @@ def import_legacy(db: Database, runs_root: Path, owner_email: str) -> ImportRepo
             raise ValueError(f"started_at 不是有效时间：{ts}")
         return datetime.fromtimestamp(ts, UTC) if ts > 0 else utcnow()
 
-    report = ImportReport()
+    report = ImportReport(owner_id=owner_id)
     turns: list[tuple[str, int, datetime, str, str]] = []  # (对话, 轮次, 开始时间, run_id, 问题)
     root = Path(runs_root)
     for directory in sorted(root.iterdir()) if root.is_dir() else []:

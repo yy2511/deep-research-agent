@@ -3,13 +3,13 @@ import json
 import pytest
 
 from dra import library as lib, simple_research as sr
+from conftest import install_library
 from test_document_library import TinyEncoder
 
 
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
-    library = lib.LibraryStore(tmp_path / "library", encoder=TinyEncoder())
-    monkeypatch.setattr(lib, "_library", library)
+    library = install_library(lib.LibraryStore(tmp_path / "library", encoder=TinyEncoder()))
     def forbidden(*args, **kwargs):
         raise AssertionError("library-only research must not access web")
     monkeypatch.setattr(sr, "_retrieve", forbidden)
@@ -17,7 +17,8 @@ def setup(tmp_path, monkeypatch):
     text = "# Orchid 🙂\n\n" + "备份只能写入本地存储。\n" * 100 + "\n日志保留 43 天，编号 ZQ-719。"
     doc = library.import_bytes("内部约束.md", text.encode(), wait=True)
     selection = library.pin([doc["document_id"]])
-    config = sr.SimpleConfig(source_mode="library", library_selection=selection)
+    config = sr.SimpleConfig(source_mode="library", library_selection=selection,
+                             library_root=str(library.root))
     store = sr.RunStore(tmp_path / "run", run_id="local", query="保留多久")
     context = sr.ToolContext(store, config)
     yield library, doc, text, context
