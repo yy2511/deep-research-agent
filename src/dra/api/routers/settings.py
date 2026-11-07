@@ -5,8 +5,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ValidationError
 
 from dra import llm, mcp_client
+from dra.api.deps import ADMIN_ONLY
 
 router = APIRouter()
+# 改全站设置的接口：分组上统一要求管理员（#32）。
+admin_router = APIRouter(dependencies=ADMIN_ONLY)
 
 
 @router.get("/api/config")
@@ -55,7 +58,7 @@ def api_mcp_config() -> dict:
         raise HTTPException(503, str(exc)) from None
 
 
-@router.put("/api/mcp/config")
+@admin_router.put("/api/mcp/config")
 def api_save_mcp_config(body: dict) -> dict:
     try:
         settings = mcp_client.MCPSettings.model_validate(body)
@@ -69,7 +72,7 @@ def api_save_mcp_config(body: dict) -> dict:
     return settings.model_dump(mode="json")
 
 
-@router.post("/api/mcp/test")
+@admin_router.post("/api/mcp/test")
 def api_test_mcp(body: dict) -> dict:
     try:
         server = mcp_client.MCPServerConfig.model_validate(body)
@@ -84,7 +87,7 @@ def api_test_mcp(body: dict) -> dict:
                                   for t in tools]}
 
 
-@router.put("/api/config")
+@admin_router.put("/api/config")
 def api_config_put(body: dict) -> dict:
     """body 收原始 dict 而非 runtime_config.RuntimeModelSettings 类型注解——runtime_config
     只在函数体内加载配置，module-level 没有这个
@@ -124,7 +127,7 @@ class TestConfigReq(BaseModel):
     effort: str | None = None
 
 
-@router.post("/api/config/test")
+@admin_router.post("/api/config/test")
 def api_config_test(req: TestConfigReq) -> dict:
     try:
         llm.chat(
