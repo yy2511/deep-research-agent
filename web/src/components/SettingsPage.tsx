@@ -279,9 +279,9 @@ function ConnectionSettings() {
     <ProviderConnections providers={providers} onChange={setProviders} onRefresh={refresh} refreshing={refreshing} /></>;
 }
 
-function GeneralSettings({ prefs, onPrefs, onDemo }: { prefs: LocalPrefs; onPrefs: (p: LocalPrefs) => void; onDemo: () => void }) {
+function GeneralSettings({ prefs, onPrefs, onDemo, note }: { prefs: LocalPrefs; onPrefs: (p: LocalPrefs) => void; onDemo: () => void; note?: string }) {
   return <div className="settings-section">
-    <div className="section-head"><div><h2>通用</h2></div></div>
+    <div className="section-head"><div><h2>通用</h2>{note && <p className="field-hint">{note}</p>}</div></div>
     <div className="setting-group">
       <h3>开发者选项</h3>
       <p className="field-hint">用于排查问题，日常使用保持默认即可。这些选项只保存在这个浏览器里。</p>
@@ -301,11 +301,35 @@ function GeneralSettings({ prefs, onPrefs, onDemo }: { prefs: LocalPrefs; onPref
   </div>;
 }
 
-export function SettingsPage({ tab, onTab, prefs, onPrefs, onDemo, onSaved }: {
+type SettingsPageProps = {
   tab: SettingsTab; onTab: (tab: SettingsTab) => void;
   prefs: LocalPrefs; onPrefs: (p: LocalPrefs) => void; onDemo: () => void;
   onSaved?: (c: ConfigPayload) => void;
-}) {
+  /** 模型、连接、技能、外部资料是全站设置，只有管理员能改（#32）；普通用户只看到“通用”。 */
+  isAdmin: boolean;
+};
+
+export function SettingsPage({ isAdmin, ...props }: SettingsPageProps) {
+  return isAdmin ? <AdminSettingsPage {...props} /> : <MemberSettingsPage {...props} />;
+}
+
+/** 普通用户：只有存在本机浏览器里的偏好；全站设置的修改入口一个都不显示，也不去读取它们。 */
+function MemberSettingsPage({ prefs, onPrefs, onDemo }: Omit<SettingsPageProps, "isAdmin">) {
+  return <div className="settings-page">
+    <nav className="settings-nav" aria-label="设置分类">
+      <h1>设置</h1>
+      <button type="button" aria-current="page" className="settings-nav-item is-active">通用</button>
+    </nav>
+    <div className="settings-main">
+      <div className="settings-scroll">
+        <GeneralSettings prefs={prefs} onPrefs={onPrefs} onDemo={onDemo}
+          note="模型、API 连接、技能和外部资料由管理员统一设置。" />
+      </div>
+    </div>
+  </div>;
+}
+
+function AdminSettingsPage({ tab, onTab, prefs, onPrefs, onDemo, onSaved }: Omit<SettingsPageProps, "isAdmin">) {
   const runtime = useRuntimeSettings(onSaved);
   const { config, reloadProviders } = runtime;
   const isRuntimeTab = (id: SettingsTab) => id === "models" || id === "capabilities";
