@@ -339,3 +339,43 @@ def test_one_bad_timestamp_does_not_roll_back_the_batch(tmp_path, database, logg
     assert report.imported == ["20260901-100000-aaaaaaaa"]
     assert [r for r, _ in report.unreadable] == ["20260902-100000-bbbbbbbb"]
     assert _rows(database)["attempts"] == ["20260901-100000-aaaaaaaa"]
+
+
+def test_shutdown_waits_for_cancelled_reservation_cleanup(monkeypatch, database, logged_in_user):
+    """#36 复审：请求取消后、占位线程写完前服务正常关闭，关闭流程也要等撤销做完。
+
+    走真实的应用生命周期（启动 → 取消请求 → 关闭）；关闭开始后才放行写库线程。
+    """
+    import asyncio
+    import threading
+
+    from dra.api.app import app
+    from dra.api.services import runs as run_service
+
+    entered, gate = threading.Event(), threading.Event()
+    real = run_records.reserve_new_run
+
+    def slow(*args):
+        entered.set()
+        assert gate.wait(5)
+        return real(*args)
+
+    monkeypatch.setattr(run_records, "reserve_new_run", slow)
+    started = []
+    monkeypatch.setattr(run_service, "start_research", lambda *a, **k: started.append(1) or "x")
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            task = asyncio.create_task(
+                run_service.start_owned_research(database, None, logged_in_user.id, "问题"))
+            assert await asyncio.to_thread(entered.wait, 5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            # 关闭开始后再放行写库：不等撤销的话，关闭会先结束，线程随后提交留下记录。
+            threading.Timer(0.3, gate.set).start()
+
+    asyncio.run(scenario())  # asyncio.run 结束时会等默认线程池里的线程做完
+    assert started == []
+    assert _empty(database)
+    assert not run_service._pending_cleanups

@@ -606,6 +606,16 @@ async def _reserve(db: Database, run_id: str, reserve, *args) -> None:
         raise
 
 
+async def drain_pending_cleanups() -> None:
+    """服务正常关闭时调用：等所有“等占位写完再撤销”的后台任务做完（#36 复审）。
+
+    不等的话，关闭会结束事件循环、取消这些任务，而写库线程照样提交，留下没有运行目录的记录。
+    每个任务只等一个短事务，几乎不拖慢关闭。强制杀进程不在此列。
+    """
+    while _pending_cleanups:
+        await asyncio.gather(*list(_pending_cleanups), return_exceptions=True)
+
+
 async def _release_after(reservation: asyncio.Future, db: Database, run_id: str) -> None:
     try:
         await reservation

@@ -35,7 +35,7 @@ from dra.api.routers import (
     settings,
     skills,
 )
-from dra.api.services.runs import RunRegistry
+from dra.api.services.runs import RunRegistry, drain_pending_cleanups
 from dra.db import Database, DatabaseConfigError, DatabaseNotReady
 from dra.paths import PLANS_DIR, RUNS_DIR
 from dra.runstore import PlanAttemptStore, RunStore
@@ -93,6 +93,8 @@ async def _lifespan(_app: FastAPI):
                 await asyncio.to_thread(reap_orphans, _app.state.store.root, execution_config)
         except Exception:
             print("执行工作区清理未确认，将在下次启动重试")
+        # 释放数据库之前，等被取消请求的占位撤销做完（services/runs.drain_pending_cleanups）。
+        await drain_pending_cleanups()
         if owns_db:
             _app.state.db.dispose()
             _app.state.db = None
