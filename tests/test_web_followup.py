@@ -13,12 +13,15 @@ from test_web_research_e2e import _wait_done
 from test_budget_wrapup import Script, _turn
 from test_document_library import library, add
 import asyncio
+from dra.api.services import run_records
 from dra.api.services import runs as run_service
 
 
 @pytest.mark.parametrize("call_limits_enabled", [False, True])
-def test_two_followups_preserve_original_and_import_provenance(tmp_path, monkeypatch, call_limits_enabled):
+def test_two_followups_preserve_original_and_import_provenance(tmp_path, monkeypatch, call_limits_enabled,
+                                                               database, logged_in_user):
     store, parent, _, raw = history_fixture(tmp_path)
+    run_records.import_legacy(database, store.root, logged_in_user.email)  # 夹具是文件形式的旧研究
     registry = run_service.RunRegistry(store, max_active_runs=1)
     monkeypatch.setattr(web.app.state, "store", store)
     monkeypatch.setattr(web.app.state, "registry", registry)
@@ -129,8 +132,10 @@ def test_followup_private_scope_keeps_version_and_rejects_removed_or_missing_ind
 
 
 @pytest.mark.parametrize("mode,max_calls", [("normal", 5), ("wrapup", 2)])
-def test_followup_bad_coverage_keeps_body_and_reports_missing_metadata(tmp_path, monkeypatch, mode, max_calls):
+def test_followup_bad_coverage_keeps_body_and_reports_missing_metadata(tmp_path, monkeypatch, mode, max_calls,
+                                                                       database, logged_in_user):
     store, parent, _, _ = history_fixture(tmp_path)
+    run_records.import_legacy(database, store.root, logged_in_user.email)  # 夹具是文件形式的旧研究
     registry = run_service.RunRegistry(store, max_active_runs=1)
     monkeypatch.setattr(web.app.state, "store", store)
     monkeypatch.setattr(web.app.state, "registry", registry)

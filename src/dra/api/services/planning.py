@@ -51,6 +51,7 @@ def _capture_planner_step(
     fn,
     plan_store: PlanAttemptStore,
     full_llm_io: bool = False,
+    user_id: int | None = None,
 ) -> tuple[object, dict]:
     """跑一次规划/修订：timing.step 触发 llm_call 插桩 → 订阅落盘 → 返回 (结果, trace)。
 
@@ -62,6 +63,7 @@ def _capture_planner_step(
         query=query,
         kind=kind,
         config_summary=_planner_config_summary(cfg, full_llm_io=full_llm_io),
+        user_id=user_id,
     )
     captured: list[dict] = []
 
@@ -100,7 +102,7 @@ def _capture_planner_step(
 
 
 def _brief_payload(q_text: str, *, plan_store: PlanAttemptStore, full_llm_io: bool = False,
-                   source_context: str = "") -> tuple[dict, dict]:
+                   source_context: str = "", user_id: int | None = None) -> tuple[dict, dict]:
     """POST /api/brief 主体：先判断缺口；**没有缺口才继续生成计划**。
 
     有缺口时只回问题、不生成计划——生成了却不给用户看，等于白花一次输出，而且那份计划必然
@@ -128,6 +130,7 @@ def _brief_payload(q_text: str, *, plan_store: PlanAttemptStore, full_llm_io: bo
         fn=_run,
         plan_store=plan_store,
         full_llm_io=full_llm_io,
+        user_id=user_id,
     )
 
 
@@ -139,6 +142,7 @@ def _plan_after_clarification_payload(
     plan_store: PlanAttemptStore,
     full_llm_io: bool = False,
     source_context: str = "",
+    user_id: int | None = None,
 ) -> tuple[dict, dict]:
     """POST /api/brief/plan 主体：带着用户对缺口的回答生成计划。
 
@@ -163,6 +167,7 @@ def _plan_after_clarification_payload(
         },
         plan_store=plan_store,
         full_llm_io=full_llm_io,
+        user_id=user_id,
     )
 
 
@@ -173,6 +178,7 @@ def _revise_brief_payload(
     plan_store: PlanAttemptStore,
     full_llm_io: bool = False,
     source_context: str = "",
+    user_id: int | None = None,
 ) -> tuple[dict | None, dict | None]:
     """POST /api/brief/revise 主体：还原 brief → 带 clarification 重规划。
 
@@ -199,6 +205,7 @@ def _revise_brief_payload(
         },
         plan_store=plan_store,
         full_llm_io=full_llm_io,
+        user_id=user_id,
     )
 
 

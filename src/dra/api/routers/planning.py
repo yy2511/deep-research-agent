@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from dra import llm
 from dra.api.common import service_errors
-from dra.api.deps import PlanStoreDep
+from dra.api.deps import CurrentUserDep, PlanStoreDep
 from dra.api.services.planning import (
     PlannerJob,
     _brief_payload,
@@ -117,7 +117,8 @@ class BriefPlanReq(SourceSelectionReq):
 
 
 @router.post("/api/brief")
-def api_brief(req: BriefReq, request: Request, stream: bool = False, *, plan_store: PlanStoreDep):
+def api_brief(req: BriefReq, request: Request, stream: bool = False, *, plan_store: PlanStoreDep,
+              user: CurrentUserDep):
     """开跑前的第一段：判断问题有没有会改变路线的缺口。
 
     有缺口 → 只回问题（``kind="clarify"``），**不生成计划**；没有缺口 → 直接接第二段生成
@@ -129,7 +130,7 @@ def api_brief(req: BriefReq, request: Request, stream: bool = False, *, plan_sto
 
     def work() -> dict:
         try:
-            payload, trace = _brief_payload(req.query, plan_store=plan_store,
+            payload, trace = _brief_payload(req.query, plan_store=plan_store, user_id=user.id,
                                             full_llm_io=req.trace_full_llm_io, **sources)
         except (ValidationError, TypeError, ValueError, RuntimeError, TimeoutError) as exc:
             raise _brief_http_error(exc) from exc
@@ -139,7 +140,8 @@ def api_brief(req: BriefReq, request: Request, stream: bool = False, *, plan_sto
 
 
 @router.post("/api/brief/plan")
-def api_brief_plan(req: BriefPlanReq, request: Request, stream: bool = False, *, plan_store: PlanStoreDep):
+def api_brief_plan(req: BriefPlanReq, request: Request, stream: bool = False, *, plan_store: PlanStoreDep,
+                   user: CurrentUserDep):
     """开跑前的第二段：带着用户对缺口问题的回答生成计划（没答 = 跳过，按假设处理）。"""
     if not req.query.strip():
         raise HTTPException(400, "query 不能为空")
@@ -148,7 +150,7 @@ def api_brief_plan(req: BriefPlanReq, request: Request, stream: bool = False, *,
     def work() -> dict:
         try:
             payload, trace = _plan_after_clarification_payload(
-                req.query, req.gaps, req.answers, plan_store=plan_store,
+                req.query, req.gaps, req.answers, plan_store=plan_store, user_id=user.id,
                 full_llm_io=req.trace_full_llm_io, **sources
             )
         except (ValidationError, TypeError, ValueError, RuntimeError, TimeoutError) as exc:
@@ -159,7 +161,8 @@ def api_brief_plan(req: BriefPlanReq, request: Request, stream: bool = False, *,
 
 
 @router.post("/api/brief/revise")
-def api_brief_revise(req: ReviseBriefReq, request: Request, stream: bool = False, *, plan_store: PlanStoreDep):
+def api_brief_revise(req: ReviseBriefReq, request: Request, stream: bool = False, *, plan_store: PlanStoreDep,
+                     user: CurrentUserDep):
     """按用户在计划卡上写的意见重新生成计划。原始问题身份必须保持不变。"""
     if not req.feedback.strip():
         raise HTTPException(400, "feedback 不能为空")
@@ -167,7 +170,7 @@ def api_brief_revise(req: ReviseBriefReq, request: Request, stream: bool = False
 
     def work() -> dict:
         try:
-            payload, trace = _revise_brief_payload(req.brief, req.feedback, plan_store=plan_store,
+            payload, trace = _revise_brief_payload(req.brief, req.feedback, plan_store=plan_store, user_id=user.id,
                                                    full_llm_io=req.trace_full_llm_io, **sources)
         except (ValidationError, TypeError, ValueError, RuntimeError, TimeoutError) as exc:
             raise _brief_http_error(exc) from exc

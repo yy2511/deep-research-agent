@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from dra import events, llm, mcp_client
 from dra.api.services.errors import CapacityFull, Conflict, InvalidRequest, NotFound, Unavailable
+from dra.api.services import run_records
 from dra.api.services.ids import RUN_ID_RE as _RUN_ID_RE
 from dra.api.services.planning import _strip_plan_trace
 from dra.api.services.skills import skill_bundle as resolve_skill_bundle
@@ -23,7 +24,8 @@ from dra.events import EventType
 from dra.library import LibraryError, get_library
 from dra.research_brief import ResearchBrief, render_brief_context
 from dra.research_input import ResearchInput, replay_input
-from dra.runstore import IncompatibleEventSchemaError, RunStore
+from dra.db import Database
+from dra.runstore import IncompatibleEventSchemaError, RunStore, new_run_id
 from dra.site_filter import normalize_blocked_sites
 
 
@@ -132,6 +134,8 @@ class RunRegistry:
         brief=None,
         full_llm_io: bool = False,
         followup_context: dict | None = None,
+        run_id: str | None = None,
+        user_id: int | None = None,
     ) -> str:
         """单 Lead 最小闭环：确认后的问题 → 取证 → 作答 → 核查与预算内有界修订。
 
@@ -157,6 +161,9 @@ class RunRegistry:
         }
         identity = {"resolved_config": config.model_dump(mode="json"),
                     "initial_requirements": [r.model_dump(mode="json") for r in requirements or []]}
+        if user_id is not None:
+            # 便于排查；归属以数据库为准（#30）。
+            identity["user_id"] = user_id
         if followup_context is not None:
             identity.update({k: followup_context[k] for k in ("conversation_id","parent_run_id","turn_index","request_id")})
             identity.update(status="preparing", followup_request={"parent_run_id":followup_context["parent_run_id"],"text":query})
@@ -174,7 +181,7 @@ class RunRegistry:
                 "budget": budget,
                 "full_llm_io": full_llm_io,
                 "research_brief": brief.model_dump(mode="json") if brief is not None else None,
-            }, identity=identity,
+            }, identity=identity, run_id=run_id,
         )
         if followup_context is not None:
             from dra.durable import atomic_json
@@ -220,7 +227,7 @@ class RunRegistry:
         return run_id
 
     @_admission
-    def start_followup(self, parent_run_id, request_id, text, *, config):
+    def start_followup(self, parent_run_id, request_id, text, *, config, run_id=None, user_id=None):
         from dra.research_history import HistoryError, ancestors, prepare_context
         if not isinstance(request_id,str) or not _RUN_ID_RE.fullmatch(request_id):
             raise HistoryError("request_id 须为 1–64 位字母、数字、下划线或连字符")
@@ -262,7 +269,8 @@ class RunRegistry:
         requirements.extend(Requirement(id=f"inherited-{i}",text=r["text"],kind=r["kind"])
                             for i,r in enumerate(context["constraints"],1))
         return self.start_simple_research(text,config=config,requirements=requirements,
-            full_llm_io=bool(chain[-1].get("config_summary",{}).get("full_llm_io")),followup_context=context)
+            full_llm_io=bool(chain[-1].get("config_summary",{}).get("full_llm_io")),followup_context=context,
+            run_id=run_id,user_id=user_id)
 
     def _cancel_requested(self, run_id: str) -> bool:
         h = self.runs.get(run_id)
@@ -539,6 +547,8 @@ def start_research(
     mcp_server_ids: list[str],
     blocked_sites: list[str],
     full_llm_io: bool,
+    run_id: str | None = None,
+    user_id: int | None = None,
 ) -> str:
     """校验已确认的计划与来源范围，按当前模型设置开始一次研究，返回 run_id。"""
     from dra import runtime_config
@@ -571,10 +581,49 @@ def start_research(
         requirements=typed_brief.to_run_requirements() if typed_brief is not None else None,
         brief=typed_brief,
         full_llm_io=full_llm_io,
+        run_id=run_id,
+        user_id=user_id,
     )
 
 
-def start_followup(store: RunStore, registry: RunRegistry, run_id: str, request_id: str, text: str) -> dict:
+async def start_owned_research(db: Database, registry: RunRegistry, user_id: int, query: str,
+                               **options) -> str:
+    """先在数据库占位（线程里的短事务），再在事件循环上启动研究；启动失败就撤销占位。
+
+    设计 §3.2、ADR 0006 规则 3。写库失败时（Unavailable → 503）研究不会启动，也不建运行目录。
+    """
+    run_id = new_run_id()
+    await asyncio.to_thread(run_records.reserve_new_run, db, user_id, run_id, query)
+    try:
+        return start_research(registry, query, run_id=run_id, user_id=user_id, **options)
+    except BaseException:
+        await asyncio.to_thread(run_records.release_quietly, db, run_id)
+        raise
+
+
+async def start_owned_followup(db: Database, store: RunStore, registry: RunRegistry, user_id: int,
+                               parent_run_id: str, request_id: str, text: str) -> dict:
+    """追问版的“先占位，再启动，失败就撤销”。
+
+    同一 request_id 重复提交时，现有逻辑返回之前那一轮的编号、不再启动；这时也撤销这次的占位。
+    """
+    if store.get_meta(parent_run_id) is None:
+        raise NotFound("run 不存在")
+    run_id = new_run_id()
+    await asyncio.to_thread(run_records.reserve_followup, db, user_id, parent_run_id, run_id, text)
+    try:
+        result = start_followup(store, registry, parent_run_id, request_id, text,
+                                reserved_run_id=run_id, user_id=user_id)
+    except BaseException:
+        await asyncio.to_thread(run_records.release_quietly, db, run_id)
+        raise
+    if result["run_id"] != run_id:
+        await asyncio.to_thread(run_records.release_quietly, db, run_id)
+    return result
+
+
+def start_followup(store: RunStore, registry: RunRegistry, run_id: str, request_id: str, text: str,
+                   *, reserved_run_id: str | None = None, user_id: int | None = None) -> dict:
     """在已有运行之后追问，开始新一轮研究；返回新一轮的身份信息。"""
     from dra import runtime_config
     from dra.research_history import HistoryError
@@ -582,7 +631,8 @@ def start_followup(store: RunStore, registry: RunRegistry, run_id: str, request_
         raise NotFound("run 不存在")
     try:
         config=runtime_config.to_simple_config(runtime_config.current())
-        new_id=registry.start_followup(run_id,request_id,text,config=config)
+        new_id=registry.start_followup(run_id,request_id,text,config=config,
+                                       run_id=reserved_run_id,user_id=user_id)
     except (HistoryError, LibraryError, mcp_client.MCPError) as exc:
         raise Conflict(str(exc)) from exc
     meta=store.get_meta(new_id)
