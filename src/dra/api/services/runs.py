@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import json
 import os
@@ -642,27 +643,51 @@ async def start_owned_research(db: Database, registry: RunRegistry, user_id: int
         raise
 
 
+# 同一对话的追问排队：每个对话一把锁，用完即删（#39 复审）。只在本进程内有效；
+# 第 3 阶段多 Worker 进程时需换成数据库层面的保证（见设计文档实施记录）。
+_conversation_locks: dict[str, list] = {}
+
+
+@contextlib.asynccontextmanager
+async def _conversation_lock(key: str):
+    entry = _conversation_locks.setdefault(key, [asyncio.Lock(), 0])
+    entry[1] += 1
+    try:
+        async with entry[0]:
+            yield
+    finally:
+        entry[1] -= 1
+        if entry[1] == 0:
+            _conversation_locks.pop(key, None)
+
+
 async def start_owned_followup(db: Database, store: RunStore, registry: RunRegistry, user_id: int,
                                parent_run_id: str, request_id: str, text: str) -> dict:
     """追问版的“先占位，再启动，失败就撤销”。
 
     同一 request_id 重复提交时，现有逻辑返回之前那一轮的编号、不再启动；这时也撤销这次的占位。
+
+    “取当前已登记轮次 → 判断重复/是否最新 → 占位并启动 → 必要时撤销”整段在同一对话的锁内完成：
+    否则另一个请求可以插在“取名单”和“判断”之间开出新一轮，旧名单看不见它，同一追问会被执行两次
+    （先检查后行动的竞争，#39 复审）。不同对话互不阻塞。
     """
-    if store.get_meta(parent_run_id) is None:
+    meta = store.get_meta(parent_run_id)
+    if meta is None:
         raise NotFound("run 不存在")
-    run_id = new_run_id()
-    _conversation, counted = await _reserve(
-        db, run_id, run_records.reserve_followup, db, user_id, parent_run_id, run_id, text)
-    try:
-        result = start_followup(store, registry, parent_run_id, request_id, text,
-                                reserved_run_id=run_id, user_id=user_id,
-                                counted=counted.__contains__)
-    except BaseException:
-        await asyncio.to_thread(run_records.release_quietly, db, run_id)
-        raise
-    if result["run_id"] != run_id:
-        await asyncio.to_thread(run_records.release_quietly, db, run_id)
-    return result
+    async with _conversation_lock(str(meta.get("conversation_id") or parent_run_id)):
+        run_id = new_run_id()
+        _conversation, counted = await _reserve(
+            db, run_id, run_records.reserve_followup, db, user_id, parent_run_id, run_id, text)
+        try:
+            result = start_followup(store, registry, parent_run_id, request_id, text,
+                                    reserved_run_id=run_id, user_id=user_id,
+                                    counted=counted.__contains__)
+        except BaseException:
+            await asyncio.to_thread(run_records.release_quietly, db, run_id)
+            raise
+        if result["run_id"] != run_id:
+            await asyncio.to_thread(run_records.release_quietly, db, run_id)
+        return result
 
 
 def start_followup(store: RunStore, registry: RunRegistry, run_id: str, request_id: str, text: str,

@@ -305,3 +305,86 @@ def test_a_different_followup_is_not_blocked_by_the_leftover(failed_followup):
     response = client.post(f"/api/research/{parent}/followup", json={"request_id": "r2", "text": "换个问法"})
     assert response.status_code == 202, response.text
     assert client.get(f"/api/runs/{response.json()['run_id']}").status_code == 200
+
+
+# ---- #39 复审：同一对话的追问不能在“取名单”和“判断”之间被插队 -------------------------------
+
+@pytest.fixture
+def followup_race(tmp_path, monkeypatch, database):
+    """A 的占位事务提交后停住；B 趁这段时间走完整个追问；再放行 A。"""
+    import asyncio
+    import threading
+
+    from test_research_history import history_fixture
+
+    store, parent, _, _ = history_fixture(tmp_path / "history")
+    registry = run_service.RunRegistry(store, max_active_runs=2)
+    user = auth.create_user(database, "dave@example.com", PASSWORD)
+    run_records.reserve_new_run(database, user.id, parent, "研究日志与备份")
+
+    started = []
+
+    def start(query, **kwargs):
+        context = kwargs["followup_context"]
+        started.append(kwargs["run_id"])
+        return store.create_run(query, None, {"mode": "simple"}, run_id=kwargs["run_id"], identity={
+            **{k: context[k] for k in ("conversation_id", "parent_run_id", "turn_index", "request_id")},
+            "followup_request": {"parent_run_id": context["parent_run_id"], "text": query}})
+
+    monkeypatch.setattr(registry, "start_simple_research", start)
+
+    paused, release = threading.Event(), threading.Event()
+    real_reserve = run_records.reserve_followup
+    calls = []
+
+    def reserve(*args):
+        result = real_reserve(*args)  # 事务已提交
+        calls.append(1)
+        if len(calls) == 1:
+            paused.set()
+            assert release.wait(5)
+        return result
+
+    monkeypatch.setattr(run_records, "reserve_followup", reserve)
+
+    def race(first: tuple[str, str], second: tuple[str, str]):
+        async def follow(request_id, text):
+            try:
+                return (await run_service.start_owned_followup(
+                    database, store, registry, user.id, parent, request_id, text))["run_id"]
+            except Exception as exc:  # noqa: BLE001 - 交给断言
+                return exc
+
+        async def scenario():
+            a = asyncio.create_task(follow(*first))
+            assert await asyncio.to_thread(paused.wait, 5)
+            b = asyncio.create_task(follow(*second))
+            # 不加锁时 B 会在这段时间里走完；加锁时 B 在等 A。
+            await asyncio.wait({b}, timeout=1)
+            release.set()
+            return await asyncio.gather(a, b)
+
+        return asyncio.run(scenario())
+
+    return {"race": race, "started": started, "store": store, "parent": parent}
+
+
+def test_overlapping_retries_of_one_followup_start_once(followup_race, database):
+    a, b = followup_race["race"](("r1", "继续"), ("r1", "继续"))
+    assert a == b and isinstance(a, str)
+    assert followup_race["started"] == [a]
+    turns = followup_race["store"].conversation_turns(followup_race["parent"])
+    assert [t.get("turn_index", 1) for t in turns] == [1, 2]
+    with database.session() as session:
+        assert session.scalar(select(func.count()).select_from(RunAttempt)) == 2  # 父轮 + 一个子轮
+
+
+def test_two_different_followups_on_the_same_old_turn_only_one_wins(followup_race, database):
+    a, b = followup_race["race"](("r1", "继续"), ("r2", "换个问法"))
+    winners = [r for r in (a, b) if isinstance(r, str)]
+    losers = [r for r in (a, b) if not isinstance(r, str)]
+    assert len(winners) == 1 and len(losers) == 1
+    assert "最新一轮" in str(losers[0])
+    assert followup_race["started"] == winners
+    with database.session() as session:
+        assert session.scalar(select(func.count()).select_from(RunAttempt)) == 2
