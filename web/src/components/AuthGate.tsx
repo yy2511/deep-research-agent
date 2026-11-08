@@ -4,19 +4,26 @@ import {
   GITHUB_LOGIN_URL, PASSWORD_MAX, PASSWORD_MIN, type Account, type AuthFields, type AuthMode,
 } from "../auth";
 import { Icon } from "./Icon";
+import { fetchShowcases, type Showcase } from "../showcases";
 
 type GateState =
   | { kind: "checking" }
-  | { kind: "anonymous"; notice?: string; github?: boolean }
+  | { kind: "anonymous"; notice?: string; github?: boolean; showcases?: Showcase[] }
   | { kind: "error"; message: string }
   | { kind: "ready"; account: Account };
 
 /**
  * 进入工作台前确认登录。已登录才渲染工作台；任何请求 401 时回到登录页。
  * 研究在服务端继续进行，重新登录后可以接着查看。
+ *
+ * 未登录且有示例时（#47），先给看示例（renderPublic），点“登录”再到登录页；登录过期时直接到登录页。
  */
-export function AuthGate({ children }: { children: (account: Account, onLogout: () => void) => ReactNode }) {
+export function AuthGate({ children, renderPublic }: {
+  children: (account: Account, onLogout: () => void) => ReactNode;
+  renderPublic?: (showcases: Showcase[], onLogin: () => void) => ReactNode;
+}) {
   const [state, setState] = useState<GateState>({ kind: "checking" });
+  const [wantsLogin, setWantsLogin] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   // GitHub 登录失败跳回来时带着 ?login_error=…：读出说明后从地址栏去掉，刷新不再重复显示。
   const [githubError] = useState(() => {
@@ -33,7 +40,9 @@ export function AuthGate({ children }: { children: (account: Account, onLogout: 
     setState({ kind: "checking" });
     try {
       const account = await fetchMe();
-      setState(account ? { kind: "ready", account } : { kind: "anonymous", github: (await fetchAuthOptions()).github });
+      if (account) { setState({ kind: "ready", account }); return; }
+      const [options, showcases] = await Promise.all([fetchAuthOptions(), fetchShowcases()]);
+      setState({ kind: "anonymous", github: options.github, showcases });
     } catch (e) {
       setState({ kind: "error", message: e instanceof Error ? e.message : "无法确认登录状态" });
     }
@@ -47,7 +56,9 @@ export function AuthGate({ children }: { children: (account: Account, onLogout: 
   useEffect(() => {
     if (!anonymous) return;
     let live = true;
-    void fetchAuthOptions().then((o) => { if (live) setState((s) => (s.kind === "anonymous" ? { ...s, github: o.github } : s)); });
+    void Promise.all([fetchAuthOptions(), fetchShowcases()]).then(([o, showcases]) => {
+      if (live) setState((s) => (s.kind === "anonymous" ? { ...s, github: o.github, showcases } : s));
+    });
     return () => { live = false; };
   }, [anonymous]);
 
@@ -55,7 +66,7 @@ export function AuthGate({ children }: { children: (account: Account, onLogout: 
   const handleLogout = useCallback(() => {
     setLogoutError(null);
     logout().then(
-      () => setState({ kind: "anonymous" }),
+      () => { setWantsLogin(true); setState({ kind: "anonymous" }); },
       (e) => setLogoutError(e instanceof Error ? e.message : "请求失败"),
     );
   }, []);
@@ -79,8 +90,12 @@ export function AuthGate({ children }: { children: (account: Account, onLogout: 
       </div>
     );
   }
+  const showcases = state.showcases ?? [];
+  const showPublic = renderPublic && showcases.length > 0 && !wantsLogin && !state.notice && !githubError;
+  if (showPublic) return <>{renderPublic(showcases, () => setWantsLogin(true))}</>;
   return <AuthPage notice={state.notice} github={state.github === true} initialError={githubError}
-    onAuthed={(account) => setState({ kind: "ready", account })} />;
+    onBackToShowcases={renderPublic && showcases.length > 0 ? () => setWantsLogin(false) : undefined}
+    onAuthed={(account) => { setWantsLogin(false); setState({ kind: "ready", account }); }} />;
 }
 
 export function LogoutError({ message, onRetry, onDismiss }: { message: string; onRetry: () => void; onDismiss: () => void }) {
@@ -96,10 +111,12 @@ export function LogoutError({ message, onRetry, onDismiss }: { message: string; 
 
 const EMPTY: AuthFields = { email: "", password: "", confirm: "", invite: "" };
 
-export function AuthPage({ onAuthed, notice, initialMode = "login", github = false, initialError = null }: {
+export function AuthPage({ onAuthed, notice, initialMode = "login", github = false, initialError = null, onBackToShowcases }: {
   onAuthed: (account: Account) => void; notice?: string; initialMode?: AuthMode;
   /** 服务端配置了 GitHub 登录时显示按钮（阶段 2，#45）。 */
   github?: boolean; initialError?: string | null;
+  /** 有示例时（#47），登录页可以回去继续看示例。 */
+  onBackToShowcases?: () => void;
 }) {
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [fields, setFields] = useState<AuthFields>(EMPTY);
@@ -183,6 +200,7 @@ export function AuthPage({ onAuthed, notice, initialMode = "login", github = fal
           </button>
         </p>
         {!registering && <p className="field-hint">忘记密码请联系管理员重设。</p>}
+        {onBackToShowcases && <button type="button" className="link-btn" onClick={onBackToShowcases}>先看看示例</button>}
       </form>
     </div>
   );

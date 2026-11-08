@@ -10,13 +10,13 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
 from dra.api.common import _compact_event, _original_response, _require_valid_run_id
-from dra.api.deps import OWNED_RUN, RegistryDep, StoreDep, VisibleRunsDep
+from dra.api.deps import READABLE_RUN, RegistryDep, StoreDep, VisibleRunsDep
 from dra.api.services.runs import _run_input_snapshot
 from dra.runstore import IncompatibleEventSchemaError, RunStore, replay_compatibility
 
 router = APIRouter()
-# 带研究编号的接口：分组上统一检查归属（#31）。
-run_router = APIRouter(dependencies=OWNED_RUN)
+# 带研究编号的查看接口：分组上统一检查“属于自己或属于示例”（#31、#47），示例不要求登录。
+read_router = APIRouter(dependencies=READABLE_RUN)
 
 
 @router.get("/api/runs")
@@ -24,7 +24,7 @@ def api_runs(visible: VisibleRunsDep, *, store: StoreDep) -> list[dict]:
     return [meta for meta in store.list_runs() if visible(meta["run_id"])]
 
 
-@run_router.get("/api/runs/{run_id}/mcp-results/{receipt_id}")
+@read_router.get("/api/runs/{run_id}/mcp-results/{receipt_id}")
 def api_mcp_receipt(run_id: str, receipt_id: str, *, store: StoreDep):
     _require_valid_run_id(run_id)
     if not re.fullmatch(r"[a-f0-9]{32}", receipt_id):
@@ -38,7 +38,7 @@ def api_mcp_receipt(run_id: str, receipt_id: str, *, store: StoreDep):
     return receipt
 
 
-@run_router.get("/api/runs/{run_id}/images/{sha256}")
+@read_router.get("/api/runs/{run_id}/images/{sha256}")
 def api_run_image(run_id: str, sha256: str, *, store: StoreDep):
     _require_valid_run_id(run_id)
     if not re.fullmatch(r"[a-f0-9]{64}", sha256) or store.get_meta(run_id) is None:
@@ -50,7 +50,7 @@ def api_run_image(run_id: str, sha256: str, *, store: StoreDep):
         raise HTTPException(404, "图片缺失或校验失败") from exc
 
 
-@run_router.get("/api/runs/{run_id}/sources/{ref}/original")
+@read_router.get("/api/runs/{run_id}/sources/{ref}/original")
 def api_run_original(run_id: str, ref: str, *, store: StoreDep):
     _require_valid_run_id(run_id)
     if not re.fullmatch(r"s[0-9]{1,6}", ref) or store.get_meta(run_id) is None:
@@ -67,7 +67,7 @@ def api_run_original(run_id: str, ref: str, *, store: StoreDep):
         raise HTTPException(404, "该运行未保存资料原件或原件校验失败") from exc
 
 
-@run_router.get("/api/runs/{run_id}")
+@read_router.get("/api/runs/{run_id}")
 def api_run_detail(run_id: str, *, store: StoreDep, registry: RegistryDep) -> dict:
     _require_valid_run_id(run_id)
     meta = store.get_meta(run_id)
@@ -87,7 +87,7 @@ def api_run_detail(run_id: str, *, store: StoreDep, registry: RegistryDep) -> di
     }
 
 
-@run_router.get("/api/runs/{run_id}/artifacts")
+@read_router.get("/api/runs/{run_id}/artifacts")
 def api_artifact_list(run_id: str, *, store: StoreDep):
     from dra.artifacts import committed_records
     _require_valid_run_id(run_id)
@@ -116,17 +116,17 @@ def _artifact_response(store: RunStore, run_id, artifact_id, preview=False):
     return Response(data,media_type=media,headers=headers)
 
 
-@run_router.get("/api/runs/{run_id}/artifacts/{artifact_id}/download")
+@read_router.get("/api/runs/{run_id}/artifacts/{artifact_id}/download")
 def api_artifact_download(run_id: str,artifact_id: str, *, store: StoreDep):
     return _artifact_response(store,run_id,artifact_id)
 
 
-@run_router.get("/api/runs/{run_id}/artifacts/{artifact_id}/preview")
+@read_router.get("/api/runs/{run_id}/artifacts/{artifact_id}/preview")
 def api_artifact_preview(run_id: str,artifact_id: str, *, store: StoreDep):
     return _artifact_response(store,run_id,artifact_id,preview=True)
 
 
-@run_router.get("/api/runs/{run_id}/execution/logs/{execution_id}")
+@read_router.get("/api/runs/{run_id}/execution/logs/{execution_id}")
 def api_execution_log(run_id: str,execution_id: str,stream: str='stdout',cursor: int=0, *, store: StoreDep):
     _require_valid_run_id(run_id)
     if store.get_meta(run_id) is None: raise HTTPException(404,"run not found")
@@ -140,7 +140,7 @@ def api_execution_log(run_id: str,execution_id: str,stream: str='stdout',cursor:
     return log
 
 
-@run_router.get("/api/runs/{run_id}/simple")
+@read_router.get("/api/runs/{run_id}/simple")
 def api_run_simple(run_id: str, *, store: StoreDep) -> dict:
     """simple 运行的四状态结果（刷新/历史回看与结束时一致）。
 
@@ -155,7 +155,7 @@ def api_run_simple(run_id: str, *, store: StoreDep) -> dict:
     return payload
 
 
-@run_router.get("/api/runs/{run_id}/context/{checkpoint_id}")
+@read_router.get("/api/runs/{run_id}/context/{checkpoint_id}")
 def api_context_history(run_id: str, checkpoint_id: str, cursor: int = 0, *, store: StoreDep) -> dict:
     """只读分页；ID 限定当前 run 内已落盘整理记录，不接受文件路径。"""
     _require_valid_run_id(run_id)
@@ -177,7 +177,7 @@ def api_context_history(run_id: str, checkpoint_id: str, cursor: int = 0, *, sto
             "next_cursor": end if end < len(raw) else None}
 
 
-@run_router.get("/api/runs/{run_id}/materials")
+@read_router.get("/api/runs/{run_id}/materials")
 def api_run_materials(run_id: str, *, store: StoreDep) -> dict:
     """运行期间也可读已持久化卡片；不把未交付草稿当报告。"""
     _require_valid_run_id(run_id)
@@ -220,7 +220,7 @@ def _highlight_page(run_id: str, ref: str, text: str, start: int, end: int) -> s
     )
 
 
-@run_router.get("/api/runs/{run_id}/sources/{ref}", response_class=PlainTextResponse)
+@read_router.get("/api/runs/{run_id}/sources/{ref}", response_class=PlainTextResponse)
 def api_run_source(run_id: str, ref: str, hl: str | None = None, *, store: StoreDep):
     """读该运行**已保存**的原文快照；不重新联网、不用新抓的网页冒充旧原文。
 
@@ -244,7 +244,7 @@ def api_run_source(run_id: str, ref: str, hl: str | None = None, *, store: Store
     return text
 
 
-@run_router.get("/api/runs/{run_id}/events", response_class=PlainTextResponse)
+@read_router.get("/api/runs/{run_id}/events", response_class=PlainTextResponse)
 def api_run_events(run_id: str, compact: bool = False, *, store: StoreDep) -> str:
     _require_valid_run_id(run_id)
     try:
@@ -262,7 +262,7 @@ def api_run_events(run_id: str, compact: bool = False, *, store: StoreDep) -> st
     return text
 
 
-@run_router.get("/api/runs/{run_id}/events/{seq}")
+@read_router.get("/api/runs/{run_id}/events/{seq}")
 def api_run_event_detail(run_id: str, seq: int, *, store: StoreDep) -> dict:
     text = api_run_events(run_id, store=store)
     try:

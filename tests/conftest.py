@@ -211,9 +211,12 @@ def logged_in_user(database, request):
             raise HTTPException(404, "研究会话不存在")
         return conversation_id
 
+    # 查看组（#47）同样默认放行，保留编号格式检查；真实行为由 tests/test_showcases.py 测。
     overrides = {current_user: lambda: info, deps.owned_run: owned_run,
                  deps.owned_conversation: owned_conversation,
-                 deps.visible_runs: lambda: (lambda _id: True)}
+                 deps.readable_run: owned_run, deps.readable_conversation: owned_conversation,
+                 deps.visible_runs: lambda: (lambda _id: True),
+                 deps.conversation_runs: lambda: (lambda _id: True)}
     app.dependency_overrides.update(overrides)
     try:
         yield info

@@ -3,6 +3,7 @@ import { getJSON } from "../api";
 import { Icon } from "./Icon";
 import { runStatusView } from "./runStatusView";
 import { relativeTime } from "../format";
+import type { Showcase } from "../showcases";
 
 export interface RunListItem {
   run_id: string; conversation_id?:string; turn_count?:number; latest_run_id?:string;
@@ -52,6 +53,33 @@ export function RunHistoryItem({
           onClick={() => onSelectReplay(run.run_id, "paced")}><Icon name="replay" size={14} /></button>
       )}
     </div>
+  );
+}
+
+/** 示例分组（#47）：所有人只读可见。 */
+export function ShowcaseList({ showcases, currentRunId, onSelect }: {
+  showcases: Showcase[];
+  currentRunId: string | null;
+  onSelect: (showcase: Showcase) => void;
+}) {
+  if (showcases.length === 0) return null;
+  return (
+    <nav className="history-list showcase-list" aria-label="示例">
+      <div className="history-title">示例 · 只读</div>
+      {showcases.map((item) => (
+        <div key={item.conversation_id}
+          className={`history-item${currentRunId && item.run_ids.includes(currentRunId) ? " history-item-active" : ""}`}>
+          <button className="history-item-main" title={item.query} disabled={!item.available}
+            onClick={() => onSelect(item)}>
+            <span className="history-item-query">{item.title}</span>
+            <span className="history-item-meta">
+              {item.available ? <span>{item.turn_count > 1 ? `${item.turn_count} 轮 · ` : ""}{relativeTime(item.finished_at ?? undefined)}</span>
+                : <span>该示例已不可用</span>}
+            </span>
+          </button>
+        </div>
+      ))}
+    </nav>
   );
 }
 

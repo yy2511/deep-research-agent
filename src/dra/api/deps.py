@@ -142,6 +142,72 @@ OWNED_RUN = [Depends(owned_run)]
 OWNED_CONVERSATION = [Depends(owned_conversation)]
 
 
+# ---- 读取组：属于自己，或属于示例（阶段 2 第 2 步 #47；设计 docs/design/阶段2-公开试用.md §4） --
+# 带编号的“查看”接口放进各 router 文件的 read_router / conversation_router 分组，挂下面的检查；
+# “修改”接口（追问、发消息、取消）仍在 run_router，挂 owned_run。这两组不要求先登录：
+# - 属于示例：任何人都能读，包括未登录；
+# - 没带登录 Cookie：按不存在处理（404），不透露是否存在；
+# - 带了 Cookie 但已失效：401，让前端回到登录页（原来的行为，不让自己的研究突然显示“不存在”）；
+# - 已登录：属于自己才能读，否则 404。
+# tests/test_showcases.py 遍历这些接口，检查没有遗漏。
+
+def _reader(request: Request) -> UserInfo | None:
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    with service_errors():
+        user = auth_service.resolve_session(require_db(request), token)
+    if user is None:
+        raise HTTPException(401, "未登录或登录已过期")
+    return user
+
+
+def readable_run(run_id: str, request: Request) -> str:
+    from dra.api.services import showcases
+    from dra.api.services.ids import RUN_ID_RE
+
+    if not RUN_ID_RE.fullmatch(run_id):
+        raise HTTPException(404, _RUN_NOT_FOUND)
+    with service_errors():
+        owner, public = showcases.run_access(require_db(request), run_id)
+    if public:
+        return run_id
+    user = _reader(request)
+    if user is None or owner != user.id:
+        raise HTTPException(404, _RUN_NOT_FOUND)
+    return run_id
+
+
+def readable_conversation(conversation_id: str, request: Request) -> str:
+    from dra.api.services import showcases
+    from dra.api.services.ids import RUN_ID_RE
+
+    if not RUN_ID_RE.fullmatch(conversation_id):
+        raise HTTPException(404, _CONVERSATION_NOT_FOUND)
+    with service_errors():
+        owner, public = showcases.conversation_access(require_db(request), conversation_id)
+    if public:
+        return conversation_id
+    user = _reader(request)
+    if user is None or owner != user.id:
+        raise HTTPException(404, _CONVERSATION_NOT_FOUND)
+    return conversation_id
+
+
+def conversation_runs(conversation_id: str, request: Request):
+    """对话汇总用：判断某个 run_id 是否登记在这个对话里的函数（读取检查已先通过）。"""
+    from dra.api.services import run_records
+
+    with service_errors():
+        ids = run_records.registered_conversation_run_ids(require_db(request), conversation_id)
+    return ids.__contains__
+
+
+ConversationRunsDep = Annotated[object, Depends(conversation_runs)]
+READABLE_RUN = [Depends(readable_run)]
+READABLE_CONVERSATION = [Depends(readable_conversation)]
+
+
 # ---- 管理员权限（阶段 1 第 5 步 #32；设计 §4） -------------------------------------------
 # 改全站设置（模型、服务商、外部资料服务、技能）的接口放进各 router 文件的 admin_router 分组，
 # 在分组上统一挂这个检查；tests/test_admin_permissions.py 遍历这类接口，检查没有遗漏。

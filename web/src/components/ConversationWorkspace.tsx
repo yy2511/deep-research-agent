@@ -296,9 +296,13 @@ function PlanList({view}:{view:RunView}) {
  </>;
 }
 
-export function ConversationWorkspace({view:original,runId,canSend=false,onSend,onOpenRun,onFollowupStarted,status,showRecords=true}:{view:RunView;runId:string|null;mode?:'clean'|'debug';canSend?:boolean;onSend?:(id:string,text:string)=>Promise<void>;onOpenRun?:(id:string,status?:string)=>void;onFollowupStarted?:(id:string)=>void;
+export function ConversationWorkspace({view:original,runId,canSend=false,onSend,onOpenRun,onFollowupStarted,status,showRecords=true,readOnly,readOnlyAction}:{view:RunView;runId:string|null;mode?:'clean'|'debug';canSend?:boolean;onSend?:(id:string,text:string)=>Promise<void>;onOpenRun?:(id:string,status?:string)=>void;onFollowupStarted?:(id:string)=>void;
  /** 顶栏右侧：研究状态与停止按钮。 */
  status?:ReactNode;
+ /** 公开示例（#47）：只能看，不显示追问、继续研究和发消息的入口。服务端同样拒绝这些操作。 */
+ readOnly?:boolean;
+ /** 只读提示旁的操作，例如“用 GitHub 登录，问你自己的问题”。 */
+ readOnlyAction?:ReactNode;
  /** 开发者选项“显示运行记录”。 */
  showRecords?:boolean}) {
  const key=runId??'demo';
@@ -347,7 +351,7 @@ export function ConversationWorkspace({view:original,runId,canSend=false,onSend,
  const openOrigin=(id:string,cardId:string)=>{rememberScroll();const old=saved.get(id)??blank();saved.set(id,{...old,nav:{...old.nav,tab:'evidence',card:cardId,source:false,agent:null,back:undefined}});onOpenRun?.(id)};
  const back=()=>{if(nav.back){const previous=nav.back;navigate({...previous,back:undefined})}else navigate({source:false,agent:null,card:null,tab:'conversation'})};
  const turnNo=meta?.turn_index??1,isLatest=latest===runId;
- const canFollowup=ended&&isLatest&&!!meta&&!view.replayOnly&&!['running','preparing'].includes(meta.status);
+ const canFollowup=!readOnly&&ended&&isLatest&&!!meta&&!view.replayOnly&&!['running','preparing'].includes(meta.status);
  async function send(id:string,text:string){if(canFollowup&&runId){const res=await postJSON<{run_id:string}>(`/api/research/${runId}/followup`,{request_id:id,text},AbortSignal.timeout(20000));if(mounted.current)onFollowupStarted?.(res.run_id)}else if(canSend&&onSend)await onSend(id,text);else throw new Error('这一轮暂时不接收消息')}
  async function continueFromClues(){setContinuing(true);setContinueError('');try{await send(crypto.randomUUID(),'请基于已经找到的线索继续研究，完成原来的问题。')}catch(e){setContinueError(e instanceof Error?e.message:'没能继续，请稍后重试')}finally{if(mounted.current)setContinuing(false)}}
  // 停止或未交付时，后端的 report.md 只是一份状态说明，不当作回答显示。
@@ -436,7 +440,8 @@ export function ConversationWorkspace({view:original,runId,canSend=false,onSend,
  {card&&runId&&<EvidenceDetail key={card.card_id} card={card} sources={sources} runId={runId} onSource={quoteIndex=>navigate({source:true,quoteIndex})} onCall={onCall} onOrigin={openOrigin} view={view}/>}
  {agent&&<AgentDetail agent={agent} view={view} expanded={ui.expanded} toggle={toggle} onCall={onCall} onAgent={openAgent}/>}</aside>}
  </div>
- {nav.tab==='conversation'&&<footer className='cw-bottom'><div className='cw-input-area'>
+ {nav.tab==='conversation'&&readOnly&&<footer className='cw-bottom'><div className='cw-input-area'><p className='cw-history-notice cw-readonly-notice'>这是公开示例，只能查看。{readOnlyAction}</p></div></footer>}
+ {nav.tab==='conversation'&&!readOnly&&<footer className='cw-bottom'><div className='cw-input-area'>
   {!isLatest&&<p className='cw-history-notice'>正在看之前的一轮。<button className='cw-link' onClick={()=>latest&&onOpenRun?.(latest,turns.find(t=>t.run_id===latest)?.status)}>回到最新一轮继续提问</button></p>}
   {view.replayOnly&&<p className='cw-history-notice'>当前为只读快放。<button className='cw-link' onClick={()=>runId&&onOpenRun?.(runId,meta?.status)}>打开研究结果以继续提问</button></p>}
   <ResearchComposer key={key} draftKey={key} purpose={ended?'followup':'steer'} canSend={isLatest&&(canSend||canFollowup)} state={view.inputState} messages={view.userMessages} onSend={send}/>

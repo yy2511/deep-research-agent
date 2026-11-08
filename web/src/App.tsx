@@ -9,7 +9,7 @@ import { SkillPicker } from "./components/SkillsPanel";
 import { NewResearch } from "./components/NewResearch";
 import { PlanningProgress, ThinkingReview } from "./components/PlanningProgress";
 import { applyPlannerEvent, startProgress, thinkingText, type PlanProgress, type PlanStage } from "./planProgress";
-import { Sidebar } from "./components/Sidebar";
+import { ShowcaseList, Sidebar } from "./components/Sidebar";
 import { RunStatus } from "./components/RunStatus";
 import { SettingsPage, type LocalPrefs, type SettingsTab } from "./components/SettingsPage";
 import type { RunMeta, SimplePayload } from "./reducer";
@@ -20,6 +20,7 @@ import "./styles.css";
 import type { RunView, ResearchInputSnapshot, ResearchUserMessage, ResearchInputState } from "./types";
 import { type PlanTrace } from "./types";
 import { accountLabel, type Account } from "./auth";
+import { fetchShowcases, showcaseEntry, showcaseOf, type Showcase } from "./showcases";
 
 // 刷新恢复"当前运行的"钥匙：运行中与已结束的历史都记，刷新后回到同一条 run。
 // 与 URL 的 ?run= 互为备份（URL 便于分享/前进后退，localStorage 兼容旧会话）。
@@ -57,8 +58,18 @@ type RunDetail = {
   research_input?: ResearchInputSnapshot;
 };
 
-/** account / onLogout 由 AuthGate 传入（main.tsx）；行为测试直接调用 App() 时可以不传。 */
-function App({ account, onLogout }: { account?: Account; onLogout?: () => void } = {}) {
+/**
+ * account / onLogout 由 AuthGate 传入（main.tsx）；行为测试直接调用 App() 时可以不传。
+ * publicShowcases：未登录时只看示例（#47）——不显示新研究、历史与设置，左侧是示例列表；onLogin 回到登录页。
+ */
+function App({ account, onLogout, publicShowcases, onLogin }: {
+  account?: Account; onLogout?: () => void; publicShowcases?: Showcase[]; onLogin?: () => void;
+} = {}) {
+  const publicMode = publicShowcases !== undefined;
+  const [showcases, setShowcases] = useState<Showcase[]>(publicShowcases ?? []);
+  useEffect(() => {
+    if (!publicMode) void fetchShowcases().then(setShowcases);
+  }, [publicMode]);
   const [view, setView] = useState<RunView>(initialView());
   const [selectedSkills,setSelectedSkills] = useState<string[]>([]);
   const [sourceSelection,setSourceSelection] = useState<SourceSelection>(() => ({
@@ -349,6 +360,14 @@ function App({ account, onLogout }: { account?: Account; onLogout?: () => void }
   // 走哪条路由 planOpen 按该 run 自己的 meta 判定，与"下次新建研究"的模式设置无关。
   // 恢复本身也是异步的：期间用户点了别的运行，这次恢复必须整条放弃（批次防护）。
   useEffect(() => {
+    if (publicMode) {
+      // 未登录：只打开示例里的研究；地址栏指向别的研究（或没有）时打开第一个示例。
+      const fromUrl = readRunParam();
+      const target = fromUrl && showcaseOf(showcases, fromUrl) ? fromUrl
+        : showcases.map(showcaseEntry).find((id): id is string => id !== null) ?? null;
+      if (target) void viewHistoricalRun(target, "instant");
+      return;
+    }
     const fromUrl = readRunParam();
     const saved = fromUrl ?? localStorage.getItem(ACTIVE_RUN_KEY);
     if (!saved) return;
@@ -639,6 +658,17 @@ function App({ account, onLogout }: { account?: Account; onLogout?: () => void }
     void viewHistoricalRun(id, replayMode);
   }
 
+  function openShowcase(showcase: Showcase) {
+    const entry = showcaseEntry(showcase);
+    if (entry) openHistoryRun(entry, "instant");
+  }
+
+  // 正在看的是示例（#47）：只读，不显示追问等入口；服务端同样拒绝。
+  const readOnly = showcaseOf(showcases, runId) !== null;
+  const readOnlyAction = publicMode
+    ? <button className="cw-link" onClick={onLogin}>用 GitHub 登录，问你自己的问题</button>
+    : <button className="cw-link" onClick={openNewResearch}>开始新研究</button>;
+
   // hasContent = 有 run/demo/回放的内容可展示（runId 存在，或 view 已开始——demo 不置 runId）。
   // 无内容 = 空闲态，显示新研究输入或开跑前的确认卡；有内容 = 研究页。
   const hasContent = runId !== null || view.startedAtMs !== undefined;
@@ -652,18 +682,26 @@ function App({ account, onLogout }: { account?: Account; onLogout?: () => void }
           <span className="brand-mark"><Icon name="search" size={16} strokeWidth={2.2} /></span>
           <span className="brand-text">研究工作台</span>
         </div>
-        <button className="btn sidebar-new" onClick={openNewResearch}>
-          <Icon name="plus" size={16} /><span>新研究</span>
-        </button>
+        {publicMode ? (
+          <button className="btn btn-primary sidebar-new" onClick={onLogin}>
+            <span>登录后提问</span>
+          </button>
+        ) : (
+          <button className="btn sidebar-new" onClick={openNewResearch}>
+            <Icon name="plus" size={16} /><span>新研究</span>
+          </button>
+        )}
         <button className="icon-btn history-toggle" aria-label="最近的研究" aria-expanded={historyOpen}
           onClick={() => setHistoryOpen((open) => !open)}>
           <Icon name="history" size={18} />
         </button>
         <div className={`sidebar-history${historyOpen ? " is-open" : ""}`}>
-          <Sidebar
+          <ShowcaseList showcases={showcases} currentRunId={page === "research" ? runId : null}
+            onSelect={(item) => { setHistoryOpen(false); openShowcase(item); }} />
+          {!publicMode && <Sidebar
             refreshSignal={runsVersion} currentRunId={page === "research" ? runId : null}
             onSelectLive={openLiveRun} onSelectReplay={openHistoryRun} showReplay={prefs.showReplay}
-          />
+          />}
         </div>
         {account && (
           <div className="sidebar-account">
@@ -676,16 +714,20 @@ function App({ account, onLogout }: { account?: Account; onLogout?: () => void }
             </button>
           </div>
         )}
-        <button className={`sidebar-settings${page === "settings" ? " is-active" : ""}`} aria-label="设置"
-          aria-current={page === "settings" ? "page" : undefined} onClick={() => setPage(page === "settings" ? "research" : "settings")}>
-          <Icon name="sliders" size={16} /><span>设置</span>
-        </button>
+        {!publicMode && (
+          <button className={`sidebar-settings${page === "settings" ? " is-active" : ""}`} aria-label="设置"
+            aria-current={page === "settings" ? "page" : undefined} onClick={() => setPage(page === "settings" ? "research" : "settings")}>
+            <Icon name="sliders" size={16} /><span>设置</span>
+          </button>
+        )}
       </aside>
       <main className="workbench">
         {streamDropped && <div className="conn-warn"><Icon name="warning" size={15} />连接中断，浏览器正在自动重连…</div>}
         {page === "settings" ? (
           <SettingsPage tab={settingsTab} onTab={setSettingsTab} prefs={prefs} onPrefs={updatePrefs} onDemo={playDemo}
             isAdmin={account?.role === "admin"} />
+        ) : !hasContent && publicMode ? (
+          <div className="stage-main"><p className="history-empty">从左侧选一个示例查看。</p></div>
         ) : !hasContent ? (
           <div className="stage-main">
             {brief !== null || gaps !== null ? (
@@ -729,7 +771,7 @@ function App({ account, onLogout }: { account?: Account; onLogout?: () => void }
         ) : (
           <div className="stage-main">
             <ConversationWorkspace key={runId ?? "current"} view={view} runId={runId} mode={mode}
-              showRecords={prefs.showRecords}
+              showRecords={prefs.showRecords} readOnly={readOnly} readOnlyAction={readOnlyAction}
               status={<RunStatus key={runId ?? "none"} view={view} nowMs={nowMs}
                 onCancel={handleCancelRun} canCancel={running && runId !== null && isLive} cancelling={cancelling} />}
               canSend={isLive && !streamDropped && !cancelling && view.endedAtMs === undefined && view.inputState === 'open'}

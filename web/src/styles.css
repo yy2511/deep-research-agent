@@ -288,6 +288,7 @@ select:focus { outline: none; border-color: var(--accent); }
 .sidebar-history { flex: 1; min-height: 0; overflow: auto; margin: 0 -4px; padding: 0 4px; }
 .history-list { display: flex; flex-direction: column; gap: 2px; }
 .history-title { padding: 0 8px 6px; font-size: 12px; color: var(--faint); }
+.showcase-list { margin-bottom: 14px; }
 .history-empty { margin: 0; padding: 4px 8px; font-size: 12px; color: var(--placeholder); }
 .history-item { position: relative; display: flex; align-items: center; border-radius: var(--radius-sm); }
 .history-item:hover { background: var(--hover); }

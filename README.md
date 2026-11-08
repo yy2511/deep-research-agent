@@ -55,6 +55,8 @@ cd web && npm ci && npm run dev
 
 **GitHub 登录（可选）**：在 GitHub → Settings → Developer settings → OAuth Apps 新建应用，回调地址填 `http://localhost:5173/api/auth/github/callback`（线上换成自己的域名），把 Client ID、Client Secret 写进 `.env` 的 `DRA_GITHUB_CLIENT_ID`、`DRA_GITHUB_CLIENT_SECRET`。两个都配置后登录页出现“用 GitHub 登录”。GitHub 登录的账号是访客（`guest`），只申请公开资料；用 `set-role --github <登录名> --role user` 可升为普通用户，`disable-user --github <登录名>` 停用。
 
+**示例（可选）**：把自己跑完的纯网页研究公开给所有人只读查看（未登录也能看），用 `uv run python -m dra.admin showcase add <对话编号> --title "标题"`。对话编号就是该对话第一轮的研究编号，可在网址 `?run=` 后看到。命令会先列出将公开的内容，输入 y 确认；`showcase list` 查看、`showcase remove <对话编号>` 取消。作为示例期间这个对话不能再追问。
+
 Web 后端需要 PostgreSQL：地址取环境变量 `DRA_DATABASE_URL`，没有时读 `.env` 中的同名项；连不上或迁移不是最新时拒绝启动并提示原因。Web 后端默认监听 `http://127.0.0.1:8765`，Vite 开发服务器默认监听 `http://127.0.0.1:5173`。生产形态先运行 `cd web && npm run build`，随后只启动后端，由 FastAPI 直接服务 `web/dist/`。
 
 默认 Web 检索会并发尝试 Tavily 与 Exa，建议同时配置两者；两者都失败时会尝试无密钥的 DuckDuckGo 兜底。完整环境变量见 [.env.example](.env.example)。

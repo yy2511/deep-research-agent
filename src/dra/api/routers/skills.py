@@ -5,12 +5,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from dra.api.common import _require_valid_run_id, service_errors
-from dra.api.deps import ADMIN_ONLY, OWNED_RUN, StoreDep
+from dra.api.deps import ADMIN_ONLY, READABLE_RUN, StoreDep
 from dra.api.services import skills as skill_service
 
 router = APIRouter()
-# 带研究编号的接口：分组上统一检查归属（#31）。
-run_router = APIRouter(dependencies=OWNED_RUN)
+# 带研究编号的查看接口：属于自己或属于示例（#31、#47）。
+read_router = APIRouter(dependencies=READABLE_RUN)
 # 开关技能、改技能包：分组上统一要求管理员（#32）。准备技能（prepare）发起研究要用，所有登录用户可调。
 admin_router = APIRouter(dependencies=ADMIN_ONLY)
 
@@ -54,7 +54,7 @@ def api_skills_write(name: str, req: SkillWriteReq):
         return skill_service.save(name, req.text, req.references)
 
 
-@run_router.get("/api/runs/{run_id}/skills")
+@read_router.get("/api/runs/{run_id}/skills")
 def api_run_skills(run_id: str, *, store: StoreDep):
     _require_valid_run_id(run_id)
     if store.get_meta(run_id) is None:

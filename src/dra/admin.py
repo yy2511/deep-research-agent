@@ -141,6 +141,48 @@ def _import_legacy(args: argparse.Namespace) -> int:
     return 0
 
 
+def _showcase(args: argparse.Namespace) -> int:
+    """示例（阶段 2 第 2 步 #47）：设为示例前列出将公开的内容，确认后才写入。"""
+    from dra.api.services import showcases
+    from dra.paths import RUNS_DIR
+    from dra.runstore import RunStore
+
+    store = RunStore(args.runs_dir or RUNS_DIR)
+    database = _ready_database()
+    try:
+        if args.action == "list":
+            items = showcases.list_public(database, store)
+            if not items:
+                print("还没有示例")
+            for item in items:
+                state = "" if item["available"] else "（运行文件缺失，打开时显示不可用）"
+                print(f"{item['conversation_id']}  {item['title']}  · {item['turn_count']} 轮{state}")
+            return 0
+        if not args.conversation_id:
+            raise _UsageError(f"showcase {args.action} 需要对话编号")
+        if args.action == "remove":
+            showcases.remove(database, args.conversation_id)
+            print(f"已取消示例 {args.conversation_id}；该对话恢复为仅自己可见，可以继续追问")
+            return 0
+        if not args.title:
+            raise _UsageError("设为示例需要 --title")
+        review = showcases.review(database, store, args.conversation_id)
+        print(f"将公开对话 {args.conversation_id}（所有人可见，包括未登录的访客）：")
+        for turn in review.turns:
+            print(f"  第 {turn['turn_index']} 轮：{turn['query']}")
+        print(f"  附件 {len(review.artifacts)} 个" + (f"：{'、'.join(review.artifacts)}" if review.artifacts else ""))
+        print(f"  代码执行记录 {review.executions} 次")
+        print("  研究过程、来源原文、证据卡也会一起公开。作为示例期间这个对话不能再追问。")
+        if not args.yes and input("确认设为示例？输入 y 确认：").strip().lower() != "y":
+            print("已取消，没有改动")
+            return 1
+        showcases.add(database, store, args.conversation_id, args.title, sort_order=args.order)
+        print(f"已设为示例：{args.title}")
+        return 0
+    finally:
+        database.dispose()
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m dra.admin", description="研究工作台管理命令")
     commands = parser.add_subparsers(dest="command", required=True, metavar="命令")
@@ -192,6 +234,15 @@ def _parser() -> argparse.ArgumentParser:
     with_user(set_role)
     set_role.add_argument("--role", required=True, choices=auth.ROLES)
     set_role.set_defaults(handler=_set_role)
+
+    showcase = commands.add_parser("showcase", help="管理公开示例：add 设为示例、remove 取消、list 查看")
+    showcase.add_argument("action", choices=("add", "remove", "list"))
+    showcase.add_argument("conversation_id", nargs="?", help="对话编号（即该对话第一轮的研究编号）")
+    showcase.add_argument("--title", help="示例标题（add 时必填）")
+    showcase.add_argument("--order", type=int, default=0, help="排序，小的在前，默认 0")
+    showcase.add_argument("--yes", action="store_true", help="不询问，直接确认（脚本用）")
+    showcase.add_argument("--runs-dir", type=Path, help="运行目录，默认 <数据目录>/runs")
+    showcase.set_defaults(handler=_showcase)
     return parser
 
 
