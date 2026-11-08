@@ -19,7 +19,7 @@ import {
 import "./styles.css";
 import type { RunView, ResearchInputSnapshot, ResearchUserMessage, ResearchInputState } from "./types";
 import { type PlanTrace } from "./types";
-import type { Account } from "./auth";
+import { accountLabel, type Account } from "./auth";
 
 // 刷新恢复"当前运行的"钥匙：运行中与已结束的历史都记，刷新后回到同一条 run。
 // 与 URL 的 ?run= 互为备份（URL 便于分享/前进后退，localStorage 兼容旧会话）。
@@ -667,8 +667,10 @@ function App({ account, onLogout }: { account?: Account; onLogout?: () => void }
         </div>
         {account && (
           <div className="sidebar-account">
-            <span className="sidebar-account-email" title={account.email}>{account.email}</span>
+            {account.avatar_url && <img className="sidebar-account-avatar" src={account.avatar_url} alt="" width={20} height={20} referrerPolicy="no-referrer" />}
+            <span className="sidebar-account-email" title={account.email ?? accountLabel(account)}>{accountLabel(account)}</span>
             {account.role === "admin" && <span className="sidebar-account-role">管理员</span>}
+            {account.role === "guest" && <span className="sidebar-account-role">访客</span>}
             <button className="icon-btn" aria-label="退出登录" title="退出登录" onClick={onLogout}>
               <Icon name="logout" size={16} />
             </button>

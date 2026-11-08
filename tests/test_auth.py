@@ -26,7 +26,9 @@ from dra.db_tables import Invite, LoginSession, User, utcnow
 pytestmark = pytest.mark.real_auth
 
 PASSWORD = "correct horse battery"
-PUBLIC_API = {"/api/auth/register", "/api/auth/login"}
+# GitHub 登录的两个跳转接口与登录页选项也不要求登录（阶段 2，#45）。
+PUBLIC_API = {"/api/auth/register", "/api/auth/login", "/api/auth/options",
+              "/api/auth/github/start", "/api/auth/github/callback"}
 
 
 @pytest.fixture
@@ -176,7 +178,8 @@ def _login(client, email="alice@example.com", password=PASSWORD):
 def test_login_sets_http_only_lax_cookie(client, alice):
     response = _login(client, email=" ALICE@example.com")
     assert response.status_code == 200
-    assert response.json() == {"id": alice.id, "email": "alice@example.com", "role": "user"}
+    assert response.json() == {"id": alice.id, "email": "alice@example.com", "role": "user",
+                               "display_name": None, "avatar_url": None}
     header = response.headers["set-cookie"].lower()
     assert header.startswith(f"{SESSION_COOKIE}=")
     assert "httponly" in header and "samesite=lax" in header and "path=/" in header

@@ -8,7 +8,45 @@ import { ApiError } from "./api";
 
 export { onUnauthorized } from "./session";
 
-export type Account = { id: number; email: string; role: "user" | "admin" };
+/** GitHub 登录的访客（guest）没有邮箱，显示 display_name（阶段 2，#45）。 */
+export type Account = {
+  id: number; email: string | null; role: "guest" | "user" | "admin";
+  display_name?: string | null; avatar_url?: string | null;
+};
+
+/** 侧边栏等处显示的名字。 */
+export function accountLabel(account: Account): string {
+  return account.display_name || account.email || `用户 ${account.id}`;
+}
+
+export const GITHUB_LOGIN_URL = "/api/auth/github/start";
+
+/** 服务端是否配置了 GitHub 登录。查不到时当作没有，不影响邮箱登录。 */
+export async function fetchAuthOptions(): Promise<{ github: boolean }> {
+  try {
+    const res = await fetch("/api/auth/options");
+    if (!res.ok) return { github: false };
+    const body = await res.json();
+    return { github: body?.github === true };
+  } catch {
+    return { github: false };
+  }
+}
+
+/** GitHub 登录失败时，服务端跳回 /?login_error=<代码>；这里换成说明。只认已知代码，不显示网址里的原文。 */
+const GITHUB_LOGIN_ERRORS: Record<string, string> = {
+  denied: "你在 GitHub 上取消了授权，没有登录。",
+  state: "登录链接已失效或来自别的页面，请重新点“用 GitHub 登录”。",
+  github: "暂时无法通过 GitHub 确认身份，请稍后重试。",
+  disabled: "账号已停用。",
+  unavailable: "服务暂时不可用，请稍后重试。",
+};
+
+export function loginErrorFrom(search: string): string | null {
+  const code = new URLSearchParams(search).get("login_error");
+  if (code === null) return null;
+  return GITHUB_LOGIN_ERRORS[code] ?? "登录没有完成，请重试。";
+}
 
 export const PASSWORD_MIN = 8;
 export const PASSWORD_MAX = 256;

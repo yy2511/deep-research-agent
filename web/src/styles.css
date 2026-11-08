@@ -308,6 +308,7 @@ select:focus { outline: none; border-color: var(--accent); }
 
 /* 侧栏底部的当前账号 */
 .sidebar-account { display: flex; align-items: center; gap: 4px; margin-top: auto; padding: 0 2px 0 10px; min-width: 0; }
+.sidebar-account-avatar { flex: none; width: 20px; height: 20px; border-radius: 50%; }
 .sidebar-account-email { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--faint); }
 .sidebar-account-role { flex: none; padding: 1px 6px; font-size: 12px; border-radius: 999px; background: var(--subtle); color: var(--muted); }
 
@@ -320,6 +321,9 @@ select:focus { outline: none; border-color: var(--accent); }
 .auth-submit { width: 100%; height: 40px; }
 .auth-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 32px); padding: 10px 12px 10px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-pop); font-size: 14px; color: var(--ink-2); }
 .auth-switch { margin: 0; display: flex; gap: 6px; justify-content: center; font-size: 14px; color: var(--muted); }
+.auth-github { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.auth-divider { margin: 0; display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--faint); }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
 
 /* ---------------- 首页 ---------------- */
 .landing { width: min(768px, 100%); margin: auto; padding: 40px 24px 64px; display: flex; flex-direction: column; gap: 28px; }

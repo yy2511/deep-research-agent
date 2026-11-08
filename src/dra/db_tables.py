@@ -17,6 +17,7 @@ from sqlalchemy import (
     MetaData,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
@@ -67,20 +68,43 @@ class Base(DeclarativeBase):
 
 
 class User(Base):
+    """账号。邮箱密码注册的有 email、password_hash；GitHub 登录的访客两者都为空（阶段 2，#45）。"""
+
     __tablename__ = "users"
     __table_args__ = (
-        CheckConstraint("role IN ('user', 'admin')", name="role"),
+        CheckConstraint("role IN ('guest', 'user', 'admin')", name="role"),
         CheckConstraint("status IN ('active', 'disabled')", name="status"),
     )
 
     id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
-    # 存去掉首尾空格、转小写后的值（由业务层规范化）。
-    email: Mapped[str] = mapped_column(String(320), unique=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
+    # 存去掉首尾空格、转小写后的值（由业务层规范化）。唯一约束允许多个空值。
+    email: Mapped[str | None] = mapped_column(String(320), unique=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255))
+    # 显示用：GitHub 登录名与头像，每次 GitHub 登录时更新。
+    display_name: Mapped[str | None] = mapped_column(String(100))
+    avatar_url: Mapped[str | None] = mapped_column(String(500))
     role: Mapped[str] = mapped_column(String(16), default="user")
     status: Mapped[str] = mapped_column(String(16), default="active")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
+
+
+class UserIdentity(Base):
+    """外部登录身份（阶段 2，#45；设计 docs/design/阶段2-公开试用.md §2）。
+
+    ``subject`` 是对方系统里不变的编号（GitHub 的数字 id），不用会改的登录名。
+    """
+
+    __tablename__ = "user_identities"
+    __table_args__ = (UniqueConstraint("provider", "subject", name="uq_user_identities_provider_subject"),)
+
+    id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    subject: Mapped[str] = mapped_column(String(64))
+    # 对方系统里的登录名，供管理命令按名字找人；以 subject 为准。
+    login: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class Invite(Base):
