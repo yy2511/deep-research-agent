@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getJSON, probeSession } from "./api";
-import { fetchMe, login, logout, register, validateAuthForm } from "./auth";
+import { accountLabel, fetchAuthOptions, fetchMe, login, loginErrorFrom, logout, register, validateAuthForm } from "./auth";
 import { AuthPage, LogoutError } from "./components/AuthGate";
 import { onUnauthorized } from "./session";
 
@@ -134,5 +134,42 @@ describe("退出登录", () => {
   it("失败提示说明仍处于登录状态，并提供重试", () => {
     const html = renderToStaticMarkup(<LogoutError message="网络连接失败" onRetry={() => {}} onDismiss={() => {}} />);
     for (const text of ["退出登录失败（网络连接失败）", "当前仍处于登录状态", "重试", 'role="alert"']) expect(html).toContain(text);
+  });
+});
+
+describe("GitHub 登录（#45）", () => {
+  it("服务端配置了才显示按钮，按钮整页跳到后端的 GitHub 入口", () => {
+    const off = renderToStaticMarkup(<AuthPage onAuthed={() => {}} />);
+    expect(off).not.toContain("用 GitHub 登录");
+    const on = renderToStaticMarkup(<AuthPage onAuthed={() => {}} github />);
+    expect(on).toContain('href="/api/auth/github/start"');
+    expect(on).toContain("用 GitHub 登录");
+    expect(on).toContain("或用邮箱登录");
+    // 注册页是邀请码注册，不显示 GitHub 按钮。
+    expect(renderToStaticMarkup(<AuthPage onAuthed={() => {}} github initialMode="register" />)).not.toContain("用 GitHub 登录");
+  });
+
+  it("查询是否启用 GitHub 登录；查不到时当作没有", async () => {
+    stubFetch(200, { github: true });
+    await expect(fetchAuthOptions()).resolves.toEqual({ github: true });
+    stubFetch(500, {});
+    await expect(fetchAuthOptions()).resolves.toEqual({ github: false });
+    vi.stubGlobal("fetch", async () => { throw new TypeError("network down"); });
+    await expect(fetchAuthOptions()).resolves.toEqual({ github: false });
+  });
+
+  it("跳回来的错误代码换成说明，不显示网址里的原文", () => {
+    expect(loginErrorFrom("")).toBeNull();
+    expect(loginErrorFrom("?login_error=denied")).toContain("取消了授权");
+    expect(loginErrorFrom("?login_error=state")).toContain("重新点");
+    expect(loginErrorFrom("?login_error=<script>")).toBe("登录没有完成，请重试。");
+    const html = renderToStaticMarkup(<AuthPage onAuthed={() => {}} github initialError={loginErrorFrom("?login_error=github")} />);
+    expect(html).toContain("暂时无法通过 GitHub 确认身份");
+  });
+
+  it("没有邮箱的访客显示 GitHub 名字", () => {
+    expect(accountLabel({ id: 3, email: null, role: "guest", display_name: "Octo Cat" })).toBe("Octo Cat");
+    expect(accountLabel({ id: 1, email: "a@b.co", role: "admin" })).toBe("a@b.co");
+    expect(accountLabel({ id: 7, email: null, role: "guest" })).toBe("用户 7");
   });
 });

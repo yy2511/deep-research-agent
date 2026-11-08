@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
-  fetchMe, login, logout, onUnauthorized, register, validateAuthForm,
-  PASSWORD_MAX, PASSWORD_MIN, type Account, type AuthFields, type AuthMode,
+  fetchAuthOptions, fetchMe, login, loginErrorFrom, logout, onUnauthorized, register, validateAuthForm,
+  GITHUB_LOGIN_URL, PASSWORD_MAX, PASSWORD_MIN, type Account, type AuthFields, type AuthMode,
 } from "../auth";
 import { Icon } from "./Icon";
 
 type GateState =
   | { kind: "checking" }
-  | { kind: "anonymous"; notice?: string }
+  | { kind: "anonymous"; notice?: string; github?: boolean }
   | { kind: "error"; message: string }
   | { kind: "ready"; account: Account };
 
@@ -18,12 +18,22 @@ type GateState =
 export function AuthGate({ children }: { children: (account: Account, onLogout: () => void) => ReactNode }) {
   const [state, setState] = useState<GateState>({ kind: "checking" });
   const [logoutError, setLogoutError] = useState<string | null>(null);
+  // GitHub 登录失败跳回来时带着 ?login_error=…：读出说明后从地址栏去掉，刷新不再重复显示。
+  const [githubError] = useState(() => {
+    const message = loginErrorFrom(window.location.search);
+    if (message !== null) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("login_error");
+      window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    }
+    return message;
+  });
 
   const check = useCallback(async () => {
     setState({ kind: "checking" });
     try {
       const account = await fetchMe();
-      setState(account ? { kind: "ready", account } : { kind: "anonymous" });
+      setState(account ? { kind: "ready", account } : { kind: "anonymous", github: (await fetchAuthOptions()).github });
     } catch (e) {
       setState({ kind: "error", message: e instanceof Error ? e.message : "无法确认登录状态" });
     }
@@ -32,6 +42,14 @@ export function AuthGate({ children }: { children: (account: Account, onLogout: 
   useEffect(() => { void check(); }, [check]);
   useEffect(() => onUnauthorized(() => setState((s) =>
     s.kind === "ready" ? { kind: "anonymous", notice: "登录已过期，请重新登录。进行中的研究不受影响。" } : s)), []);
+  // 登录过期、退出后回到登录页时也要知道有没有 GitHub 登录。
+  const anonymous = state.kind === "anonymous" && state.github === undefined;
+  useEffect(() => {
+    if (!anonymous) return;
+    let live = true;
+    void fetchAuthOptions().then((o) => { if (live) setState((s) => (s.kind === "anonymous" ? { ...s, github: o.github } : s)); });
+    return () => { live = false; };
+  }, [anonymous]);
 
   // 只有服务端确认退出才回到登录页；失败时保持登录并提示重试（#34 审查）。
   const handleLogout = useCallback(() => {
@@ -61,7 +79,8 @@ export function AuthGate({ children }: { children: (account: Account, onLogout: 
       </div>
     );
   }
-  return <AuthPage notice={state.notice} onAuthed={(account) => setState({ kind: "ready", account })} />;
+  return <AuthPage notice={state.notice} github={state.github === true} initialError={githubError}
+    onAuthed={(account) => setState({ kind: "ready", account })} />;
 }
 
 export function LogoutError({ message, onRetry, onDismiss }: { message: string; onRetry: () => void; onDismiss: () => void }) {
@@ -77,12 +96,14 @@ export function LogoutError({ message, onRetry, onDismiss }: { message: string; 
 
 const EMPTY: AuthFields = { email: "", password: "", confirm: "", invite: "" };
 
-export function AuthPage({ onAuthed, notice, initialMode = "login" }: {
+export function AuthPage({ onAuthed, notice, initialMode = "login", github = false, initialError = null }: {
   onAuthed: (account: Account) => void; notice?: string; initialMode?: AuthMode;
+  /** 服务端配置了 GitHub 登录时显示按钮（阶段 2，#45）。 */
+  github?: boolean; initialError?: string | null;
 }) {
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [fields, setFields] = useState<AuthFields>(EMPTY);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
   const [busy, setBusy] = useState(false);
   const set = (key: keyof AuthFields) => (e: { target: { value: string } }) =>
     setFields((f) => ({ ...f, [key]: e.target.value }));
@@ -121,6 +142,13 @@ export function AuthPage({ onAuthed, notice, initialMode = "login" }: {
         </div>
         <h1 className="auth-title">{registering ? "用邀请码注册" : "登录"}</h1>
         {notice && <p className="auth-notice">{notice}</p>}
+        {github && !registering && (
+          <>
+            {/* 整页跳转：GitHub 授权后由服务端设置登录 Cookie 并跳回首页。 */}
+            <a className="btn auth-submit auth-github" href={GITHUB_LOGIN_URL}>用 GitHub 登录</a>
+            <p className="auth-divider"><span>或用邮箱登录</span></p>
+          </>
+        )}
         {registering && (
           <label className="field">
             <span className="field-label">邀请码</span>

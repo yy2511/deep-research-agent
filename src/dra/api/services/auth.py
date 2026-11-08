@@ -1,4 +1,4 @@
-"""账号与登录（业务层）。设计：docs/design/阶段1-数据库与用户.md §2；决定：ADR 0005。
+"""账号与登录（业务层）。设计：docs/design/阶段1-数据库与用户.md §2、阶段2-公开试用.md §2；决定：ADR 0005、0007。
 
 - 密码用 argon2id 哈希；登录令牌、邀请码在库里只存 SHA-256。
 - 每个操作自己开短会话、只返回普通数据（ADR 0006 规则 1、2）；密码哈希这类慢操作放在事务外。
@@ -14,7 +14,7 @@ from functools import cache
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from dra.api.services.db_errors import database_errors as _database_errors
@@ -26,7 +26,7 @@ from dra.api.services.errors import (
     Unauthorized,
 )
 from dra.db import Database
-from dra.db_tables import Invite, LoginSession, User, utcnow
+from dra.db_tables import Invite, LoginSession, User, UserIdentity, utcnow
 
 # 新增限制（设计“新增的限制”）：密码长度、会话无活动有效期、邀请码默认有效期。
 PASSWORD_MIN = 8
@@ -41,6 +41,7 @@ INVITE_INVALID = "邀请码无效或已使用"
 EMAIL_TAKEN = "该邮箱已注册"
 LOGIN_FAILED = "邮箱或密码错误"
 ACCOUNT_DISABLED = "账号已停用"
+ROLES = ("guest", "user", "admin")
 
 _hasher = PasswordHasher()
 
@@ -50,8 +51,11 @@ class UserInfo:
     """交给接口层和研究流程的普通数据，不带数据库会话。"""
 
     id: int
-    email: str
+    email: str | None
     role: str
+    # GitHub 登录的访客没有邮箱，显示用这两项（阶段 2，#45）。
+    display_name: str | None = None
+    avatar_url: str | None = None
 
     @property
     def is_admin(self) -> bool:
@@ -96,7 +100,8 @@ def _verify(password_hash: str, password: str) -> bool:
 
 
 def _info(user: User) -> UserInfo:
-    return UserInfo(id=user.id, email=user.email, role=user.role)
+    return UserInfo(id=user.id, email=user.email, role=user.role, display_name=user.display_name,
+                    avatar_url=user.avatar_url)
 
 
 def _open_session(session, user_id: int, now: datetime) -> str:
@@ -171,6 +176,9 @@ def login(db: Database, email: str, password: str) -> LoginResult:
         _verify(_dummy_hash(), password)
         raise Unauthorized(LOGIN_FAILED)
     user_id, password_hash, status = found
+    if password_hash is None:  # 没有设置密码的账号不能用密码登录
+        _verify(_dummy_hash(), password)
+        raise Unauthorized(LOGIN_FAILED)
     if not _verify(password_hash, password):
         raise Unauthorized(LOGIN_FAILED)
     if status != "active":
@@ -233,13 +241,70 @@ def logout(db: Database, token: str | None) -> None:
         )
 
 
+# ---- 外部登录（GitHub，阶段 2 第 1 步 #45） ---------------------------------------------
+
+@dataclass(frozen=True)
+class ExternalProfile:
+    """外部系统确认过的身份。``subject`` 是对方不变的编号，``login`` 是可改的登录名。"""
+
+    provider: str
+    subject: str
+    login: str
+    display_name: str | None = None
+    avatar_url: str | None = None
+
+
+def login_external(db: Database, profile: ExternalProfile) -> LoginResult:
+    """按外部身份登录；第一次登录时建一个 ``guest`` 账号。签发的会话与密码登录完全相同。
+
+    两个请求同时第一次登录同一个外部身份时，唯一约束只让一个建成，另一个重试时找到它。
+    """
+    for attempt in (1, 2):
+        try:
+            return _login_external_once(db, profile)
+        except IntegrityError:
+            if attempt == 2:
+                raise
+    raise AssertionError("unreachable")
+
+
+def _login_external_once(db: Database, profile: ExternalProfile) -> LoginResult:
+    now = utcnow()
+    with _database_errors(), db.session() as session:
+        found = session.execute(
+            select(UserIdentity, User).join(User, User.id == UserIdentity.user_id)
+            .where(UserIdentity.provider == profile.provider, UserIdentity.subject == profile.subject)
+            .with_for_update()
+        ).first()
+        if found is None:
+            user = User(email=None, password_hash=None, role="guest", status="active",
+                        display_name=profile.display_name, avatar_url=profile.avatar_url,
+                        created_at=now, updated_at=now)
+            session.add(user)
+            session.flush()
+            session.add(UserIdentity(user_id=user.id, provider=profile.provider, subject=profile.subject,
+                                     login=profile.login, created_at=now))
+            session.flush()
+        else:
+            identity, user = found
+            if user.status != "active":
+                raise Forbidden(ACCOUNT_DISABLED)
+            # 登录名、显示名、头像以对方最新的为准。
+            identity.login = profile.login
+            if (user.display_name, user.avatar_url) != (profile.display_name, profile.avatar_url):
+                user.display_name, user.avatar_url, user.updated_at = profile.display_name, profile.avatar_url, now
+        token = _open_session(session, user.id, now)
+        info = _info(user)
+    return LoginResult(info, token)
+
+
 # ---- 管理操作（dra.admin 命令调用） -------------------------------------------------
 
 def create_user(db: Database, email: str, password: str, *, role: str = "user") -> UserInfo:
     email = normalize_email(email)
     validate_password(password)
     if role not in ("user", "admin"):
-        raise InvalidRequest("角色只能是 user 或 admin")
+        raise InvalidRequest("邮箱账号的角色只能是 user 或 admin")
     password_hash = _hasher.hash(password)
     now = utcnow()
     try:
@@ -269,8 +334,18 @@ def create_invite(db: Database, *, days: int = INVITE_DEFAULT_DAYS, note: str | 
     return code, expires_at
 
 
-def _user_id_by_email(session, email: str) -> int:
-    user_id = session.scalars(select(User.id).where(User.email == normalize_email(email))).first()
+def _user_id(session, email: str | None = None, github: str | None = None) -> int:
+    """按邮箱或 GitHub 登录名找用户（管理命令用）。两者恰好给一个。"""
+    if (email is None) == (github is None):
+        raise InvalidRequest("请指定邮箱或 GitHub 登录名中的一个")
+    if email is not None:
+        query = select(User.id).where(User.email == normalize_email(email))
+    else:
+        # GitHub 登录名不区分大小写。
+        query = select(UserIdentity.user_id).where(
+            UserIdentity.provider == "github",
+            func.lower(UserIdentity.login) == (github or "").strip().lower())
+    user_id = session.scalars(query).first()
     if user_id is None:
         raise NotFound("用户不存在")
     return user_id
@@ -282,22 +357,33 @@ def reset_password(db: Database, email: str, new_password: str) -> None:
     password_hash = _hasher.hash(new_password)
     now = utcnow()
     with _database_errors(), db.session() as session:
-        user_id = _user_id_by_email(session, email)
+        user_id = _user_id(session, email=email)
         session.execute(update(User).where(User.id == user_id)
                         .values(password_hash=password_hash, updated_at=now)
                         .execution_options(synchronize_session=False))
         _revoke_user_sessions(session, user_id, now)
 
 
-def set_user_status(db: Database, email: str, status: str) -> None:
-    """停用（同时吊销会话）或恢复账号。"""
+def set_user_status(db: Database, email: str | None, status: str, *, github: str | None = None) -> None:
+    """停用（同时吊销会话）或恢复账号。按邮箱或 GitHub 登录名指定。"""
     if status not in ("active", "disabled"):
         raise InvalidRequest("状态只能是 active 或 disabled")
     now = utcnow()
     with _database_errors(), db.session() as session:
-        user_id = _user_id_by_email(session, email)
+        user_id = _user_id(session, email=email, github=github)
         session.execute(update(User).where(User.id == user_id)
                         .values(status=status, updated_at=now)
                         .execution_options(synchronize_session=False))
         if status == "disabled":
             _revoke_user_sessions(session, user_id, now)
+
+
+def set_role(db: Database, role: str, *, email: str | None = None, github: str | None = None) -> None:
+    """调整角色（如把熟人从 guest 升为 user）。角色每个请求都从库里读，改完立即生效。"""
+    if role not in ROLES:
+        raise InvalidRequest("角色只能是 guest、user 或 admin")
+    now = utcnow()
+    with _database_errors(), db.session() as session:
+        user_id = _user_id(session, email=email, github=github)
+        session.execute(update(User).where(User.id == user_id).values(role=role, updated_at=now)
+                        .execution_options(synchronize_session=False))

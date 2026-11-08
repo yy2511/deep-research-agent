@@ -97,6 +97,13 @@ def test_role_and_status_are_constrained(database):
         session.add(_user(status="deleted"))
 
 
+def test_github_guests_need_no_email_or_password(database):
+    """阶段 2（#45）：GitHub 登录的访客没有邮箱和密码；多个空邮箱不算重复。"""
+    with database.session() as session:
+        for _ in range(2):
+            session.add(User(email=None, password_hash=None, role="guest"))
+
+
 def test_foreign_keys_are_enforced(database):
     with pytest.raises(IntegrityError), database.session() as session:
         session.add(LoginSession(user_id=999, token_hash="h", expires_at=utcnow()))

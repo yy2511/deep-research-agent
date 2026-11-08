@@ -88,17 +88,31 @@ def _reset_password(args: argparse.Namespace) -> int:
     return 0
 
 
+def _who(args: argparse.Namespace) -> str:
+    return args.email.strip().lower() if args.email else f"GitHub 用户 {args.github.strip()}"
+
+
 def _set_status(status: str):
     def run(args: argparse.Namespace) -> int:
         database = _ready_database()
         try:
-            auth.set_user_status(database, args.email, status)
+            auth.set_user_status(database, args.email, status, github=args.github)
         finally:
             database.dispose()
         done = "已停用，并让其所有登录失效" if status == "disabled" else "已恢复"
-        print(f"{args.email.strip().lower()} {done}")
+        print(f"{_who(args)} {done}")
         return 0
     return run
+
+
+def _set_role(args: argparse.Namespace) -> int:
+    database = _ready_database()
+    try:
+        auth.set_role(database, args.role, email=args.email, github=args.github)
+    finally:
+        database.dispose()
+    print(f"{_who(args)} 的角色已改为 {args.role}")
+    return 0
 
 
 def _import_legacy(args: argparse.Namespace) -> int:
@@ -163,11 +177,21 @@ def _parser() -> argparse.ArgumentParser:
     legacy.add_argument("--library-dir", type=Path, help="旧的全站资料库目录，默认 <数据目录>/library")
     legacy.set_defaults(handler=_import_legacy)
 
+    def with_user(sub: argparse.ArgumentParser) -> None:
+        who = sub.add_mutually_exclusive_group(required=True)
+        who.add_argument("--email", help="邮箱注册的账号")
+        who.add_argument("--github", help="GitHub 登录的账号（GitHub 登录名）")
+
     for name, status, text in (("disable-user", "disabled", "停用账号并让其所有登录失效"),
                                ("enable-user", "active", "恢复账号")):
         sub = commands.add_parser(name, help=text)
-        sub.add_argument("--email", required=True)
+        with_user(sub)
         sub.set_defaults(handler=_set_status(status))
+
+    set_role = commands.add_parser("set-role", help="调整角色，例如把 GitHub 访客升为 user")
+    with_user(set_role)
+    set_role.add_argument("--role", required=True, choices=auth.ROLES)
+    set_role.set_defaults(handler=_set_role)
     return parser
 
 
