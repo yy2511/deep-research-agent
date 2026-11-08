@@ -28,7 +28,15 @@ pytestmark = pytest.mark.real_auth
 PASSWORD = "correct horse battery"
 # GitHub 登录的两个跳转接口与登录页选项也不要求登录（阶段 2，#45）。
 PUBLIC_API = {"/api/auth/register", "/api/auth/login", "/api/auth/options",
-              "/api/auth/github/start", "/api/auth/github/callback"}
+              "/api/auth/github/start", "/api/auth/github/callback", "/api/showcases"}
+
+
+def _read_group_templates() -> set[str]:
+    """查看接口（#47）：示例对所有人开放，其余未登录时按不存在处理（404，不是 401）。"""
+    from dra.api.routers import conversations, research, runs, skills
+
+    return {route.path for group in (runs.read_router, research.read_router, skills.read_router,
+                                     conversations.conversation_router) for route in group.routes}
 
 
 @pytest.fixture
@@ -382,13 +390,20 @@ def _api_operations(target_app) -> list[tuple[str, str]]:
 
 
 def anonymous_access_failures(target_app) -> tuple[list[str], int]:
-    """不带登录逐个请求；除注册、登录外，没返回 401 的就是漏了登录要求。返回 (问题列表, 检查数)。"""
+    """不带登录逐个请求；除注册、登录外，没返回 401 的就是漏了登录要求。返回 (问题列表, 检查数)。
+
+    查看接口（#47）未登录时访问不存在 / 不是示例的编号得 404：同样没放行，只是不透露是否存在。
+    """
     anonymous = TestClient(target_app)
     failures = []
     operations = _api_operations(target_app)
+    readable = _read_group_templates()
     for method, concrete, template in operations:
         status = anonymous.request(method, concrete, json={}).status_code
-        if template in PUBLIC_API:
+        if template in readable:
+            if status != 404:
+                failures.append(f"{method} {template} 匿名访问非示例返回 {status}")
+        elif template in PUBLIC_API:
             if status == 401:
                 failures.append(f"{method} {template} 应公开，却要求登录")
         elif status != 401:
@@ -445,7 +460,6 @@ def test_the_check_catches_a_sub_router_without_login(database):
     ("GET", "/api/skills"),
     ("GET", "/api/providers"),
     ("GET", "/api/demo/events"),
-    ("GET", "/api/research/20990101-000000-deadbeef/stream"),
     ("POST", "/api/research"),
     ("POST", "/api/auth/logout"),
     ("PUT", "/api/config"),
@@ -453,6 +467,13 @@ def test_the_check_catches_a_sub_router_without_login(database):
 def test_anonymous_requests_are_rejected(client, method, path):
     response = client.request(method, path, json={})
     assert response.status_code == 401
+
+
+def test_anonymous_reads_of_non_showcase_research_look_missing(client):
+    """查看接口不要求登录（示例要能公开看），但非示例的编号未登录时与不存在相同。"""
+    for path in ("/api/research/20990101-000000-deadbeef/stream", "/api/runs/20990101-000000-deadbeef",
+                 "/api/conversations/20990101-000000-deadbeef"):
+        assert client.get(path).status_code == 404, path
 
 
 def test_healthz_and_frontend_stay_public(client):

@@ -172,3 +172,19 @@ class RunAttempt(Base):
     task_id: Mapped[int] = mapped_column(ForeignKey("research_tasks.id"), index=True)
     run_id: Mapped[str] = mapped_column(String(64), unique=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+# ---- 示例（阶段 2 第 2 步 #47；设计 docs/design/阶段2-公开试用.md §4） ----------------------
+
+class Showcase(Base):
+    """管理员设为示例的对话：所有人（含未登录）只读可见。不复制研究文件。
+
+    作为示例期间对话冻结，原主人也不能追问（``run_records.reserve_followup``）。
+    """
+
+    __tablename__ = "showcases"
+
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)

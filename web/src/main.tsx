@@ -5,6 +5,8 @@ import { AuthGate } from './components/AuthGate.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AuthGate>{(account, onLogout) => <App account={account} onLogout={onLogout} />}</AuthGate>
+    <AuthGate renderPublic={(showcases, onLogin) => <App publicShowcases={showcases} onLogin={onLogin} />}>
+      {(account, onLogout) => <App account={account} onLogout={onLogout} />}
+    </AuthGate>
   </StrictMode>,
 )

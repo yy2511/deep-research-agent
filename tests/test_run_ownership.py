@@ -93,11 +93,13 @@ def test_every_run_and_conversation_route_sits_in_an_owned_group():
 
     只用公开的 APIRouter.routes，不读 FastAPI 内部的路由包装。
     """
-    from dra.api.deps import OWNED_CONVERSATION
+    from dra.api.deps import READABLE_CONVERSATION, READABLE_RUN
     from dra.api.routers import conversations, research, runs, skills
 
-    groups = [(runs.run_router, OWNED_RUN), (research.run_router, OWNED_RUN),
-              (skills.run_router, OWNED_RUN), (conversations.conversation_router, OWNED_CONVERSATION)]
+    # 查看接口：属于自己或属于示例（#47）；修改接口：只有本人（#31）。两种检查对别人的研究都返回 404。
+    groups = [(runs.read_router, READABLE_RUN), (research.read_router, READABLE_RUN),
+              (skills.read_router, READABLE_RUN), (research.run_router, OWNED_RUN),
+              (conversations.conversation_router, READABLE_CONVERSATION)]
     grouped = set()
     for group, required in groups:
         assert [d.dependency for d in group.dependencies] == [d.dependency for d in required]

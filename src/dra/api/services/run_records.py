@@ -23,10 +23,11 @@ from dra.api.services.db_errors import database_errors
 from dra.api.services.errors import Conflict, InvalidRequest, NotFound
 from dra.api.services.ids import RUN_ID_RE
 from dra.db import Database
-from dra.db_tables import Conversation, ResearchTask, RunAttempt, User, utcnow
+from dra.db_tables import Conversation, ResearchTask, RunAttempt, Showcase, User, utcnow
 
 log = logging.getLogger(__name__)
 
+SHOWCASE_FROZEN = "该对话正作为示例展示，取消示例后才能追问"
 LEGACY_NOT_IMPORTED = (
     "这条研究还没有登记到数据库，暂时不能追问。"
     "请先执行 python -m dra.admin import-legacy --owner <管理员邮箱>"
@@ -64,9 +65,14 @@ def reserve_followup(db: Database, user_id: int, parent_run_id: str, run_id: str
         if conversation_id is None:
             raise Conflict(LEGACY_NOT_IMPORTED)
         # 第 4 步（#31）：对话必须属于当前用户；不属于与不存在同样处理。
-        owner = session.scalar(select(Conversation.user_id).where(Conversation.id == conversation_id))
+        # 锁住对话行：与“设为示例”（services/showcases.add）排队，见下面的冻结检查。
+        owner = session.scalar(select(Conversation.user_id).where(Conversation.id == conversation_id)
+                               .with_for_update())
         if owner != user_id:
             raise NotFound("run 不存在")
+        # 阶段 2 第 2 步（#47）：示例期间对话冻结，原主人也不能追问，否则新一轮会未经确认被公开。
+        if session.get(Showcase, conversation_id) is not None:
+            raise Conflict(SHOWCASE_FROZEN)
         counted = conversation_run_ids(session, conversation_id)
         task = ResearchTask(user_id=user_id, conversation_id=conversation_id, query=query,
                             created_at=now)
@@ -126,6 +132,11 @@ def owned_run_ids(db: Database, user_id: int) -> set[str]:
             .join(ResearchTask, ResearchTask.id == RunAttempt.task_id)
             .where(ResearchTask.user_id == user_id)
         ))
+
+
+def registered_conversation_run_ids(db: Database, conversation_id: str) -> set[str]:
+    with database_errors(), db.session() as session:
+        return conversation_run_ids(session, conversation_id)
 
 
 def conversation_run_ids(session, conversation_id: str) -> set[str]:

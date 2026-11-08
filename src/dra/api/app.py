@@ -33,6 +33,7 @@ from dra.api.routers import (
     research,
     runs,
     settings,
+    showcases,
     skills,
 )
 from dra.api.services.runs import RunRegistry, drain_pending_cleanups
@@ -106,15 +107,19 @@ app.router.lifespan_context = _lifespan
 # tests/test_auth.py 遍历路由表，检查没有遗漏。
 app.include_router(health.router)
 app.include_router(auth.router, dependencies=[Depends(same_origin)])
-# 带研究编号 / 对话编号的分组另外挂归属检查（#31，在各自 router 文件里）；
+# 带研究编号 / 对话编号的修改接口另外挂归属检查（#31，在各自 router 文件里）；
 # tests/test_run_ownership.py 遍历这类接口，检查没有遗漏。
 # 改全站设置的 admin_router 分组另外要求管理员（#32）；tests/test_admin_permissions.py 检查没有遗漏。
-for _router in (skills.router, skills.run_router, skills.admin_router, settings.router, settings.admin_router,
+for _router in (skills.router, skills.admin_router, settings.router, settings.admin_router,
                 planning.router, providers.router, providers.admin_router,
                 research.router, research.run_router, runs.router,
-                runs.run_router, conversations.router, conversations.conversation_router,
-                library.router):
+                conversations.router, library.router):
     app.include_router(_router, dependencies=[Depends(same_origin), Depends(current_user)])
+# 查看接口与示例列表不要求先登录：示例对所有人只读开放，其余按“属于自己”检查（#47，deps.readable_run）；
+# tests/test_showcases.py 遍历这类接口，检查没有遗漏。
+for _router in (runs.read_router, research.read_router, skills.read_router,
+                conversations.conversation_router, showcases.router):
+    app.include_router(_router, dependencies=[Depends(same_origin)])
 
 
 # mount("/") 铁律：StaticFiles 挂 "/" 会吞掉其后注册的所有路由（含 404 兜底），

@@ -18,14 +18,16 @@ from dra.api.common import (
     _StrictPayload,
     service_errors,
 )
-from dra.api.deps import OWNED_RUN, CurrentUserDep, ReadyDatabaseDep, RegistryDep, StoreDep
+from dra.api.deps import OWNED_RUN, READABLE_RUN, CurrentUserDep, ReadyDatabaseDep, RegistryDep, StoreDep
 from dra.api.services import runs as run_service
 from dra.api.services.ids import PUBLIC_ID_PATTERN
 from dra.site_filter import MAX_BLOCKED_SITES
 
 router = APIRouter()
-# 带研究编号的接口：分组上统一检查归属（#31）。
+# 带研究编号的修改接口（追问、发消息、取消）：只有本人能操作（#31）。
 run_router = APIRouter(dependencies=OWNED_RUN)
+# 进度流是查看接口：属于自己或属于示例（#47）。
+read_router = APIRouter(dependencies=READABLE_RUN)
 
 
 class ResearchReq(_StrictPayload):
@@ -78,7 +80,7 @@ def _sse_frame(evt: dict) -> str:
     return f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
 
 
-@run_router.get("/api/research/{run_id}/stream")
+@read_router.get("/api/research/{run_id}/stream")
 async def api_stream(run_id: str, compact: bool = False, *, registry: RegistryDep) -> StreamingResponse:
     """SSE：原子「订阅+快照」后先补发 backlog 再续推 live，按 seq 去重——
     刷新页面 = 重连 = 不丢现场。end 事件后关流（EventSource 侧 close 防自动重连）。"""
