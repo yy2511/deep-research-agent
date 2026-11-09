@@ -31,6 +31,11 @@ export function showcaseOf(list: Showcase[], runId: string | null): Showcase | n
   return list.find((s) => s.run_ids.includes(runId)) ?? null;
 }
 
+/** 至少有一个示例能打开（#52）：全都不可用时按“没有示例”处理，未登录直接看到登录页。 */
+export function hasViewableShowcase(list: Showcase[]): boolean {
+  return list.some((s) => s.available);
+}
+
 /** 打开示例时先看哪一轮：最新一轮（对话页能切到前面各轮）。 */
 export function showcaseEntry(showcase: Showcase): string | null {
   return showcase.available ? showcase.latest_run_id : null;
