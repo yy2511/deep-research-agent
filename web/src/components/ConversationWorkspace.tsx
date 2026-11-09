@@ -1,3 +1,4 @@
+import {FeedbackLinks} from './FeedbackLinks';
 import {createContext,useContext,useEffect,useLayoutEffect,useRef,useState,type ReactNode} from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
@@ -425,6 +426,7 @@ export function ConversationWorkspace({view:original,runId,canSend=false,onSend,
   })}</details>}
   {!cancelled&&(view.simple?.warnings??[]).filter(w=>!(view.simple?.gaps??[]).some(g=>w===`未解决缺口：${g}`)).map((w,i)=><p key={i} className='cw-warning'>{w}</p>)}
   {ended&&runId&&<RunSkills key={runId} runId={runId} view={view}/>}
+  {ended&&answer&&<FeedbackLinks className='cw-feedback' query={meta?.query} finishedAt={meta?.finished_at}/>}
  </div>:nav.tab==='evidence'?<div className='cw-evidence-workspace'><div className='cw-evidence-list' ref={node=>{if(node)node.scrollTop=current.current.scroll['evidence:list']??0}} onScroll={e=>{current.current.scroll['evidence:list']=e.currentTarget.scrollTop}}>
   <label className='search-field'><Search size={15}/><input aria-label='搜索证据' placeholder='搜索结论、原文或来源' value={search} onChange={e=>setSearch(e.target.value)}/></label>
   {cards.filter(c=>`${c.claim} ${cardQuotes(c).map(q=>`${q.quote} ${q.source_title}`).join(' ')}`.toLowerCase().includes(search.toLowerCase())).map(c=><button key={c.card_id} className='evidence-item' aria-pressed={c.card_id===nav.card} onClick={()=>openCard(c.card_id)}>

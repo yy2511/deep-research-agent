@@ -289,6 +289,9 @@ select:focus { outline: none; border-color: var(--accent); }
 .history-list { display: flex; flex-direction: column; gap: 2px; }
 .history-title { padding: 0 8px 6px; font-size: 12px; color: var(--faint); }
 .showcase-list { margin-bottom: 14px; }
+.feedback-links { margin: 0; font-size: 12px; color: var(--faint); }
+.sidebar-feedback { padding: 6px 10px 0; }
+.cw-feedback { margin-top: 16px; }
 .history-empty { margin: 0; padding: 4px 8px; font-size: 12px; color: var(--placeholder); }
 .history-item { position: relative; display: flex; align-items: center; border-radius: var(--radius-sm); }
 .history-item:hover { background: var(--hover); }
@@ -822,6 +825,7 @@ select:focus { outline: none; border-color: var(--accent); }
   .brand-text { font-size: 15px; }
   .sidebar-account { margin-top: 0; padding: 0; }
   .sidebar-account-email, .sidebar-account-role { display: none; }
+  .sidebar-feedback { display: none; }  /* 窄屏侧栏收成一行；报告底部仍有“提意见” */
   .sidebar-new, .sidebar-settings { width: 36px; height: 36px; padding: 0; justify-content: center; border: 0; background: transparent; box-shadow: none; }
   .sidebar-new > span, .sidebar-settings > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   .history-toggle { display: inline-flex; width: 36px; height: 36px; }

@@ -6,6 +6,12 @@
 
 当前主线如下。
 
+## 在线体验 · 提意见
+
+- **在线体验**：即将上线（网址上线后补在这里）。不登录就能看几个完整的研究示例（过程回放 + 带引用的报告）；用 GitHub 登录后每天可以试问几次，试用只用网页搜索。
+- **想不限次数地用**、用自己的模型 key，或使用私域资料库、运行代码：按下面的[快速开始](#快速开始)在本机运行。
+- **意见和问题**：发到 [Discussions](https://github.com/yy2511/deep-research-agent/discussions)（工作台里每份报告底部都有“提意见”）；确定的缺陷可以提 [Issue](https://github.com/yy2511/deep-research-agent/issues)。觉得有用的话欢迎点个 star。
+
 ## 核心流程
 
 ```text
@@ -27,7 +33,7 @@
 
 ## 快速开始
 
-需要 Python 3.12、[uv](https://docs.astral.sh/uv/) 和 Node.js 22。
+需要 Python 3.12、[uv](https://docs.astral.sh/uv/)、Node.js 22 和 Docker（用来跑本机数据库）。最少只要一个模型服务商的 key（可在 `.env` 里填，也可启动后在“设置 → API 连接”里添加）；网页检索建议配 Tavily 和 Exa，都没有时会退回无需 key 的 DuckDuckGo。
 
 ```bash
 # 安装后端与开发依赖
@@ -43,7 +49,8 @@ uv run python -m dra.admin migrate
 # 第一个账号：管理员（密码交互输入两次）
 uv run python -m dra.admin create-admin --email you@example.com
 
-# 已有的旧研究登记到管理员名下、旧资料库移到其目录（服务停止时执行；可重复执行，不覆盖已有资料）
+# 只有从旧版本升级时才需要：把旧研究登记到管理员名下、旧资料库移到其目录
+# （服务停止时执行；可重复执行，不覆盖已有资料）
 uv run python -m dra.admin import-legacy --owner you@example.com
 
 # Web 工作台：两个终端分别启动后端和前端
