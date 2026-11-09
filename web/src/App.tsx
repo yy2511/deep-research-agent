@@ -23,6 +23,7 @@ import { accountLabel, type Account } from "./auth";
 import { fetchShowcases, showcaseEntry, showcaseOf, type Showcase } from "./showcases";
 import { trialBlocked, type TrialStatus } from "./trial";
 import { TrialNotice } from "./components/TrialNotice";
+import { FeedbackLinks } from "./components/FeedbackLinks";
 
 // 刷新恢复"当前运行的"钥匙：运行中与已结束的历史都记，刷新后回到同一条 run。
 // 与 URL 的 ?run= 互为备份（URL 便于分享/前进后退，localStorage 兼容旧会话）。
@@ -727,6 +728,7 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
             </button>
           </div>
         )}
+        <FeedbackLinks className="sidebar-feedback" compact />
         {!publicMode && (
           <button className={`sidebar-settings${page === "settings" ? " is-active" : ""}`} aria-label="设置"
             aria-current={page === "settings" ? "page" : undefined} onClick={() => setPage(page === "settings" ? "research" : "settings")}>
