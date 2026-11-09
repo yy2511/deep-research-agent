@@ -104,6 +104,9 @@ def api_config_put(body: dict) -> dict:
             body = {**body, 'browser': {**runtime_config.current().browser.model_dump(), **body['browser']}}
         if 'vision' not in body:
             body = {**body, 'vision': runtime_config.current().vision.model_dump()}
+        if 'trial' not in body:
+            # 不认识试用设置的旧客户端保存别的设置时，不重置试用设置（#49）。
+            body = {**body, 'trial': runtime_config.current().trial.model_dump()}
         if 'execution_backend' not in body:
             body = {**body, 'execution_backend': runtime_config.current().execution_backend}
         if 'execution_enabled' not in body:
@@ -113,6 +116,8 @@ def api_config_put(body: dict) -> dict:
         from dra import provider_registry
         if settings.vision.provider and not provider_registry.exists(settings.vision.provider):
             raise ValueError('备用视觉连接不存在，请选择已保存的连接')
+        if settings.trial.provider and not provider_registry.exists(settings.trial.provider):
+            raise ValueError('试用模型的连接不存在，请选择已保存的连接')
         runtime_config.to_simple_config(settings)
     except (ValidationError, ValueError) as e:
         raise HTTPException(400, str(e))

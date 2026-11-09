@@ -220,3 +220,13 @@ def require_admin(user: CurrentUserDep) -> UserInfo:
 
 
 ADMIN_ONLY = [Depends(require_admin)]
+
+
+def members_only(user: CurrentUserDep) -> UserInfo:
+    """试用访客（guest）不能用的功能，例如私域资料库（#49）：嵌入模型约 2 GB，线上机器承受不了。"""
+    if user.role == "guest":
+        raise HTTPException(403, "试用账号不能使用资料库")
+    return user
+
+
+MEMBERS_ONLY = [Depends(members_only)]

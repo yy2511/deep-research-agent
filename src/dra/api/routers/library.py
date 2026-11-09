@@ -13,10 +13,11 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from dra.api.common import _ROOT, _original_response
-from dra.api.deps import CurrentUserDep
+from dra.api.deps import MEMBERS_ONLY, CurrentUserDep
 from dra.library import MAX_BYTES, LibraryError, get_library
 
-router = APIRouter()
+# 试用访客不能用资料库（#49）。
+router = APIRouter(dependencies=MEMBERS_ONLY)
 
 
 @router.get("/api/library")
