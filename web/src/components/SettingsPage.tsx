@@ -49,6 +49,17 @@ export interface ConfigPayload {
   execution_effective?: ExecutionEffective;
   /** 只读：服务端实际使用的重试次数。 */
   retry_policy?: RetryPolicy;
+  /** 公开试用（#49）：只作用于 GitHub 登录的访客。 */
+  trial?: TrialSettings;
+}
+
+export interface TrialSettings {
+  provider: string | null; model: string | null;
+  per_user_daily_runs: number; global_daily_runs: number;
+  per_user_daily_briefs: number; global_daily_briefs: number;
+  max_concurrent_guest_runs: number;
+  wall_timeout_s: number; max_llm_calls: number; max_tool_calls: number;
+  timezone: string;
 }
 
 type NodeKey = "planner" | "subagent";
@@ -64,15 +75,15 @@ export function settingsUpdate(config: ConfigPayload) {
   const { vision, schema_version, planner, subagent, call_limits_enabled, compaction_enabled, context_window_tokens, context_window_mode, max_output_tokens, summary_max_output_tokens, wrapup_max_output_tokens, evidence_judge, wall_timeout_s, wrapup_reserve_s, summary_timeout_s, summary_max_retries } = config;
   // 旧服务端没有这个字段时不提交，由服务端沿用当前值。
   const execution = "execution_enabled" in config ? { execution_enabled: config.execution_enabled ?? null } : {};
-  return { ...("browser" in config ? {browser: config.browser} : {}), vision, schema_version, planner, subagent, call_limits_enabled, compaction_enabled, context_window_tokens, context_window_mode, max_output_tokens, summary_max_output_tokens, wrapup_max_output_tokens, evidence_judge, wall_timeout_s, wrapup_reserve_s, summary_timeout_s, summary_max_retries, ...execution, ...("execution_backend" in config ? {execution_backend: config.execution_backend ?? null} : {}) };
+  return { ...("browser" in config ? {browser: config.browser} : {}), ...(config.trial ? { trial: config.trial } : {}), vision, schema_version, planner, subagent, call_limits_enabled, compaction_enabled, context_window_tokens, context_window_mode, max_output_tokens, summary_max_output_tokens, wrapup_max_output_tokens, evidence_judge, wall_timeout_s, wrapup_reserve_s, summary_timeout_s, summary_max_retries, ...execution, ...("execution_backend" in config ? {execution_backend: config.execution_backend ?? null} : {}) };
 }
 
 /** 本机偏好：只存在浏览器里，不影响后端配置。 */
 export interface LocalPrefs { showRecords: boolean; showReplay: boolean; traceFull: boolean }
 
-export type SettingsTab = "models" | "capabilities" | "connections" | "skills" | "mcp" | "general";
+export type SettingsTab = "models" | "capabilities" | "trial" | "connections" | "skills" | "mcp" | "general";
 const TABS: Array<[SettingsTab, string]> = [
-  ["models", "模型"], ["capabilities", "研究能力"], ["connections", "API 连接"], ["skills", "技能"], ["mcp", "外部资料（MCP）"], ["general", "通用"],
+  ["models", "模型"], ["capabilities", "研究能力"], ["trial", "试用"], ["connections", "API 连接"], ["skills", "技能"], ["mcp", "外部资料（MCP）"], ["general", "通用"],
 ];
 
 /** 模型页与能力页共用的一份草稿与保存状态，由 SettingsPage 持有；两页之间切换不丢未保存的修改。 */
@@ -252,6 +263,67 @@ function CapabilityTab({ s, onTab }: { s: RuntimeSettings; onTab: (tab: Settings
 }
 
 /** 模型 / 研究能力两页都读写 SettingsPage 持有的同一份草稿。 */
+/** 试用访客的数字字段：标签、说明、单位。 */
+const TRIAL_NUMBERS: Array<{ key: keyof TrialSettings; label: string; hint: string; min: number }> = [
+  { key: "per_user_daily_runs", label: "每人每天研究次数", hint: "追问也算一次", min: 0 },
+  { key: "global_daily_runs", label: "全部访客每天研究次数", hint: "所有访客合计", min: 0 },
+  { key: "per_user_daily_briefs", label: "每人每天规划次数", hint: "开跑前的澄清与生成计划", min: 0 },
+  { key: "global_daily_briefs", label: "全部访客每天规划次数", hint: "所有访客合计", min: 0 },
+  { key: "max_concurrent_guest_runs", label: "访客同时进行的研究", hint: "满了直接提示稍后再试，不排队", min: 1 },
+  { key: "wall_timeout_s", label: "单次研究时间上限（秒）", hint: "", min: 1 },
+  { key: "max_llm_calls", label: "单次研究模型调用上限", hint: "", min: 1 },
+  { key: "max_tool_calls", label: "单次研究工具调用上限", hint: "", min: 1 },
+];
+
+/** 管理员的“试用”分页（#50）：GitHub 访客的模型、次数与预算。与“模型”“研究能力”共用一份草稿和保存按钮。 */
+export function TrialSettingsTab({ s }: { s: RuntimeSettings }) {
+  const { config, setConfig, providers, error, notice } = s;
+  if (!config) return <SettingsLoading error={error} />;
+  if (!config.trial) return <div className="settings-section"><p className="field-hint is-bad">服务端没有返回试用设置，请先更新后端。</p></div>;
+  const trial = config.trial;
+  const update = (patch: Partial<TrialSettings>) => setConfig(c => (c && c.trial ? { ...c, trial: { ...c.trial, ...patch } } : c));
+  const provider = providers.find(p => p.name === trial.provider);
+  return <>
+    <div className="settings-section">
+      <div className="section-head"><div><h2>试用</h2><p>只作用于用 GitHub 登录的访客；邀请码用户和管理员不受影响。访客只能用网页搜索，运行代码、浏览器、资料库、外部资料服务都不可用。</p></div></div>
+      {notice && <p className="notice" role="status">{notice}</p>}
+      <section className="card model-card">
+        <div className="card-head"><strong>试用模型</strong><small>访客的规划和研究都用这一个模型；没选时访客看到“试用暂未开放”。</small></div>
+        <div className="field-grid">
+          <div className="field"><span className="field-label">连接</span>
+            <Select ariaLabel="试用 API 连接" value={trial.provider ?? ""}
+              onChange={(v) => update({ provider: v || null, model: v ? (trial.provider === v ? trial.model : null) : null })}
+              options={[{ value: "", label: "不开放试用" }, ...providers.map(p => ({ value: p.name, label: p.label || p.name, disabled: !p.key_configured, hint: p.key_configured ? "" : "无 Key" }))]} />
+          </div>
+          <div className="field"><span className="field-label">模型</span>
+            <ModelField value={trial.model ?? ""} models={provider?.models ?? []} label="试用模型 ID"
+              onChange={(v) => update({ model: v.trim() || null })} />
+          </div>
+        </div>
+        {trial.provider && !trial.model && <p className="field-hint is-warn">还没选模型：保存时会提示须同时填写连接和模型。</p>}
+      </section>
+      <section className="card">
+        <div className="card-head"><strong>次数与预算</strong><small>每天按下面的时区 0 点重置。</small></div>
+        <div className="field-grid">
+          {TRIAL_NUMBERS.map(({ key, label, hint, min }) => (
+            <label className="field" key={key}><span className="field-label">{label}</span>
+              <input className="input" type="number" min={min} step={1} aria-label={label} value={String(trial[key] ?? "")}
+                onChange={e => update({ [key]: e.target.value === "" ? min : Number(e.target.value) } as Partial<TrialSettings>)} />
+              {hint && <span className="field-hint">{hint}</span>}
+            </label>
+          ))}
+          <label className="field"><span className="field-label">时区</span>
+            <input className="input" aria-label="试用时区" value={trial.timezone} onChange={e => update({ timezone: e.target.value.trim() })} />
+            <span className="field-hint">例如 Asia/Shanghai</span>
+          </label>
+        </div>
+      </section>
+      {error && <p className="field-hint is-bad">{error}</p>}
+    </div>
+    <SettingsFooter s={s} />
+  </>;
+}
+
 export function RuntimeTab({ tab, s, onTab }: { tab: "models" | "capabilities"; s: RuntimeSettings; onTab: (tab: SettingsTab) => void }) {
   return tab === "models" ? <ModelSettings s={s} /> : <CapabilityTab s={s} onTab={onTab} />;
 }
@@ -332,7 +404,7 @@ function MemberSettingsPage({ prefs, onPrefs, onDemo }: Omit<SettingsPageProps, 
 function AdminSettingsPage({ tab, onTab, prefs, onPrefs, onDemo, onSaved }: Omit<SettingsPageProps, "isAdmin">) {
   const runtime = useRuntimeSettings(onSaved);
   const { config, reloadProviders } = runtime;
-  const isRuntimeTab = (id: SettingsTab) => id === "models" || id === "capabilities";
+  const isRuntimeTab = (id: SettingsTab) => id === "models" || id === "capabilities" || id === "trial";
   // 从其他页回到模型 / 能力页时只刷新连接列表；草稿保持不变。
   function selectTab(id: SettingsTab) {
     if (isRuntimeTab(id) && !isRuntimeTab(tab) && config) reloadProviders();
@@ -347,6 +419,7 @@ function AdminSettingsPage({ tab, onTab, prefs, onPrefs, onDemo, onSaved }: Omit
     <div className="settings-main">
       <div className="settings-scroll">
         {tab === "models" || tab === "capabilities" ? <RuntimeTab tab={tab} s={runtime} onTab={onTab} />
+          : tab === "trial" ? <TrialSettingsTab s={runtime} />
           : tab === "connections" ? <div className="settings-section-wrap"><ConnectionSettings /></div>
           : tab === "skills" ? <SkillsPanel />
           : tab === "mcp" ? <McpManager />

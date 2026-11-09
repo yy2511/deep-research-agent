@@ -5,6 +5,7 @@
  * 任何请求收到 401，就通知 AuthGate 回到登录页（notifyUnauthorized）。
  */
 import { ApiError } from "./api";
+import type { TrialStatus } from "./trial";
 
 export { onUnauthorized } from "./session";
 
@@ -12,6 +13,8 @@ export { onUnauthorized } from "./session";
 export type Account = {
   id: number; email: string | null; role: "guest" | "user" | "admin";
   display_name?: string | null; avatar_url?: string | null;
+  /** 访客的试用次数（#49/#50）；非访客为 null。 */
+  trial?: TrialStatus | null;
 };
 
 /** 侧边栏等处显示的名字。 */
