@@ -19,6 +19,7 @@ from pathlib import Path
 
 from sqlalchemy import delete, func, select
 
+from dra.api.services import trial as trial_service
 from dra.api.services.db_errors import database_errors
 from dra.api.services.errors import Conflict, InvalidRequest, NotFound
 from dra.api.services.ids import RUN_ID_RE
@@ -34,19 +35,25 @@ LEGACY_NOT_IMPORTED = (
 )
 
 
-def reserve_new_run(db: Database, user_id: int, run_id: str, query: str) -> None:
-    """新研究：新对话（id 即 run_id）+ 一个请求 + 一条执行记录，同一事务。"""
+def reserve_new_run(db: Database, user_id: int, run_id: str, query: str, *, trial=None) -> None:
+    """新研究：新对话（id 即 run_id）+ 一个请求 + 一条执行记录，同一事务。
+
+    ``trial``（访客，#49）：在同一事务里扣今天的研究次数；用完时整个占位不写入。
+    """
     now = utcnow()
     with database_errors(), db.session() as session:
+        if trial is not None:
+            trial_service.take_in_session(session, trial, trial_service.RUN)
         session.add(Conversation(id=run_id, user_id=user_id, created_at=now))
         task = ResearchTask(user_id=user_id, conversation_id=run_id, query=query, created_at=now)
         session.add(task)
         session.flush()
-        session.add(RunAttempt(task_id=task.id, run_id=run_id, created_at=now))
+        session.add(RunAttempt(task_id=task.id, run_id=run_id, created_at=now,
+                               quota_day=trial.day if trial is not None else None))
 
 
 def reserve_followup(db: Database, user_id: int, parent_run_id: str, run_id: str,
-                     query: str) -> tuple[str, set[str]]:
+                     query: str, *, trial=None) -> tuple[str, set[str]]:
     """追问：在父研究所在的对话下加一个请求 + 一条执行记录。
 
     返回（对话 id，本次占位之前该对话已登记的 run_id 集合）。后者交给追问的
@@ -74,11 +81,15 @@ def reserve_followup(db: Database, user_id: int, parent_run_id: str, run_id: str
         if session.get(Showcase, conversation_id) is not None:
             raise Conflict(SHOWCASE_FROZEN)
         counted = conversation_run_ids(session, conversation_id)
+        # 访客追问也算一次研究（#49）；在同一事务里扣，用完时不占位。
+        if trial is not None:
+            trial_service.take_in_session(session, trial, trial_service.RUN)
         task = ResearchTask(user_id=user_id, conversation_id=conversation_id, query=query,
                             created_at=now)
         session.add(task)
         session.flush()
-        session.add(RunAttempt(task_id=task.id, run_id=run_id, created_at=now))
+        session.add(RunAttempt(task_id=task.id, run_id=run_id, created_at=now,
+                               quota_day=trial.day if trial is not None else None))
     return conversation_id, counted
 
 
@@ -89,6 +100,9 @@ def release(db: Database, run_id: str) -> None:
         if attempt is None:
             return
         task = session.get(ResearchTask, attempt.task_id)
+        if attempt.quota_day is not None:
+            # 研究没能启动：退回这次扣的试用次数（#49）。
+            trial_service.give_back_in_session(session, task.user_id, attempt.quota_day)
         session.delete(attempt)
         session.flush()
         conversation_id = task.conversation_id

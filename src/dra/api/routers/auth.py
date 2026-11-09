@@ -14,6 +14,7 @@ from dra.api.common import _StrictPayload, service_errors
 from dra.api.deps import SESSION_COOKIE, CurrentUserDep, ReadyDatabaseDep
 from dra.api.services import auth as auth_service
 from dra.api.services import github_auth
+from dra.api.services import trial as trial_service
 from dra.api.services.auth import UserInfo
 from dra.api.services.errors import Forbidden, Unavailable
 
@@ -36,8 +37,9 @@ class LoginReq(_StrictPayload):
 
 
 def _me(user: UserInfo) -> dict:
+    # trial：访客的试用次数，只有 /api/me 会填（#49）；其余响应与之同形，非访客恒为 null。
     return {"id": user.id, "email": user.email, "role": user.role,
-            "display_name": user.display_name, "avatar_url": user.avatar_url}
+            "display_name": user.display_name, "avatar_url": user.avatar_url, "trial": None}
 
 
 def _set_session_cookie(response: Response, request: Request, token: str) -> None:
@@ -75,8 +77,11 @@ def api_logout(request: Request, response: Response, _user: CurrentUserDep, *,
 
 
 @router.get("/api/me")
-def api_me(user: CurrentUserDep) -> dict:
-    return _me(user)
+def api_me(user: CurrentUserDep, *, db: ReadyDatabaseDep) -> dict:
+    """当前用户。访客（#49）另带 ``trial``：今天还能发起几次研究、上限、何时恢复。"""
+    with service_errors():
+        trial = trial_service.status(db, user)
+    return {**_me(user), "trial": trial}
 
 
 @router.get("/api/auth/options")

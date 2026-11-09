@@ -81,5 +81,5 @@ def test_api_research_forwards_debug_full_io_flag(monkeypatch, database, logged_
     assert result == {"run_id": "run-debug", "mode": "simple"}
     start.assert_called_once_with(
         "新问题", config=ANY, requirements=None, brief=None, full_llm_io=True,
-        run_id=ANY, user_id=logged_in_user.id,
+        run_id=ANY, user_id=logged_in_user.id, guest_limit=None,
     )

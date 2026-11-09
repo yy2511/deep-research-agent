@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import functools
 import json
 import os
 import threading
@@ -17,6 +18,7 @@ from pydantic import ValidationError
 from dra import events, llm, mcp_client
 from dra.api.services.errors import CapacityFull, Conflict, InvalidRequest, NotFound, Unavailable
 from dra.api.services import run_records
+from dra.api.services import trial as trial_service
 from dra.api.services.ids import RUN_ID_RE as _RUN_ID_RE
 from dra.api.services.planning import _strip_plan_trace
 from dra.api.services.skills import skill_bundle as resolve_skill_bundle
@@ -58,6 +60,9 @@ class RunHandle:
         # 完成回调可能早于本任务的 finally 排期执行，所以终态必须随本任务结束立刻可见。
         self.simple_status: str | None = None
         self.user_input: ResearchInput | None = None
+        # 试用并发上限用（#49）：谁的研究、是不是访客。
+        self.user_id: int | None = None
+        self.guest = False
 
 
 class ActiveRunLimitError(CapacityFull, RuntimeError):
@@ -136,8 +141,11 @@ class RunRegistry:
         followup_context: dict | None = None,
         run_id: str | None = None,
         user_id: int | None = None,
+        guest_limit: int | None = None,
     ) -> str:
         """单 Lead 最小闭环：确认后的问题 → 取证 → 作答 → 核查与预算内有界修订。
+
+        ``guest_limit``（访客，#49）：全部访客同时进行的研究上限；同一访客同时只能有 1 个。
 
         名额在创建 run 之前就检查并在整个后台执行期间持有；取消只置位共享 Event，
         不强杀线程，也不提前释放名额。
@@ -153,6 +161,15 @@ class RunRegistry:
                 f"当前已有 {active} 个研究运行中；为避免重复付费，同时最多允许 "
                 f"{self.max_active_runs} 个。请等待完成或先取消现有研究。"
             )
+        if guest_limit is not None:
+            # 与上面的全站名额在同一把锁里检查（_admission），两个访客同时启动不会都通过。
+            busy = [h for h in self.runs.values() if h.busy and h.guest]
+            if any(h.user_id == user_id for h in busy):
+                raise ActiveRunLimitError("你已经有一个研究在进行中，请等它结束后再问。")
+            if len(busy) >= guest_limit:
+                raise ActiveRunLimitError("现在使用的人较多，请稍后再试。")
+            if config.source_mode != "web" or config.mcp_servers or config.execution.enabled or config.browser.enabled:
+                raise InvalidRequest("试用账号只能用网页搜索")
         budget = {
             "max_llm_calls": config.max_llm_calls,
             "max_tool_calls": config.max_tool_calls,
@@ -195,6 +212,7 @@ class RunRegistry:
             self.store._write_meta(run_id, meta)
         h = RunHandle(run_id)
         h.cancel_event = threading.Event()
+        h.user_id, h.guest = user_id, guest_limit is not None
         h.busy = True
         self.runs[run_id] = h
         h.user_input = ResearchInput(run_id, lambda event: self.publish(run_id, event, durable=True),
@@ -228,7 +246,7 @@ class RunRegistry:
 
     @_admission
     def start_followup(self, parent_run_id, request_id, text, *, config, run_id=None, user_id=None,
-                       counted=None):
+                       counted=None, guest_limit=None):
         """``counted(run_id)``：哪些轮次算数（以数据库登记为准）。启动失败后残留的目录
         不参与“重复提交”与“是否最新一轮”的判断（#39 审查）；不传时按文件全部算。"""
         from dra.research_history import HistoryError, ancestors, prepare_context
@@ -276,7 +294,7 @@ class RunRegistry:
                             for i,r in enumerate(context["constraints"],1))
         return self.start_simple_research(text,config=config,requirements=requirements,
             full_llm_io=bool(chain[-1].get("config_summary",{}).get("full_llm_io")),followup_context=context,
-            run_id=run_id,user_id=user_id)
+            run_id=run_id,user_id=user_id,guest_limit=guest_limit)
 
     def _cancel_requested(self, run_id: str) -> bool:
         h = self.runs.get(run_id)
@@ -555,8 +573,12 @@ def start_research(
     full_llm_io: bool,
     run_id: str | None = None,
     user_id: int | None = None,
+    trial=None,
 ) -> str:
-    """校验已确认的计划与来源范围，按当前模型设置开始一次研究，返回 run_id。"""
+    """校验已确认的计划与来源范围，按当前模型设置开始一次研究，返回 run_id。
+
+    ``trial``（访客，#49）：只允许网页来源，用试用模型与预算，关闭运行代码与浏览器。
+    """
     from dra import runtime_config
 
     typed_brief = None
@@ -581,18 +603,22 @@ def start_research(
         normalized_sites = normalize_blocked_sites(blocked_sites)
     except (LibraryError, mcp_client.MCPError, ValueError) as exc:
         raise InvalidRequest(str(exc)) from exc
-    return registry.start_simple_research(
-        query,
-        config=runtime_config.to_simple_config(simple_settings, source_mode=source_mode,
+    config = runtime_config.to_simple_config(simple_settings, source_mode=source_mode,
                             library_selection=selection, library_rerank=library_rerank,
                             mcp_servers=external, skill_bundle=skill_bundle,
                             blocked_sites=normalized_sites,
-                            library_root=str(user_library_root(user_id)) if user_id is not None else None),
+                            library_root=str(user_library_root(user_id)) if user_id is not None else None)
+    if trial is not None:
+        config = trial_service.restrict_config(config, trial)
+    return registry.start_simple_research(
+        query,
+        config=config,
         requirements=typed_brief.to_run_requirements() if typed_brief is not None else None,
         brief=typed_brief,
         full_llm_io=full_llm_io,
         run_id=run_id,
         user_id=user_id,
+        guest_limit=trial.settings.max_concurrent_guest_runs if trial is not None else None,
     )
 
 
@@ -634,23 +660,33 @@ async def _release_after(reservation: asyncio.Future, db: Database, run_id: str)
     await asyncio.to_thread(run_records.release_quietly, db, run_id)
 
 
+def _with_trial(reserve, trial):
+    """只有访客才带上试用规则；其他人的占位调用与原来完全相同。"""
+    return functools.partial(reserve, trial=trial) if trial is not None else reserve
+
+
 async def start_owned_research(db: Database, registry: RunRegistry, user_id: int, query: str,
-                               **options) -> str:
+                               *, trial=None, **options) -> str:
     """先在数据库占位（线程里的短事务），再在事件循环上启动研究；启动失败就撤销占位。
 
     设计 §3.2、ADR 0006 规则 3。写库失败时（Unavailable → 503）研究不会启动，也不建运行目录。
+    访客（``trial``，#49）：先检查来源选项，再在占位事务里扣次数；启动失败撤销占位时次数退回。
     """
+    if trial is not None:
+        trial_service.check_options(source_mode=options.get("source_mode", "web"),
+                                    document_ids=options.get("document_ids"),
+                                    mcp_server_ids=options.get("mcp_server_ids"))
     run_id = new_run_id()
-    await _reserve(db, run_id, run_records.reserve_new_run, db, user_id, run_id, query)
+    await _reserve(db, run_id, _with_trial(run_records.reserve_new_run, trial), db, user_id, run_id, query)
     try:
-        return start_research(registry, query, run_id=run_id, user_id=user_id, **options)
+        return start_research(registry, query, run_id=run_id, user_id=user_id, trial=trial, **options)
     except BaseException:
         await asyncio.to_thread(run_records.release_quietly, db, run_id)
         raise
 
 
 async def start_owned_followup(db: Database, store: RunStore, registry: RunRegistry, user_id: int,
-                               parent_run_id: str, request_id: str, text: str) -> dict:
+                               parent_run_id: str, request_id: str, text: str, *, trial=None) -> dict:
     """追问版的“先占位，再启动，失败就撤销”。
 
     同一 request_id 重复提交时，现有逻辑返回之前那一轮的编号、不再启动；这时也撤销这次的占位。
@@ -659,11 +695,11 @@ async def start_owned_followup(db: Database, store: RunStore, registry: RunRegis
         raise NotFound("run 不存在")
     run_id = new_run_id()
     _conversation, counted = await _reserve(
-        db, run_id, run_records.reserve_followup, db, user_id, parent_run_id, run_id, text)
+        db, run_id, _with_trial(run_records.reserve_followup, trial), db, user_id, parent_run_id, run_id, text)
     try:
         result = start_followup(store, registry, parent_run_id, request_id, text,
                                 reserved_run_id=run_id, user_id=user_id,
-                                counted=counted.__contains__)
+                                counted=counted.__contains__, trial=trial)
     except BaseException:
         await asyncio.to_thread(run_records.release_quietly, db, run_id)
         raise
@@ -674,7 +710,7 @@ async def start_owned_followup(db: Database, store: RunStore, registry: RunRegis
 
 def start_followup(store: RunStore, registry: RunRegistry, run_id: str, request_id: str, text: str,
                    *, reserved_run_id: str | None = None, user_id: int | None = None,
-                   counted=None) -> dict:
+                   counted=None, trial=None) -> dict:
     """在已有运行之后追问，开始新一轮研究；返回新一轮的身份信息。"""
     from dra import runtime_config
     from dra.research_history import HistoryError
@@ -684,8 +720,11 @@ def start_followup(store: RunStore, registry: RunRegistry, run_id: str, request_
         config=runtime_config.to_simple_config(runtime_config.current())
         if user_id is not None:
             config=config.model_copy(update={"library_root":str(user_library_root(user_id))})
+        if trial is not None:
+            config=trial_service.restrict_config(config,trial)
         new_id=registry.start_followup(run_id,request_id,text,config=config,
-                                       run_id=reserved_run_id,user_id=user_id,counted=counted)
+                                       run_id=reserved_run_id,user_id=user_id,counted=counted,
+                                       guest_limit=trial.settings.max_concurrent_guest_runs if trial is not None else None)
     except (HistoryError, LibraryError, mcp_client.MCPError) as exc:
         raise Conflict(str(exc)) from exc
     meta=store.get_meta(new_id)

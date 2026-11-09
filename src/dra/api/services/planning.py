@@ -102,7 +102,8 @@ def _capture_planner_step(
 
 
 def _brief_payload(q_text: str, *, plan_store: PlanAttemptStore, full_llm_io: bool = False,
-                   source_context: str = "", user_id: int | None = None) -> tuple[dict, dict]:
+                   source_context: str = "", user_id: int | None = None,
+                   planner: dict | None = None) -> tuple[dict, dict]:
     """POST /api/brief 主体：先判断缺口；**没有缺口才继续生成计划**。
 
     有缺口时只回问题、不生成计划——生成了却不给用户看，等于白花一次输出，而且那份计划必然
@@ -113,7 +114,8 @@ def _brief_payload(q_text: str, *, plan_store: PlanAttemptStore, full_llm_io: bo
     """
     from dra import runtime_config
 
-    cfg = runtime_config.to_brief_config(runtime_config.current())
+    # planner：访客用试用模型（#49，trial.planner_override）；其他人沿用全站设置。
+    cfg = runtime_config.to_brief_config(runtime_config.current(), **(planner or {}))
 
     def _run() -> dict:
         gaps = assess_research_gaps(q_text, cfg, **({"source_context": source_context} if source_context else {}))
@@ -143,6 +145,7 @@ def _plan_after_clarification_payload(
     full_llm_io: bool = False,
     source_context: str = "",
     user_id: int | None = None,
+    planner: dict | None = None,
 ) -> tuple[dict, dict]:
     """POST /api/brief/plan 主体：带着用户对缺口的回答生成计划。
 
@@ -151,7 +154,8 @@ def _plan_after_clarification_payload(
     """
     from dra import runtime_config
 
-    cfg = runtime_config.to_brief_config(runtime_config.current())
+    # planner：访客用试用模型（#49，trial.planner_override）；其他人沿用全站设置。
+    cfg = runtime_config.to_brief_config(runtime_config.current(), **(planner or {}))
     typed = tuple(BriefGap.model_validate(gap) for gap in gaps)
     clarification = format_gap_answers(typed, answers)
     return _capture_planner_step(
@@ -179,6 +183,7 @@ def _revise_brief_payload(
     full_llm_io: bool = False,
     source_context: str = "",
     user_id: int | None = None,
+    planner: dict | None = None,
 ) -> tuple[dict | None, dict | None]:
     """POST /api/brief/revise 主体：还原 brief → 带 clarification 重规划。
 
@@ -191,7 +196,8 @@ def _revise_brief_payload(
         previous = ResearchBrief.model_validate(_strip_plan_trace(brief_payload))
     except (ValidationError, TypeError, ValueError):
         return None, None
-    cfg = runtime_config.to_brief_config(runtime_config.current())
+    # planner：访客用试用模型（#49，trial.planner_override）；其他人沿用全站设置。
+    cfg = runtime_config.to_brief_config(runtime_config.current(), **(planner or {}))
     return _capture_planner_step(
         kind="brief_revise",
         query=previous.original_query,

@@ -187,7 +187,7 @@ def test_login_sets_http_only_lax_cookie(client, alice):
     response = _login(client, email=" ALICE@example.com")
     assert response.status_code == 200
     assert response.json() == {"id": alice.id, "email": "alice@example.com", "role": "user",
-                               "display_name": None, "avatar_url": None}
+                               "display_name": None, "avatar_url": None, "trial": None}
     header = response.headers["set-cookie"].lower()
     assert header.startswith(f"{SESSION_COOKIE}=")
     assert "httponly" in header and "samesite=lax" in header and "path=/" in header

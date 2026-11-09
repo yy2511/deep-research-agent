@@ -171,6 +171,8 @@ class RunAttempt(Base):
     id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
     task_id: Mapped[int] = mapped_column(ForeignKey("research_tasks.id"), index=True)
     run_id: Mapped[str] = mapped_column(String(64), unique=True)
+    # 访客试用：这次扣在哪一天的次数（YYYY-MM-DD，按试用时区）；撤销占位时据此退回。非访客为空（#49）。
+    quota_day: Mapped[str | None] = mapped_column(String(10))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
@@ -188,3 +190,19 @@ class Showcase(Base):
     title: Mapped[str] = mapped_column(String(200))
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+# ---- 试用次数（阶段 2 第 3 步 #49；设计 docs/design/阶段2-公开试用.md §3） ------------------
+
+class DailyCounter(Base):
+    """按天计数：``scope`` 是 ``user:<id>`` 或 ``guests``（全部访客合计），``kind`` 是 ``run`` 或 ``brief``。
+
+    扣减用一条带条件的 upsert（未到上限才加 1），并发时不会超（services/trial.py）。
+    """
+
+    __tablename__ = "daily_counters"
+
+    scope: Mapped[str] = mapped_column(String(32), primary_key=True)
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)

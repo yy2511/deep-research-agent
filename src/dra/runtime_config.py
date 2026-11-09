@@ -49,6 +49,39 @@ class PlannerModelConfig(BaseModel):
     # 澄清规划恒定开思考。
 
 
+class TrialSettings(BaseModel):
+    """公开试用（阶段 2 第 3 步，#49；设计 docs/design/阶段2-公开试用.md §1、§3）。
+
+    只作用于 GitHub 登录的访客（guest）；邀请码用户和管理员不受影响。数值是暂定值，上线前由用户定。
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str | None = None
+    model: str | None = None
+    """访客规划与研究都用这一个模型；未设置时访客不能发起研究或规划（503“试用暂未开放”）。"""
+    per_user_daily_runs: int = Field(default=2, ge=0)
+    global_daily_runs: int = Field(default=20, ge=0)
+    per_user_daily_briefs: int = Field(default=10, ge=0)
+    global_daily_briefs: int = Field(default=100, ge=0)
+    max_concurrent_guest_runs: int = Field(default=2, ge=1)
+    wall_timeout_s: float = Field(default=900.0, gt=0)
+    max_llm_calls: int = Field(default=60, ge=1)
+    max_tool_calls: int = Field(default=60, ge=1)
+    timezone: str = "Asia/Shanghai"
+    """“一天”按这个时区的 0 点切换。"""
+
+    @model_validator(mode="after")
+    def validate_trial(self):
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"试用设置的时区无效：{self.timezone}") from exc
+        if (self.provider is None) != (self.model is None):
+            raise ValueError("试用模型须同时填写服务商和模型")
+        return self
+
+
 class RuntimeModelSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -73,6 +106,7 @@ class RuntimeModelSettings(BaseModel):
     execution_enabled: bool | None = None
     execution_backend: Literal["docker", "native"] | None = None
     """网页研究是否提供 Bash/Docker 执行；None 沿用 ``ExecutionConfig.from_env()``，旧配置不改变执行权限。"""
+    trial: TrialSettings = Field(default_factory=TrialSettings)
 
     @model_validator(mode="after")
     def validate_compaction(self):

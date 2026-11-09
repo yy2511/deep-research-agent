@@ -57,6 +57,8 @@ cd web && npm ci && npm run dev
 
 **示例（可选）**：把自己跑完的纯网页研究公开给所有人只读查看（未登录也能看），用 `uv run python -m dra.admin showcase add <对话编号> --title "标题"`。对话编号就是该对话第一轮的研究编号，可在网址 `?run=` 后看到。命令会先列出将公开的内容，输入 y 确认；`showcase list` 查看、`showcase remove <对话编号>` 取消。作为示例期间这个对话不能再追问。
 
+**试用限制**：GitHub 登录的访客受 `runtime_config.json` 里 `trial` 一节约束：试用模型、每日研究与规划次数（个人与全站）、同时进行的研究数、单次预算。没设置试用模型时访客不能发起研究。访客只能用网页搜索，不能用资料库、外部资料服务、运行代码和浏览器。邀请码用户和管理员不受这些限制。
+
 Web 后端需要 PostgreSQL：地址取环境变量 `DRA_DATABASE_URL`，没有时读 `.env` 中的同名项；连不上或迁移不是最新时拒绝启动并提示原因。Web 后端默认监听 `http://127.0.0.1:8765`，Vite 开发服务器默认监听 `http://127.0.0.1:5173`。生产形态先运行 `cd web && npm run build`，随后只启动后端，由 FastAPI 直接服务 `web/dist/`。
 
 默认 Web 检索会并发尝试 Tavily 与 Exa，建议同时配置两者；两者都失败时会尝试无密钥的 DuckDuckGo 兜底。完整环境变量见 [.env.example](.env.example)。
