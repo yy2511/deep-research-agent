@@ -5,7 +5,7 @@ import { SettingsPage } from "./components/SettingsPage";
 /** 管理员权限（#32）：全站设置只有管理员能改，普通用户的设置页不显示修改入口。 */
 
 const PREFS = { showRecords: false, showReplay: false, traceFull: false };
-const GLOBAL_TABS = ["模型", "研究能力", "API 连接", "技能", "外部资料（MCP）"];
+const GLOBAL_TABS = ["模型", "研究能力", "试用", "API 连接", "技能", "外部资料（MCP）"];
 
 function render(isAdmin: boolean, tab: "models" | "skills" = "models") {
   return renderToStaticMarkup(<SettingsPage isAdmin={isAdmin} tab={tab} onTab={() => {}} prefs={PREFS}

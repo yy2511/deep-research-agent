@@ -12,7 +12,7 @@ const EXAMPLES = [
 
 export function NewResearch({
   busy, error, mode = "clean", planTrace = null, onSubmit, controls, canSubmit = true, blockedHint, initialQuery = "", onDraftChange,
-  progress,
+  progress, notice,
 }: {
   initialQuery?: string; onDraftChange?: (value: string) => void;
   busy: boolean;
@@ -28,6 +28,8 @@ export function NewResearch({
   blockedHint?: string;
   /** 规划进行中的进度框；有它时取代下方的示例问题。 */
   progress?: ReactNode;
+  /** 输入框下的说明，例如访客今天还能问几次（#50）。 */
+  notice?: ReactNode;
 }) {
   const [query, setQuery] = useState(initialQuery);
   const failCalls = mode === "debug" ? llmCallsFromPlanTrace(planTrace) : [];
@@ -66,6 +68,7 @@ export function NewResearch({
           </button>
         </div>
       </div>
+      {notice}
       {!canSubmit && blockedHint && <p className="field-hint is-warn">{blockedHint}</p>}
       {error && <p className="field-hint is-bad" role="alert">{error}</p>}
       {mode === "debug" && (failCalls.length > 0 || planTrace?.plan_id) && (

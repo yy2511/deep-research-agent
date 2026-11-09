@@ -21,6 +21,8 @@ import type { RunView, ResearchInputSnapshot, ResearchUserMessage, ResearchInput
 import { type PlanTrace } from "./types";
 import { accountLabel, type Account } from "./auth";
 import { fetchShowcases, showcaseEntry, showcaseOf, type Showcase } from "./showcases";
+import { trialBlocked, type TrialStatus } from "./trial";
+import { TrialNotice } from "./components/TrialNotice";
 
 // 刷新恢复"当前运行的"钥匙：运行中与已结束的历史都记，刷新后回到同一条 run。
 // 与 URL 的 ?run= 互为备份（URL 便于分享/前进后退，localStorage 兼容旧会话）。
@@ -70,6 +72,9 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
   useEffect(() => {
     if (!publicMode) void fetchShowcases().then(setShowcases);
   }, [publicMode]);
+  // 访客的试用次数（#50）：登录时随账号带来，之后每次有研究开始或结束时重新读。
+  const isGuest = account?.role === "guest";
+  const [trial, setTrial] = useState<TrialStatus | null>(account?.trial ?? null);
   const [view, setView] = useState<RunView>(initialView());
   const [selectedSkills,setSelectedSkills] = useState<string[]>([]);
   const [sourceSelection,setSourceSelection] = useState<SourceSelection>(() => ({
@@ -673,7 +678,15 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
   // 无内容 = 空闲态，显示新研究输入或开跑前的确认卡；有内容 = 研究页。
   const hasContent = runId !== null || view.startedAtMs !== undefined;
   const busy = briefing || submitting;
-  const canSubmit = sourceSelection.source_mode === "web" || sourceSelection.document_ids.length > 0;
+  useEffect(() => {
+    if (!isGuest) return;
+    let live = true;
+    getJSON<Account>("/api/me").then((me) => { if (live) setTrial(me.trial ?? null); }).catch(() => {});
+    return () => { live = false; };
+  }, [isGuest, runsVersion, runId, briefError, startError]);
+  // 访客只用网页来源（服务端同样强制）；次数用完或未开放时按钮变灰，说明在 TrialNotice 里。
+  const guestBlocked = isGuest && trialBlocked(trial) !== null;
+  const canSubmit = !guestBlocked && (isGuest || sourceSelection.source_mode === "web" || sourceSelection.document_ids.length > 0);
 
   return (
     <div className="app-shell">
@@ -758,13 +771,18 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
                 mode={mode} planTrace={briefFailTrace}
                 progress={planProgress ? <PlanningProgress progress={planProgress} /> : undefined}
                 onSubmit={handleSubmit}
-                controls={<>
+                controls={isGuest ? (
+                  // 访客只有网页来源，不显示来源切换和“我的资料”（#50）。
+                  <SkillPicker selected={selectedSkills} onChange={setSelectedSkills} disabled={busy}/>
+                ) : <>
                   <SourcePicker value={sourceSelection} onChange={setSourceSelection} disabled={busy}/>
                   <LibraryButton value={sourceSelection} onChange={setSourceSelection} disabled={busy}/>
                   <SkillPicker selected={selectedSkills} onChange={setSelectedSkills} disabled={busy}/>
                 </>}
                 canSubmit={canSubmit}
-                blockedHint="当前来源只查我的资料，但还没有选资料。请在「我的资料」里勾选，或把来源改成网页。"
+                blockedHint={isGuest ? undefined : "当前来源只查我的资料，但还没有选资料。请在「我的资料」里勾选，或把来源改成网页。"}
+                notice={isGuest && trial ? <TrialNotice trial={trial}
+                  onShowcases={showcases.length ? () => openShowcase(showcases[0]) : undefined} /> : undefined}
               />
             )}
           </div>
