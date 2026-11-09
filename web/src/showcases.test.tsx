@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ShowcaseList } from "./components/Sidebar";
 import { initialView, mergeSimpleResult } from "./reducer";
-import { fetchShowcases, showcaseEntry, showcaseOf, type Showcase } from "./showcases";
+import { fetchShowcases, hasViewableShowcase, showcaseEntry, showcaseOf, type Showcase } from "./showcases";
 
 /** 示例（#47）：所有人只读可见。 */
 
@@ -20,6 +20,12 @@ describe("示例数据", () => {
     expect(showcaseOf([sample], null)).toBeNull();
     expect(showcaseEntry(sample)).toBe("r2");
     expect(showcaseEntry({ ...sample, available: false })).toBeNull();
+  });
+
+  it("全都不可用时按没有示例处理（#52）", () => {
+    expect(hasViewableShowcase([])).toBe(false);
+    expect(hasViewableShowcase([{ ...sample, available: false }])).toBe(false);
+    expect(hasViewableShowcase([{ ...sample, available: false }, sample])).toBe(true);
   });
 
   it("列表读不到时当作没有示例", async () => {

@@ -4,7 +4,7 @@ import {
   GITHUB_LOGIN_URL, PASSWORD_MAX, PASSWORD_MIN, type Account, type AuthFields, type AuthMode,
 } from "../auth";
 import { Icon } from "./Icon";
-import { fetchShowcases, type Showcase } from "../showcases";
+import { fetchShowcases, hasViewableShowcase, type Showcase } from "../showcases";
 
 type GateState =
   | { kind: "checking" }
@@ -91,10 +91,11 @@ export function AuthGate({ children, renderPublic }: {
     );
   }
   const showcases = state.showcases ?? [];
-  const showPublic = renderPublic && showcases.length > 0 && !wantsLogin && !state.notice && !githubError;
+  const viewable = hasViewableShowcase(showcases);
+  const showPublic = renderPublic && viewable && !wantsLogin && !state.notice && !githubError;
   if (showPublic) return <>{renderPublic(showcases, () => setWantsLogin(true))}</>;
   return <AuthPage notice={state.notice} github={state.github === true} initialError={githubError}
-    onBackToShowcases={renderPublic && showcases.length > 0 ? () => setWantsLogin(false) : undefined}
+    onBackToShowcases={renderPublic && viewable ? () => setWantsLogin(false) : undefined}
     onAuthed={(account) => { setWantsLogin(false); setState({ kind: "ready", account }); }} />;
 }
 
