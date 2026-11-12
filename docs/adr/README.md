@@ -19,6 +19,7 @@
 | [0005](0005-login-server-session-cookie.md) | 登录用服务端会话 + HttpOnly Cookie，不用 JWT | 已接受 |
 | [0006](0006-sqlalchemy-alembic-sync.md) | 数据库访问用 SQLAlchemy（同步）+ Alembic，离线测试默认用 SQLite | 已接受 |
 | [0007](0007-public-trial-github-login.md) | 在线版改为公开试用：GitHub 登录、按次数限额，不做自带 key | 已接受 |
+| [0008](0008-admin-aggregate-dashboard.md) | 管理员运营面板只提供汇总统计，不扩展私有研究读取权限 | 草稿 |
 
 ## 模板
 

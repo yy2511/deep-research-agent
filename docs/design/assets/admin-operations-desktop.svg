@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="870" viewBox="0 0 1180 870" role="img" aria-labelledby="title desc"><title id="title">管理员运营概览桌面线框</title><desc id="desc">设计稿，所有数字为模拟数据，仅展示管理员可见汇总，不包含用户身份或提问内容。</desc><rect width="100%" height="100%" fill="#f5f7fa"/>
+<rect width="186" height="870" fill="#fff"/>
+<text x="22" y="42" font-family="Noto Sans CJK SC, sans-serif" font-size="20" fill="#273344" font-weight="700">研究工作台</text>
+<text x="22" y="88" font-family="Noto Sans CJK SC, sans-serif" font-size="14" fill="#667085" font-weight="400">设置</text>
+<rect x="14" y="109" width="158" height="42" rx="10" fill="#e6eefc" stroke="#e6eefc"/>
+<text x="26" y="136" font-family="Noto Sans CJK SC, sans-serif" font-size="15" fill="#225fc4" font-weight="700">运营概览</text>
+<text x="26" y="188" font-family="Noto Sans CJK SC, sans-serif" font-size="14" fill="#273344" font-weight="400">模型</text>
+<text x="26" y="228" font-family="Noto Sans CJK SC, sans-serif" font-size="14" fill="#273344" font-weight="400">研究能力</text>
+<text x="26" y="268" font-family="Noto Sans CJK SC, sans-serif" font-size="14" fill="#273344" font-weight="400">试用</text>
+<text x="26" y="308" font-family="Noto Sans CJK SC, sans-serif" font-size="14" fill="#273344" font-weight="400">API 连接</text>
+<text x="26" y="348" font-family="Noto Sans CJK SC, sans-serif" font-size="14" fill="#273344" font-weight="400">技能</text>
+<text x="26" y="388" font-family="Noto Sans CJK SC, sans-serif" font-size="14" fill="#273344" font-weight="400">外部资料</text>
+<text x="26" y="428" font-family="Noto Sans CJK SC, sans-serif" font-size="14" fill="#273344" font-weight="400">通用</text>
+<text x="22" y="825" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">管理员</text>
+<text x="216" y="38" font-family="Noto Sans CJK SC, sans-serif" font-size="24" fill="#273344" font-weight="700">运营概览</text>
+<text x="216" y="64" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">仅管理员可见 · 仅展示汇总数据</text>
+<text x="216" y="88" font-family="Noto Sans CJK SC, sans-serif" font-size="12" fill="#946200" font-weight="400">设计线框 · 所有数字均为示例</text>
+<rect x="1062" y="28" width="88" height="36" rx="10" fill="#fff" stroke="#dae1e9"/>
+<text x="1084" y="52" font-family="Noto Sans CJK SC, sans-serif" font-size="14" fill="#273344" font-weight="400">刷新</text>
+<text x="882" y="86" font-family="Noto Sans CJK SC, sans-serif" font-size="12" fill="#667085" font-weight="400">更新于 2026-11-12 10:00 UTC</text>
+<text x="216" y="132" font-family="Noto Sans CJK SC, sans-serif" font-size="15" fill="#273344" font-weight="700">当前总览（不受日期筛选影响）</text>
+<rect x="216" y="148" width="222" height="88" rx="10" fill="#fff" stroke="#dae1e9"/>
+<text x="232" y="174" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">账号总数</text>
+<text x="232" y="212" font-family="Noto Sans CJK SC, sans-serif" font-size="29" fill="#273344" font-weight="700">128</text>
+<rect x="452" y="148" width="222" height="88" rx="10" fill="#fff" stroke="#dae1e9"/>
+<text x="468" y="174" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">可用账号</text>
+<text x="468" y="212" font-family="Noto Sans CJK SC, sans-serif" font-size="29" fill="#273344" font-weight="700">124</text>
+<rect x="688" y="148" width="222" height="88" rx="10" fill="#fff" stroke="#dae1e9"/>
+<text x="704" y="174" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">停用账号</text>
+<text x="704" y="212" font-family="Noto Sans CJK SC, sans-serif" font-size="29" fill="#273344" font-weight="700">4</text>
+<rect x="924" y="148" width="222" height="88" rx="10" fill="#fff" stroke="#dae1e9"/>
+<text x="940" y="174" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">公开示例</text>
+<text x="940" y="212" font-family="Noto Sans CJK SC, sans-serif" font-size="29" fill="#273344" font-weight="700">6</text>
+<text x="216" y="260" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">访客 112  /  用户 14  /  管理员 2</text>
+<text x="216" y="300" font-family="Noto Sans CJK SC, sans-serif" font-size="17" fill="#273344" font-weight="700">期间活动</text>
+<rect x="216" y="316" width="114" height="34" rx="10" fill="#e6eefc" stroke="#c9d8f2"/>
+<text x="229" y="339" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#225fc4" font-weight="400">近 7 日 ▾</text>
+<text x="348" y="339" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">2026-11-06 至 2026-11-12（UTC）</text>
+<rect x="216" y="368" width="222" height="88" rx="10" fill="#fff" stroke="#dae1e9"/>
+<text x="232" y="394" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">新增账号</text>
+<text x="232" y="432" font-family="Noto Sans CJK SC, sans-serif" font-size="29" fill="#273344" font-weight="700">12</text>
+<rect x="452" y="368" width="222" height="88" rx="10" fill="#fff" stroke="#dae1e9"/>
+<text x="468" y="394" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">研究用户（去重）</text>
+<text x="468" y="432" font-family="Noto Sans CJK SC, sans-serif" font-size="29" fill="#273344" font-weight="700">35</text>
+<rect x="688" y="368" width="222" height="88" rx="10" fill="#fff" stroke="#dae1e9"/>
+<text x="704" y="394" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">研究任务</text>
+<text x="704" y="432" font-family="Noto Sans CJK SC, sans-serif" font-size="29" fill="#273344" font-weight="700">87</text>
+<rect x="924" y="368" width="222" height="88" rx="10" fill="#fff" stroke="#dae1e9"/>
+<text x="940" y="394" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">新建对话</text>
+<text x="940" y="432" font-family="Noto Sans CJK SC, sans-serif" font-size="29" fill="#273344" font-weight="700">49</text>
+<text x="216" y="480" font-family="Noto Sans CJK SC, sans-serif" font-size="12" fill="#667085" font-weight="400">任务含首问与追问，不代表完成。</text>
+<text x="216" y="503" font-family="Noto Sans CJK SC, sans-serif" font-size="12" fill="#667085" font-weight="400">每日研究用户数不可直接相加为期间去重数。</text>
+<text x="216" y="540" font-family="Noto Sans CJK SC, sans-serif" font-size="17" fill="#273344" font-weight="700">每日趋势</text>
+<rect x="216" y="558" width="930" height="154" rx="10" fill="#fff" stroke="#dae1e9"/>
+<text x="234" y="586" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">日期（UTC）</text>
+<text x="486" y="586" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">新增账号</text>
+<text x="656" y="586" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">研究用户</text>
+<text x="826" y="586" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">任务</text>
+<text x="986" y="586" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#667085" font-weight="400">对话</text>
+<text x="234" y="621" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">11-12</text>
+<text x="486" y="621" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">3</text>
+<text x="656" y="621" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">11</text>
+<text x="826" y="621" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">17</text>
+<text x="986" y="621" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">9</text>
+<text x="234" y="654" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">11-11</text>
+<text x="486" y="654" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">1</text>
+<text x="656" y="654" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">6</text>
+<text x="826" y="654" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">9</text>
+<text x="986" y="654" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">5</text>
+<text x="234" y="687" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">11-10</text>
+<text x="486" y="687" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">2</text>
+<text x="656" y="687" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">9</text>
+<text x="826" y="687" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">14</text>
+<text x="986" y="687" font-family="Noto Sans CJK SC, sans-serif" font-size="13" fill="#273344" font-weight="400">8</text>
+<text x="216" y="736" font-family="Noto Sans CJK SC, sans-serif" font-size="12" fill="#667085" font-weight="400">统计范围：数据库已登记记录。</text>
+<text x="216" y="758" font-family="Noto Sans CJK SC, sans-serif" font-size="12" fill="#667085" font-weight="400">不含私有提问、身份、答案或证据。</text>
+</svg>
