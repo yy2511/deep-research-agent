@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -13,6 +14,7 @@ from dra import llm
 from dra.api.common import service_errors
 from dra.api.deps import CurrentUserDep, PlanStoreDep, ReadyDatabaseDep
 from dra.api.services import trial as trial_service
+from dra.api.services import quotas
 from dra.api.services.planning import (
     PlannerJob,
     _brief_payload,
@@ -85,6 +87,7 @@ def _planner_stream(work, request: Request) -> StreamingResponse:
 
 
 class SourceSelectionReq(BaseModel):
+    request_id: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     skill_selection: str | None = None
     source_mode: Literal["web", "library", "mixed"] = "web"
     document_ids: list[str] = Field(default_factory=list, max_length=50)
@@ -107,10 +110,13 @@ def _planning_access(req: SourceSelectionReq, user, db) -> tuple[dict, dict]:
             trial_service.check_options(source_mode=req.source_mode, document_ids=req.document_ids,
                                         mcp_server_ids=req.mcp_server_ids)
     sources = _brief_sources(req, user.id)
-    if trial is not None:
-        with service_errors():
-            trial_service.take_brief(db, trial)
-    return sources, trial_service.planner_override(trial)
+    def validate(access):
+        if access.trial is not None:
+            trial_service.check_options(source_mode=req.source_mode, document_ids=req.document_ids,
+                                        mcp_server_ids=req.mcp_server_ids)
+    with service_errors():
+        access = quotas.take_brief(db, user.id, req.request_id or uuid.uuid4().hex, validate=validate)
+    return sources, trial_service.planner_override(access.trial)
 
 
 class BriefReq(SourceSelectionReq):

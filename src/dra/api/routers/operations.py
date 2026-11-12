@@ -33,6 +33,7 @@ class Roles(Aggregate):
     guest: Count
     user: Count
     admin: Count
+    owner: Count
 
 
 class Totals(Aggregate):

@@ -1,11 +1,12 @@
 """设置接口：模型配置、MCP 配置、模型连通测试、执行环境状态。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, ValidationError
 
 from dra import llm, mcp_client
-from dra.api.deps import ADMIN_ONLY
+from dra.api.common import _StrictPayload, service_errors
+from dra.api.deps import ADMIN_ONLY, CurrentUserDep, ReadyDatabaseDep
 
 router = APIRouter()
 # 改全站设置的接口：分组上统一要求管理员（#32）。
@@ -121,6 +122,8 @@ def api_config_put(body: dict) -> dict:
         runtime_config.to_simple_config(settings)
     except (ValidationError, ValueError) as e:
         raise HTTPException(400, str(e))
+    if settings.trial.timezone != runtime_config.current().trial.timezone:
+        raise HTTPException(403, "额度时区只能由平台负责人在负责人管理中安排变更")
     runtime_config.save(settings)
     return api_config()
 
@@ -155,3 +158,24 @@ def api_execution_status():
     settings = runtime_config.current()
     config = runtime_config.execution_config(settings)
     return {**availability(config), **_execution_effective(settings, config), "image": config.image if config.backend == "docker" else None}
+
+
+class QuotaTimezoneReq(_StrictPayload):
+    timezone: str
+    expected_version: int
+
+
+@admin_router.get("/api/admin/quota-timezone")
+def api_quota_timezone(response: Response, user: CurrentUserDep, db: ReadyDatabaseDep) -> dict:
+    from dra.api.services import quota_timezone
+    response.headers["Cache-Control"] = "no-store"
+    with service_errors():
+        return quota_timezone.status(db, user.id)
+
+
+@admin_router.put("/api/admin/quota-timezone")
+def api_quota_timezone_put(req: QuotaTimezoneReq, response: Response, user: CurrentUserDep, db: ReadyDatabaseDep) -> dict:
+    from dra.api.services import quota_timezone
+    response.headers["Cache-Control"] = "no-store"
+    with service_errors():
+        return quota_timezone.schedule(db, user.id, req.timezone, req.expected_version)

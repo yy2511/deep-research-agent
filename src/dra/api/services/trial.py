@@ -1,6 +1,6 @@
 """公开试用：GitHub 访客的每日次数与功能限制（阶段 2 第 3 步，#49）。
 
-设计：docs/design/阶段2-公开试用.md §1、§3；决定：ADR 0007。只作用于 ``guest``；邀请码用户与管理员不受影响。
+设计：docs/design/阶段2-公开试用.md §1、§3；决定：ADR 0007/0009。能力收紧只作用于 ``guest``；四身份计数统一在 quotas。
 
 - **次数**：研究（追问也算）在“先占位”的同一事务里扣，规划在调用模型之前扣。每次先扣个人
   （``user:<id>``）再扣全部访客（``guests``），用一条带条件的 upsert：没到上限才加 1，没返回行就是
@@ -19,13 +19,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, update
-
 from dra.api.services.auth import UserInfo
-from dra.api.services.db_errors import database_errors
 from dra.api.services.errors import CapacityFull, InvalidRequest, Unavailable
 from dra.db import Database
-from dra.db_tables import DailyCounter, utcnow
+from dra.db_tables import utcnow
 
 RUN, BRIEF = "run", "brief"
 GUESTS_SCOPE = "guests"
@@ -58,7 +55,7 @@ class Trial:
 
 
 def for_user(user: UserInfo, *, now: datetime | None = None) -> Trial | None:
-    """访客返回试用规则；其他角色返回 None（不受限）。试用模型没设置时访客一律 503。"""
+    """访客返回能力快照；其他角色返回 None。实际配额在占位事务内重新校验。"""
     if user.role != "guest":
         return None
     from dra import runtime_config
@@ -76,82 +73,16 @@ def _today(timezone: str, now: datetime) -> tuple[str, datetime]:
     return local.date().isoformat(), midnight
 
 
-# ---- 扣次数与退回 --------------------------------------------------------------------
-
-def _take(session, scope: str, day: str, kind: str, limit: int) -> bool:
-    """没到上限就加 1 并返回 True；到了返回 False。PostgreSQL 与 SQLite（3.35+）都支持。"""
-    if limit <= 0:
-        return False
-    dialect = session.get_bind().dialect.name
-    if dialect == "postgresql":
-        from sqlalchemy.dialects.postgresql import insert
-    else:
-        from sqlalchemy.dialects.sqlite import insert
-    statement = insert(DailyCounter).values(scope=scope, day=day, kind=kind, count=1)
-    statement = statement.on_conflict_do_update(
-        index_elements=[DailyCounter.scope, DailyCounter.day, DailyCounter.kind],
-        set_={"count": DailyCounter.count + 1},
-        where=DailyCounter.count < limit,
-    ).returning(DailyCounter.count)
-    return session.execute(statement).first() is not None
-
-
-def take_in_session(session, trial: Trial, kind: str) -> None:
-    """在调用方的事务里扣个人再扣全站；任一用完抛 QuotaExceeded（调用方的事务随之回滚）。"""
-    if not _take(session, trial.user_scope, trial.day, kind, trial.limit(kind, trial.user_scope)):
-        raise QuotaExceeded(_exhausted(trial, kind, personal=True))
-    if not _take(session, GUESTS_SCOPE, trial.day, kind, trial.limit(kind, GUESTS_SCOPE)):
-        raise QuotaExceeded(_exhausted(trial, kind, personal=False))
-
-
-def give_back_in_session(session, user_id: int, day: str, kind: str = RUN) -> None:
-    """退回一次（撤销占位时）。计数不会低于 0。"""
-    for scope in (f"user:{user_id}", GUESTS_SCOPE):
-        session.execute(
-            update(DailyCounter)
-            .where(DailyCounter.scope == scope, DailyCounter.day == day, DailyCounter.kind == kind,
-                   DailyCounter.count > 0)
-            .values(count=DailyCounter.count - 1)
-            .execution_options(synchronize_session=False)
-        )
-
-
-def take_brief(db: Database, trial: Trial) -> None:
-    """规划之前扣一次规划次数。当天研究次数已用完时规划也拒绝：规划完也没法开始研究。"""
-    with database_errors(), db.session() as session:
-        used = _counts(session, trial, RUN)
-        if used[trial.user_scope] >= trial.limit(RUN, trial.user_scope):
-            raise QuotaExceeded(_exhausted(trial, RUN, personal=True))
-        if used[GUESTS_SCOPE] >= trial.limit(RUN, GUESTS_SCOPE):
-            raise QuotaExceeded(_exhausted(trial, RUN, personal=False))
-        take_in_session(session, trial, BRIEF)
-
-
-def _counts(session, trial: Trial, kind: str) -> dict[str, int]:
-    rows = session.execute(
-        select(DailyCounter.scope, DailyCounter.count)
-        .where(DailyCounter.scope.in_([trial.user_scope, GUESTS_SCOPE]),
-               DailyCounter.day == trial.day, DailyCounter.kind == kind)
-    ).all()
-    found = dict(rows)
-    return {trial.user_scope: found.get(trial.user_scope, 0), GUESTS_SCOPE: found.get(GUESTS_SCOPE, 0)}
-
+# 计数与退款统一在 quotas.py；本模块只负责访客能力和兼容状态。
 
 def status(db: Database, user: UserInfo) -> dict | None:
     """``GET /api/me`` 的 ``trial``：今天还能发起几次研究、上限、何时恢复。非访客为 None。"""
     if user.role != "guest":
         return None
-    try:
-        trial = for_user(user)
-    except Unavailable:
-        return {"open": False, "runs_left": 0, "runs_limit": 0, "resets_at": None}
-    with database_errors(), db.session() as session:
-        used = _counts(session, trial, RUN)
-    personal_left = trial.limit(RUN, trial.user_scope) - used[trial.user_scope]
-    global_left = trial.limit(RUN, GUESTS_SCOPE) - used[GUESTS_SCOPE]
-    return {"open": True, "runs_left": max(0, min(personal_left, global_left)),
-            "runs_limit": trial.limit(RUN, trial.user_scope), "global_exhausted": global_left <= 0,
-            "resets_at": trial.resets_at.isoformat()}
+    from dra.api.services import quotas
+    value = quotas.status(db, user)
+    return {key: value[key] for key in ("open", "runs_left", "runs_limit", "resets_at") } | (
+        {"global_exhausted": value["global_exhausted"]} if value["open"] else {})
 
 
 def _exhausted(trial: Trial, kind: str, *, personal: bool) -> str:

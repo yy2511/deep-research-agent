@@ -127,13 +127,19 @@ def test_lists_only_show_your_own(world):
         assert other_run not in runs
 
 
-def test_admins_do_not_see_other_peoples_research(world, database):
+@pytest.mark.parametrize("role", ["admin", "owner"])
+def test_admins_do_not_see_other_peoples_research(world, database, role):
     admin = auth.create_user(database, "boss@example.com", PASSWORD, role="admin")
+    if role == "owner":
+        from dra.api.services.user_management import bootstrap_owner
+        bootstrap_owner(database, admin.id)
     client = TestClient(web.app, cookies={
         SESSION_COOKIE: auth.login(database, admin.email, PASSWORD).token})
     _, _, alice_run = world["alice"]
     assert client.get("/api/runs").json() == []
     assert client.get(f"/api/runs/{alice_run}").status_code == 404
+    leaks, checked = cross_user_leaks(web.app, client, alice_run)
+    assert leaks == [] and checked >= 20
 
 
 def test_other_users_cannot_follow_up_or_cancel(world, database):

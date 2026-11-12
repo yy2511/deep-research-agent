@@ -26,7 +26,7 @@ from dra.api.services.errors import (
     Unauthorized,
 )
 from dra.db import Database
-from dra.db_tables import Invite, LoginSession, User, UserIdentity, utcnow
+from dra.db_tables import Invite, LoginSession, User, UserIdentity, UserQuotaPolicy, utcnow
 
 # 新增限制（设计“新增的限制”）：密码长度、会话无活动有效期、邀请码默认有效期。
 PASSWORD_MIN = 8
@@ -41,7 +41,7 @@ INVITE_INVALID = "邀请码无效或已使用"
 EMAIL_TAKEN = "该邮箱已注册"
 LOGIN_FAILED = "邮箱或密码错误"
 ACCOUNT_DISABLED = "账号已停用"
-ROLES = ("guest", "user", "admin")
+ROLES = ("guest", "user", "admin")  # owner only through explicit governance commands
 
 _hasher = PasswordHasher()
 
@@ -59,7 +59,7 @@ class UserInfo:
 
     @property
     def is_admin(self) -> bool:
-        return self.role == "admin"
+        return self.role in ("admin", "owner")
 
 
 @dataclass(frozen=True)
@@ -144,6 +144,7 @@ def register(db: Database, invite_code: str, email: str, password: str) -> Login
                         created_at=now, updated_at=now)
             session.add(user)
             session.flush()
+            session.add(UserQuotaPolicy(user_id=user.id, mode="unlimited", version=0))
             # 条件更新：两人同时用同一个码，只有一个能改到这一行（设计“出错时怎么办”）。
             claimed = session.execute(
                 update(Invite)
@@ -315,6 +316,8 @@ def create_user(db: Database, email: str, password: str, *, role: str = "user") 
                         created_at=now, updated_at=now)
             session.add(user)
             session.flush()
+            if role == "user":
+                session.add(UserQuotaPolicy(user_id=user.id, mode="unlimited", version=0))
             return _info(user)
     except IntegrityError as exc:
         raise Conflict(EMAIL_TAKEN) from exc
@@ -368,22 +371,40 @@ def set_user_status(db: Database, email: str | None, status: str, *, github: str
     """停用（同时吊销会话）或恢复账号。按邮箱或 GitHub 登录名指定。"""
     if status not in ("active", "disabled"):
         raise InvalidRequest("状态只能是 active 或 disabled")
+    from dra.api.services import user_management as management
     now = utcnow()
     with _database_errors(), db.session() as session:
+        management.begin_write(session)
+        management.lock_governance(session)
         user_id = _user_id(session, email=email, github=github)
-        session.execute(update(User).where(User.id == user_id)
-                        .values(status=status, updated_at=now)
-                        .execution_options(synchronize_session=False))
-        if status == "disabled":
-            _revoke_user_sessions(session, user_id, now)
+        user = session.scalars(select(User).where(User.id == user_id).with_for_update()).one()
+        if user.role == "owner":
+            raise Forbidden("负责人不能停用或通过普通命令修改，请使用移交或恢复流程")
+        before = {"role": user.role, "status": user.status}
+        user.status, user.updated_at = status, now
+        user.management_version += 1
+        _revoke_user_sessions(session, user_id, now)
+        management._audit(session, None, user_id, "cli_status", before,
+                          {"role": user.role, "status": status}, "部署维护者命令")
 
 
 def set_role(db: Database, role: str, *, email: str | None = None, github: str | None = None) -> None:
-    """调整角色（如把熟人从 guest 升为 user）。角色每个请求都从库里读，改完立即生效。"""
+    """部署维护者的角色调整；不允许设/撤负责人，撤销旧会话并记录审计。"""
     if role not in ROLES:
-        raise InvalidRequest("角色只能是 guest、user 或 admin")
+        raise InvalidRequest("角色只能是 guest、user 或 admin；负责人请使用专门命令")
+    from dra.api.services import user_management as management
     now = utcnow()
     with _database_errors(), db.session() as session:
+        management.begin_write(session)
+        management.lock_governance(session)
         user_id = _user_id(session, email=email, github=github)
-        session.execute(update(User).where(User.id == user_id).values(role=role, updated_at=now)
-                        .execution_options(synchronize_session=False))
+        user = session.scalars(select(User).where(User.id == user_id).with_for_update()).one()
+        if user.role == "owner":
+            raise Forbidden("负责人只能通过移交或恢复流程修改")
+        before = {"role": user.role}
+        if role == "user" and session.get(UserQuotaPolicy, user_id) is None:
+            session.add(UserQuotaPolicy(user_id=user_id, mode="unlimited", version=0))
+        user.role, user.updated_at = role, now
+        user.management_version += 1
+        _revoke_user_sessions(session, user_id, now)
+        management._audit(session, None, user_id, "cli_role", before, {"role": role}, "部署维护者命令")
