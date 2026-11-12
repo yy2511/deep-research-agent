@@ -21,6 +21,8 @@
 | [0007](0007-public-trial-github-login.md) | 在线版改为公开试用：GitHub 登录、按次数限额，不做自带 key | 已接受 |
 | [0008](0008-admin-aggregate-dashboard.md) | 管理员运营面板只提供汇总统计，不扩展私有研究读取权限 | 草稿 |
 
+| [0009](0009-platform-roles-and-user-quotas.md) | 三级平台角色之外保留访客，支持个人免费次数管理 | 草稿 |
+
 ## 模板
 
 ```markdown
