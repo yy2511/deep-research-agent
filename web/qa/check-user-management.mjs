@@ -49,10 +49,12 @@ try {
  await click('取消移交'); assert.equal(await page.getByRole('button', { name: '确认移交并退出登录', exact: true }).count(), 0);
  await page.reload(); await pause(); await page.setViewportSize({ width: 390, height: 844 }); await pause();
  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+ const captionBox = await page.locator('.management-table caption').boundingBox();
+ assert.ok(captionBox && captionBox.width > 300 && captionBox.height < 80, 'mobile table caption must remain a horizontal row');
  await page.screenshot({ path: `${directory}/users-mobile.png`, fullPage: true });
  await page.locator('tr').filter({ hasText: '合成普通用户' }).getByRole('button').click(); await pause();
  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
- await page.screenshot({ path: `${directory}/user-detail-mobile.png`, fullPage: true });
+ await page.screenshot({ path: `${directory}/user-detail-mobile.png`, fullPage: false });
  await page.keyboard.press('Escape'); assert.equal(await page.locator('dialog[open]').count(), 0);
  assert.deepEqual(errors, []);
  console.log('PASS: synthetic component desktop/mobile, filters, role restrictions, cancel/close/Escape, quota save and duplicate click, 409/403 cleanup, owner verification and cancel; no JS errors.');

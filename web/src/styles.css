@@ -924,16 +924,16 @@ select:focus { outline: none; border-color: var(--accent); }
 .management-filters { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin:18px 0; }
 .management-filters label,.management-fields label,.owner-management label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
 .management-filters label:first-child { flex:1; min-width:160px; }
-.management-filters select,.management-fields select { font:inherit; border:1px solid var(--border); border-radius:8px; padding:8px 10px; background:var(--bg); color:inherit; }
-.management-table-wrap { overflow-x:auto; border:1px solid var(--border); border-radius:12px; }
+.management-filters select,.management-fields select { font:inherit; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--bg); color:inherit; }
+.management-table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:12px; }
 .management-table { width:100%; border-collapse:collapse; font-size:13px; }
 .management-table caption { padding:12px; text-align:left; color:var(--muted); }
-.management-table th,.management-table td { text-align:left; padding:12px; border-bottom:1px solid var(--border); vertical-align:middle; }
+.management-table th,.management-table td { text-align:left; padding:12px; border-bottom:1px solid var(--line); vertical-align:middle; }
 .management-table th { font-size:12px; color:var(--muted); font-weight:600; }
 .management-table td small { display:block; margin-top:4px; color:var(--muted); overflow-wrap:anywhere; }
 .management-table tr:last-child td { border-bottom:none; }
 .management-pagination,.management-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
-.management-dialog { border:1px solid var(--border); border-radius:16px; background:var(--bg); color:var(--text); width:min(650px,calc(100vw - 32px)); max-height:calc(100dvh - 40px); padding:24px; box-shadow:0 20px 80px #0003; overflow:auto; }
+.management-dialog { border:1px solid var(--line); border-radius:16px; background:var(--bg); color:var(--ink); width:min(650px,calc(100vw - 32px)); max-height:calc(100dvh - 40px); padding:24px; box-shadow:0 20px 80px #0003; overflow:auto; }
 .management-dialog::backdrop { background:#17202b66; }
 .management-dialog-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:20px; }
 .management-dialog-head h2 { margin:0; font-size:20px; }
@@ -944,10 +944,10 @@ select:focus { outline: none; border-color: var(--accent); }
 .management-fields h3,.owner-management h3 { margin:0 0 10px; font-size:15px; }
 .management-fields p,.owner-management p { line-height:1.7; font-size:13px; }
 .management-fields button { margin-top:12px; }
-.management-confirm { margin-top:20px; padding:18px; border:1px solid var(--border); border-radius:12px; background:var(--bg-soft); }
+.management-confirm { margin-top:20px; padding:18px; border:1px solid var(--line); border-radius:12px; background:var(--sidebar); }
 .management-confirm h3,.management-confirm h4 { margin:0 0 10px; }
 .management-confirm p { font-size:14px; line-height:1.7; }
-.management-audit { margin-top:28px; border-top:1px solid var(--border); padding-top:18px; }
+.management-audit { margin-top:28px; border-top:1px solid var(--line); padding-top:18px; }
 .management-audit ul { padding-left:18px; font-size:12px; line-height:1.8; overflow-wrap:anywhere; }
 .owner-management label.management-check { display:flex; flex-direction:row; align-items:flex-start; gap:8px; margin:16px 0; }
 .management-transfer-target { padding:16px 0 0; }
@@ -956,8 +956,8 @@ select:focus { outline: none; border-color: var(--accent); }
 .user-management :is(button,input,select):focus-visible,.owner-management :is(button,input,select):focus-visible,.management-dialog :is(button,input,select):focus-visible { outline:2px solid var(--accent,#19725d); outline-offset:3px; }
 @media (max-width:680px) {
  .management-table thead { display:none; }
- .management-table,.management-table tbody,.management-table tr,.management-table td { display:block; width:100%; }
- .management-table tr { padding:12px; border-bottom:1px solid var(--border); }
+ .management-table,.management-table caption,.management-table tbody,.management-table tr,.management-table td { display:block; width:100%; }
+ .management-table tr { padding:12px; border-bottom:1px solid var(--line); }
  .management-table td { padding:5px 0; border:0; }
  .management-table td[data-label]::before { content:attr(data-label) "："; display:inline-block; color:var(--muted); margin-right:6px; }
  .management-table td:first-child strong { display:inline; }
