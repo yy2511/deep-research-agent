@@ -45,7 +45,7 @@ def _check(session, store: RunStore, conversation_id: str) -> ShowcaseReview:
     ).first()
     if owner is None:
         raise NotFound("对话不存在")
-    if owner.role != "admin":
+    if owner.role not in {"admin", "owner"}:
         raise InvalidRequest("只能把管理员自己的对话设为示例")
     review = ShowcaseReview(conversation_id)
     run_ids = conversation_run_ids(session, conversation_id)

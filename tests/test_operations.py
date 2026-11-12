@@ -57,7 +57,7 @@ def test_aggregate_counts_and_leap_day_boundaries(database, admin):
     assert response.headers["cache-control"] == "no-store"
     data = response.json()
     assert data["totals"] == {"users":3,"enabled_users":2,"disabled_users":1,
-                              "roles":{"admin":1,"guest":1,"user":1},"showcases":1}
+                              "roles":{"admin":1,"guest":1,"user":1,"owner":0},"showcases":1}
     assert data["period"] == {"new_users":2,"research_users":2,"research_tasks":4,"conversations":2}
     assert data["daily"] == [
         {"date":"2024-02-28","new_users":1,"research_users":1,"research_tasks":1,"conversations":1},
@@ -194,3 +194,13 @@ def test_offset_timestamps_are_grouped_by_utc(database):
 def test_database_not_ready_is_not_empty_statistics(admin,monkeypatch):
     monkeypatch.setattr(app.state,"db",None)
     assert admin.get("/api/admin/operations").status_code == 503
+
+
+def test_owner_count_is_included_without_private_data(database):
+    from dra.api.services import operations
+    from dra.db_tables import User
+    with database.session() as session:
+        session.add(User(email="owner@example.com", password_hash="not-real", role="owner"))
+    response = operations.overview(database)
+    assert response["totals"]["roles"]["owner"] == 1
+    assert "owner@example.com" not in str(response)

@@ -11,7 +11,7 @@ export type OperationsSnapshot = {
   range: { start_date: string; end_date: string };
   totals: {
     users: number; enabled_users: number; disabled_users: number; showcases: number;
-    roles: { guest: number; user: number; admin: number };
+    roles: { guest: number; user: number; admin: number; owner?: number };
   };
   period: OperationsCounts;
   daily: Array<OperationsCounts & { date: string }>;

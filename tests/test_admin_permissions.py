@@ -20,6 +20,7 @@ PASSWORD = "correct horse battery"
 
 # 设计 §4 表格：只有管理员能调用的接口。
 ADMIN_OPERATIONS = {
+    ("GET", "/api/admin/quota-timezone"), ("PUT", "/api/admin/quota-timezone"),
     ("PUT", "/api/config"), ("POST", "/api/config/test"),
     ("PUT", "/api/mcp/config"), ("POST", "/api/mcp/test"),
     ("POST", "/api/providers"), ("PUT", "/api/providers/{provider}"), ("DELETE", "/api/providers/{provider}"),

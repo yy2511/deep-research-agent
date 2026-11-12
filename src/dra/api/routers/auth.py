@@ -81,7 +81,10 @@ def api_me(user: CurrentUserDep, *, db: ReadyDatabaseDep) -> dict:
     """当前用户。访客（#49）另带 ``trial``：今天还能发起几次研究、上限、何时恢复。"""
     with service_errors():
         trial = trial_service.status(db, user)
-    return {**_me(user), "trial": trial}
+    from dra.api.services import quotas
+    with service_errors():
+        quota = quotas.status(db, user)
+    return {**_me(user), "trial": trial, "quota": quota}
 
 
 @router.get("/api/auth/options")
@@ -141,6 +144,9 @@ def api_github_callback(request: Request, *, db: ReadyDatabaseDep, code: str = "
 
     state 不符时不去找 GitHub：防止别人把他自己的 GitHub 授权塞给你，让你登进他的账号。
     """
+    if state.startswith('owner_'):
+        from dra.api.routers.user_management import github_callback
+        return github_callback(request, db, code=code, state=state, error=error)
     config = _github_config()
     if error:  # 用户在 GitHub 上点了取消，或 GitHub 拒绝
         return _back_to_login(request, "denied")

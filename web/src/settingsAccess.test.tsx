@@ -5,7 +5,7 @@ import { SettingsPage } from "./components/SettingsPage";
 /** 管理员权限（#32）：全站设置只有管理员能改，普通用户的设置页不显示修改入口。 */
 
 const PREFS = { showRecords: false, showReplay: false, traceFull: false };
-const GLOBAL_TABS = ["运营概览", "模型", "研究能力", "试用", "API 连接", "技能", "外部资料（MCP）"];
+const GLOBAL_TABS = ["用户管理", "运营概览", "模型", "研究能力", "试用", "API 连接", "技能", "外部资料（MCP）"];
 
 function render(isAdmin: boolean, tab: "models" | "skills" | "operations" = "models") {
   return renderToStaticMarkup(<SettingsPage isAdmin={isAdmin} tab={tab} onTab={() => {}} prefs={PREFS}
@@ -28,5 +28,18 @@ describe("设置页按角色显示", () => {
     const html = render(true);
     for (const label of [...GLOBAL_TABS, "通用"]) expect(html).toContain(`>${label}</button>`);
     expect(html).not.toContain("由管理员统一设置");
+  });
+});
+
+
+describe("新增账号管理入口", () => {
+  const props = { tab: "users" as const, onTab() {}, prefs: PREFS, onPrefs() {}, onDemo() {} };
+  it("负责人有移交入口，管理员只有用户管理，成员和访客没有管理入口", () => {
+    for (const role of ["owner", "admin", "user", "guest"] as const) {
+      const html = renderToStaticMarkup(<SettingsPage {...props} isAdmin={role === "owner" || role === "admin"} account={{ id: 1, email: "synthetic@example.test", role }} />);
+      expect(html.includes(">负责人管理</button>")).toBe(role === "owner");
+      expect(html.includes(">用户管理</button>")).toBe(role === "owner" || role === "admin");
+      expect(html).not.toContain("synthetic@example.test");
+    }
   });
 });

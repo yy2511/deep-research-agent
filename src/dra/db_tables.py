@@ -18,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
@@ -72,8 +73,12 @@ class User(Base):
 
     __tablename__ = "users"
     __table_args__ = (
-        CheckConstraint("role IN ('guest', 'user', 'admin')", name="role"),
+        CheckConstraint("role IN ('guest', 'user', 'admin', 'owner')", name="role"),
         CheckConstraint("status IN ('active', 'disabled')", name="status"),
+        CheckConstraint("role != 'owner' OR status = 'active'", name="owner_active"),
+        CheckConstraint("management_version >= 0", name="management_version"),
+        Index("uq_users_one_owner", "role", unique=True,
+              sqlite_where=text("role = 'owner'"), postgresql_where=text("role = 'owner'")),
     )
 
     id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
@@ -85,6 +90,7 @@ class User(Base):
     avatar_url: Mapped[str | None] = mapped_column(String(500))
     role: Mapped[str] = mapped_column(String(16), default="user")
     status: Mapped[str] = mapped_column(String(16), default="active")
+    management_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
@@ -205,4 +211,79 @@ class DailyCounter(Base):
     scope: Mapped[str] = mapped_column(String(32), primary_key=True)
     day: Mapped[str] = mapped_column(String(10), primary_key=True)
     kind: Mapped[str] = mapped_column(String(16), primary_key=True)
-    count: Mapped[int] = mapped_column(Integer, default=0)
+    count: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
+# ---- 平台治理与逐用户额度（#64） ----------------------------------------------------
+
+class PlatformGovernance(Base):
+    __tablename__ = "platform_governance"
+    __table_args__ = (CheckConstraint("id = 1", name="singleton"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    version: Mapped[int] = mapped_column(Integer, default=0)
+    quota_timezone: Mapped[str | None] = mapped_column(String(64))
+    pending_timezone: Mapped[str | None] = mapped_column(String(64))
+    timezone_effective_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    tracking_started_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class UserQuotaPolicy(Base):
+    __tablename__ = "user_quota_policies"
+    __table_args__ = (
+        CheckConstraint("mode IN ('limited', 'unlimited')", name="mode"),
+        CheckConstraint("(mode = 'unlimited' AND daily_runs_limit IS NULL AND daily_briefs_limit IS NULL) OR "
+                        "(mode = 'limited' AND daily_runs_limit IS NOT NULL AND daily_briefs_limit IS NOT NULL "
+                        "AND daily_runs_limit >= 0 AND daily_briefs_limit >= 0)", name="limits"),
+        CheckConstraint("version >= 0", name="version"),
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(16))
+    daily_runs_limit: Mapped[int | None] = mapped_column(BigInteger)
+    daily_briefs_limit: Mapped[int | None] = mapped_column(BigInteger)
+    version: Mapped[int] = mapped_column(Integer, default=0)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class QuotaReservation(Base):
+    __tablename__ = "quota_reservations"
+    __table_args__ = (
+        CheckConstraint("kind IN ('run', 'brief')", name="kind"),
+        CheckConstraint("state IN ('reserved', 'started', 'refunded')", name="state"),
+    )
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    quota_day: Mapped[str] = mapped_column(String(10))
+    scopes_json: Mapped[str] = mapped_column(Text)
+    policy_version: Mapped[int | None] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(16), default="reserved")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class ManagementAudit(Base):
+    __tablename__ = "management_audits"
+    id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    target_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    action: Mapped[str] = mapped_column(String(64))
+    before_json: Mapped[str] = mapped_column(Text)
+    after_json: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class OwnerTransferProof(Base):
+    __tablename__ = "owner_transfer_proofs"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"))
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    target_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    governance_version: Mapped[int] = mapped_column(Integer)
+    actor_version: Mapped[int] = mapped_column(Integer)
+    target_version: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    consumed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    provider: Mapped[str] = mapped_column(String(32))
