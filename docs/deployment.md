@@ -73,17 +73,19 @@ docker compose --file /home/deploy/apps/deep-research-agent/database/compose.yam
 
 GitHub OAuth App 的主页为 `https://deepresearch.emberecho.de`，回调为 `https://deepresearch.emberecho.de/api/auth/github/callback`。将 Client ID 和 Client secret 写入 `shared/.env` 的 `DRA_GITHUB_CLIENT_ID` 与 `DRA_GITHUB_CLIENT_SECRET`。
 
+首次跨账号版本切换时，旧版无法读取新增的 `trial` 字段。先在受控位置保存目标配置，以切换前的兼容配置启动新版，再通过管理员设置接口保存目标试用设置。这样初次激活失败时，原有回退流程仍可启动旧版。
+
 首次切换完成后，停止新 Web 服务，创建管理员并执行 `python -m dra.admin import-legacy --owner <管理员邮箱>`，再启动新 Web 服务。导入期间保持 Web 停止，避免旧研究归属登记和旧资料迁移与网页请求同时进行。确认账号、历史和权限可用后，按 `deploy/Caddyfile.dra` 更新本站配置，用应用账号接管登录。
 
 ## 数据库备份
 
-用户已选定每天备份并持续保留。`deploy/postgres-backup.sh` 使用 PostgreSQL 自带的 `pg_dump -Fc`，将完整备份写入 `backups/postgres-<UTC时间>.dump`。成功写完后才改为正式文件名。部署时先手动执行并用 `pg_restore --list` 检查，再设每日任务。备份目录和文件由部署账号保管。
+用户已选定每天备份并持续保留。`deploy/postgres-backup.sh` 使用 PostgreSQL 自带的 `pg_dump -Fc`，将完整备份写入 `backups/postgres-<UTC时间>.dump`。成功写完后才改为正式文件名。部署时先手动执行并用 `pg_restore --list` 检查，再设北京时间每日 03:20 的任务。备份目录和文件由部署账号保管。
 
 ```bash
 sh /home/deploy/apps/deep-research-agent/container/postgres-backup.sh
 ```
 
-恢复时通过 PostgreSQL 容器里的 `pg_restore` 将选定备份导入目标库。首次导入管理员与历史后，需要另做一次备份。首次跨越账号版本回滚时，除镜像外，还需按切换前备份恢复旧版能读取的运行配置，数据库卷继续保留。
+恢复时通过 PostgreSQL 容器里的 `pg_restore` 将选定备份导入目标库。首次导入管理员与历史后，需要另做一次备份。首次跨越账号版本回滚时，旧版还没有应用账号鉴权。先从 `backups/Caddyfile-pre-phase2-*` 恢复本站 Caddy Basic Auth 并校验、重新加载，再从 `backups/pre-phase2-20261112T081848Z.tar.gz` 恢复 `shared/runtime_config.json`，随后执行镜像 rollback。数据库卷继续保留。切换前的 Caddy 备份包含同机站点配置，恢复前应核对其他站点在此后是否有更新。
 
 ## 生产发布与回滚
 
