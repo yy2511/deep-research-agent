@@ -9,13 +9,13 @@ GitHub Actions（yy2511/deep-research-agent，main 分支）
   → 后端测试 + 执行沙箱实测 + 前端 test/lint/build
   → 构建并 smoke test linux/amd64 镜像
   → 私有 GHCR：sha-<完整 Git SHA>@sha256:<digest>
-  → 人工 stage → verify → activate
+  → 人工 stage → migrate → verify → activate
   → Docker Compose（127.0.0.1:8765）
-  → Caddy HTTPS + Basic Auth
+  → Caddy HTTPS + 应用账号登录
   → https://deepresearch.emberecho.de
 ```
 
-Caddy 是唯一公网入口；应用容器只绑定 loopback。匿名请求必须在 Caddy 层返回 401，避免外部读取运行历史、修改模型配置或触发付费研究。
+Caddy 是唯一公网入口，应用容器只绑定 loopback。应用账号负责登录、研究归属和管理员权限。未登录访问私人研究与设置接口返回 401，首页、健康检查与公开示例按各自接口合同开放。线上私域资料库由 Caddy 返回 503，镜像中也没有部署本地检索依赖和嵌入模型。
 
 发布到 GHCR **不等于部署**。`main` 更新后生产不会自动拉取或重启，必须使用受控发布脚本切换。2026-08 的旧代码线保留在 `dag-v1` 分支，不再触发构建。
 
@@ -29,6 +29,9 @@ shared/
   runtime_config.json  Web 模型配置
   runs/                Web 运行记录
   plans/               Planner 尝试与诊断
+database/
+  compose.yaml         独立 PostgreSQL 16 项目
+  postgres.env         数据库账号密码，0600
 container/
   compose.yaml
   container_release.py
@@ -54,6 +57,34 @@ container/
 
 服务器版本必须使用完整 `sha-<40 位 Git SHA>` tag 和 digest，不能使用会移动的便利 tag。服务器只保存 GHCR 只读凭据；Actions 使用任务级 `GITHUB_TOKEN` 发布。
 
+## 同机 PostgreSQL
+
+用户于 2026-11-12 选定先用现有服务器上的 Docker PostgreSQL，用户增加后再考虑托管数据库。
+
+将 `deploy/compose.postgres.yaml` 安装为生产根目录下的 `database/compose.yaml`，在同目录创建权限为 0600 的 `postgres.env`，填写 `POSTGRES_USER`、`POSTGRES_DB` 和随机生成的 `POSTGRES_PASSWORD`。应用的 `shared/.env` 配置 `DRA_DATABASE_URL=postgresql+psycopg://<user>:<password>@postgres:5432/<database>`，实际密码只写受控运行配置。
+
+```bash
+docker compose --file /home/deploy/apps/deep-research-agent/database/compose.yaml up -d --wait
+```
+
+将 `deploy/compose.production.yaml` 安装为 `container/compose.yaml`。数据库通过独立持久卷保存数据，网络名为 `deep-research-agent-database`，不发布宿主机端口。生产应用与 canary 都连接该网络里的 `postgres`，同时各自保留出站网络以访问模型和检索服务。应用发布、canary 清理与回滚只操作应用项目。
+
+生产 Compose 信任 Caddy 传来的转发头，使 HTTPS 回调地址和 Secure Cookie 使用正确协议。此配置依赖应用端口始终只发布到 `127.0.0.1`。
+
+GitHub OAuth App 的主页为 `https://deepresearch.emberecho.de`，回调为 `https://deepresearch.emberecho.de/api/auth/github/callback`。将 Client ID 和 Client secret 写入 `shared/.env` 的 `DRA_GITHUB_CLIENT_ID` 与 `DRA_GITHUB_CLIENT_SECRET`。
+
+首次切换完成后，停止新 Web 服务，创建管理员并执行 `python -m dra.admin import-legacy --owner <管理员邮箱>`，再启动新 Web 服务。导入期间保持 Web 停止，避免旧研究归属登记和旧资料迁移与网页请求同时进行。确认账号、历史和权限可用后，按 `deploy/Caddyfile.dra` 更新本站配置，用应用账号接管登录。
+
+## 数据库备份
+
+用户已选定每天备份并持续保留。`deploy/postgres-backup.sh` 使用 PostgreSQL 自带的 `pg_dump -Fc`，将完整备份写入 `backups/postgres-<UTC时间>.dump`。成功写完后才改为正式文件名。部署时先手动执行并用 `pg_restore --list` 检查，再设每日任务。备份目录和文件由部署账号保管。
+
+```bash
+sh /home/deploy/apps/deep-research-agent/container/postgres-backup.sh
+```
+
+恢复时通过 PostgreSQL 容器里的 `pg_restore` 将选定备份导入目标库。首次导入管理员与历史后，需要另做一次备份。首次跨越账号版本回滚时，除镜像外，还需按切换前备份恢复旧版能读取的运行配置，数据库卷继续保留。
+
 ## 生产发布与回滚
 
 发布前从成功的 Actions run 取得完整 tag 和 digest，然后在生产机执行：
@@ -61,10 +92,11 @@ container/
 ```bash
 cd /home/deploy/apps/deep-research-agent/container
 
-./container_release.py stage \
+DRA_MAX_ACTIVE_RUNS=2 ./container_release.py stage \
   ghcr.io/yy2511/deep-research-agent:sha-<40位Git-SHA> \
   sha256:<64位镜像摘要>
 
+./container_release.py migrate <40位Git-SHA>
 ./container_release.py verify <40位Git-SHA>
 ./container_release.py status
 ./container_release.py activate <40位Git-SHA>
@@ -73,6 +105,7 @@ cd /home/deploy/apps/deep-research-agent/container
 各阶段含义：
 
 - `stage`：校验不可变坐标、拉取镜像并记录 release；
+- `migrate` 使用 staged 镜像在一次性容器中执行数据库迁移，执行完退出。
 - `verify`：用独立 Compose project 在 `127.0.0.1:18766` 挂载真实 shared 数据，检查首页和 `/healthz`，随后无条件删除 canary；
 - `activate`：只接受已验证 release，记录 previous 后切换生产；失败时尝试恢复切换前状态；
 - `status`：显示 systemd、Compose、active、previous 和 pending；
@@ -112,21 +145,22 @@ curl --fail http://127.0.0.1:8765/
 - `data/runs/plans` 三个持久目录可创建并清理探针文件；
 - 数据库可连接（`SELECT 1`）。
 
-它不读取模型配置，也不调用 LLM、搜索或研究编排。容器内部正常返回 200，持久目录不可写或数据库连不上时返回 503；数据库缺失、不是 PostgreSQL 或迁移不是最新时，Web 进程直接拒绝启动；公网访问仍由 Caddy Basic Auth 保护，因此匿名访问 `/healthz` 返回 401 是预期行为。
+它不读取模型配置，也不调用 LLM、搜索或研究编排。容器内部正常返回 200，持久目录不可写或数据库连不上时返回 503。数据库缺失、不是 PostgreSQL 或迁移不是最新时，Web 进程直接拒绝启动。公开试用上线后，公网 `/healthz` 返回 200。
 
 一次生产切换至少核对：
 
 1. `container_release.py status` 无 pending，active revision 与目标 SHA 一致；
 2. Compose 容器为 `healthy` 且 restart count 未增加；
 3. loopback 首页和 `/healthz` 返回 200；
-4. 公网匿名访问返回 401，使用密码管理器中的凭据后首页返回 200；
+4. 公网首页与 `/healthz` 返回 200，匿名访问 `/api/me` 与 `/api/runs` 返回 401，管理员登录后能查看自己的历史；
 5. `runtime_config.json`、历史 run 和 shared 文件在切换前后保持；
 6. 其他同机服务不受影响。
 
 ## 当前未覆盖
 
-- **账号（阶段 1，#29）**：应用自身已要求登录，但线上 Caddy Basic Auth 暂时保留，第 5 阶段新版上线、账号可用后再去掉（见[阶段 1 设计](design/阶段1-数据库与用户.md)“待定事项”）。新部署时先用 `python -m dra.admin create-admin` 建管理员。
-- **数据库（阶段 1 起，#28）**：`compose.yaml`、`container_release.py` 和生产机尚未包含 PostgreSQL 与迁移步骤，按[总体方案](design/后端扩展总体方案.md)在第 5 阶段补上。在那之前用本流程发布包含 #28 的版本，canary 会因没有数据库而启动失败；线上继续使用旧版本。
+- **数据库与账号**使用上面的生产专用 Compose 和迁移流程。本机 `compose.dev-db.yaml` 继续用于开发。
+- **试用**初始值为 OpenCode 连接下的 `deepseek-v4.1-flash`，每天研究个人 2 次、全部访客 20 次，规划 10/100 次，访客并发 1，单次 900 秒、模型与工具各 60 次，北京时间零点重置。管理员可在设置页修改。全站并发为 2，包含管理员和访客。
+- **私域资料库**由本站 Caddy 对 `/api/library` 及其子路径返回 503，访客在应用层也受现有权限控制。管理员界面可能仍显示资料入口，本次部署未安装本地检索依赖与模型。
 - **线上运行代码**：应用跑在容器里，研究中的 Bash 需要宿主机 Docker 和执行沙箱镜像（`compose.execution.yaml`）。`container_release.py` 目前只使用单个 `compose.yaml`，不带这份叠加文件，所以按本流程发布的线上实例不能运行代码，网页“运行代码”需保持关闭。
 - **浏览器**：镜像内已带 Chromium，只能用独立后台浏览器；“复用已登录 Chrome”的扩展模式需要与用户桌面同机，线上不可用。
 

@@ -1,9 +1,12 @@
-# Template only: replace the username and bcrypt hash before installation.
-# Generate the hash with: caddy hash-password
+# Application accounts provide authentication after the phase-2 migration.
 deepresearch.emberecho.de {
-	basic_auth {
-		<username> <bcrypt-hash>
+	@library path /api/library /api/library/*
+	handle @library {
+		header Content-Type application/json
+		respond `{"detail":"线上私域资料库暂未启用，请使用网页研究"}` 503
 	}
 
-	reverse_proxy 127.0.0.1:8765
+	handle {
+		reverse_proxy 127.0.0.1:8765
+	}
 }

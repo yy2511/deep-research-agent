@@ -44,6 +44,7 @@ class Settings:
     canary_port: int = 18766
     runtime_uid: int = 1000
     runtime_gid: int = 1000
+    max_active_runs: int = 1
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -56,6 +57,7 @@ class Settings:
             canary_port=int(os.environ.get("DRA_CANARY_PORT", "18766")),
             runtime_uid=int(os.environ.get("DRA_RUNTIME_UID", "1000")),
             runtime_gid=int(os.environ.get("DRA_RUNTIME_GID", "1000")),
+            max_active_runs=int(os.environ.get("DRA_MAX_ACTIVE_RUNS", "1")),
         )
 
     @property
@@ -123,7 +125,7 @@ def release_env_text(settings: Settings, image_ref: str) -> str:
         "DRA_APP_ENV_FILE": str(settings.app_env_file),
         "DRA_HOST_DATA_DIR": str(settings.data_dir),
         "DRA_IMAGE": image_ref,
-        "DRA_MAX_ACTIVE_RUNS": "1",
+        "DRA_MAX_ACTIVE_RUNS": str(settings.max_active_runs),
         "DRA_RUNTIME_GID": str(settings.runtime_gid),
         "DRA_RUNTIME_HOME": "/tmp",
         "DRA_RUNTIME_UID": str(settings.runtime_uid),
@@ -287,6 +289,14 @@ def stage(settings: Settings, tag: str, digest: str) -> str:
     _write_json(_release_record_path(settings, revision), record)
     print(f"staged {revision} ({digest})")
     return revision
+
+
+def migrate(settings: Settings, revision: str) -> None:
+    """Apply the staged image's migrations before starting its web process."""
+    _validate_layout(settings)
+    _load_release(settings, revision)
+    compose = _compose_command(settings, _release_env_path(settings, revision))
+    _run(compose + ["run", "--rm", "--no-deps", "web", "python", "-m", "dra.admin", "migrate"])
 
 
 def verify(settings: Settings, revision: str) -> None:
@@ -518,6 +528,11 @@ def build_parser() -> argparse.ArgumentParser:
     stage_parser.add_argument("tag")
     stage_parser.add_argument("digest")
 
+    migrate_parser = subparsers.add_parser(
+        "migrate", help="apply database migrations using the staged image"
+    )
+    migrate_parser.add_argument("revision")
+
     verify_parser = subparsers.add_parser(
         "verify", help="run the staged release on an isolated port"
     )
@@ -539,6 +554,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if arguments.command == "stage":
             stage(settings, arguments.tag, arguments.digest)
+        elif arguments.command == "migrate":
+            migrate(settings, arguments.revision)
         elif arguments.command == "verify":
             verify(settings, arguments.revision)
         elif arguments.command == "activate":
