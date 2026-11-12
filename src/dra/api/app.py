@@ -28,6 +28,7 @@ from dra.api.routers import (
     conversations,
     health,
     library,
+    operations,
     planning,
     providers,
     research,
@@ -113,7 +114,7 @@ app.include_router(auth.router, dependencies=[Depends(same_origin)])
 for _router in (skills.router, skills.admin_router, settings.router, settings.admin_router,
                 planning.router, providers.router, providers.admin_router,
                 research.router, research.run_router, runs.router,
-                conversations.router, library.router):
+                conversations.router, library.router, operations.router):
     app.include_router(_router, dependencies=[Depends(same_origin), Depends(current_user)])
 # 查看接口与示例列表不要求先登录：示例对所有人只读开放，其余按“属于自己”检查（#47，deps.readable_run）；
 # tests/test_showcases.py 遍历这类接口，检查没有遗漏。
