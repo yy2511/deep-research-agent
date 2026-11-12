@@ -4,6 +4,7 @@ import type { ExecutionEffective, RetryPolicy } from "../capabilities";
 import { effortOptions, modelSettingsError, selectModel, type ProviderStatus } from "../providerSettings";
 import { CapabilitySettings } from "./CapabilitySettings";
 import { Icon } from "./Icon";
+import { OperationsDashboard } from "./OperationsDashboard";
 import { McpManager } from "./McpPanel";
 import { ModelCapabilities } from "./ModelCapabilities";
 import { ModelField } from "./ModelField";
@@ -81,8 +82,9 @@ export function settingsUpdate(config: ConfigPayload) {
 /** 本机偏好：只存在浏览器里，不影响后端配置。 */
 export interface LocalPrefs { showRecords: boolean; showReplay: boolean; traceFull: boolean }
 
-export type SettingsTab = "models" | "capabilities" | "trial" | "connections" | "skills" | "mcp" | "general";
+export type SettingsTab = "operations" | "models" | "capabilities" | "trial" | "connections" | "skills" | "mcp" | "general";
 const TABS: Array<[SettingsTab, string]> = [
+  ["operations", "运营概览"],
   ["models", "模型"], ["capabilities", "研究能力"], ["trial", "试用"], ["connections", "API 连接"], ["skills", "技能"], ["mcp", "外部资料（MCP）"], ["general", "通用"],
 ];
 
@@ -418,7 +420,8 @@ function AdminSettingsPage({ tab, onTab, prefs, onPrefs, onDemo, onSaved }: Omit
     </nav>
     <div className="settings-main">
       <div className="settings-scroll">
-        {tab === "models" || tab === "capabilities" ? <RuntimeTab tab={tab} s={runtime} onTab={onTab} />
+        {tab === "operations" ? <OperationsDashboard />
+          : tab === "models" || tab === "capabilities" ? <RuntimeTab tab={tab} s={runtime} onTab={onTab} />
           : tab === "trial" ? <TrialSettingsTab s={runtime} />
           : tab === "connections" ? <div className="settings-section-wrap"><ConnectionSettings /></div>
           : tab === "skills" ? <SkillsPanel />
