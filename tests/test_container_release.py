@@ -75,6 +75,41 @@ def test_atomic_state_files_are_private_and_round_trip(tmp_path: Path) -> None:
     assert _read_json(state_path) == {"kind": "systemd"}
 
 
+def test_release_records_the_selected_global_concurrency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DRA_DEPLOY_ROOT", str(tmp_path))
+    monkeypatch.setenv("DRA_MAX_ACTIVE_RUNS", "2")
+
+    settings = Settings.from_environment()
+
+    assert "DRA_MAX_ACTIVE_RUNS=2\n" in release_env_text(settings, f"{TAG}@{DIGEST}")
+
+
+def test_migrate_uses_the_staged_image_without_starting_web(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DRA_DEPLOY_ROOT", str(tmp_path))
+    settings = Settings(app_root=tmp_path)
+    settings.data_dir.mkdir()
+    settings.app_env_file.touch()
+    settings.runtime_dir.mkdir()
+    settings.compose_file.touch()
+    _write_verified_release(settings)
+    record = _read_json(_release_record_path(settings, REVISION))
+    record["verified_at"] = None
+    _write_json(_release_record_path(settings, REVISION), record)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(container_release, "_run", lambda command: commands.append(command))
+
+    assert container_release.main(["migrate", REVISION]) == 0
+    assert commands == [
+        container_release._compose_command(settings, _release_env_path(settings, REVISION))
+        + ["run", "--rm", "--no-deps", "web", "python", "-m", "dra.admin", "migrate"]
+    ]
+    assert not settings.active_state_file.exists()
+
+
 def test_release_paths_are_revision_scoped(tmp_path: Path) -> None:
     settings = Settings(app_root=tmp_path)
 

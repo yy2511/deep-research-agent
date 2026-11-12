@@ -1,0 +1,44 @@
+# Install as container/compose.yaml. PostgreSQL runs as a separate Compose project.
+name: deep-research-agent
+
+services:
+  web:
+    image: ${DRA_IMAGE}
+    env_file:
+      - path: ${DRA_APP_ENV_FILE}
+        required: true
+    user: "${DRA_RUNTIME_UID:-1000}:${DRA_RUNTIME_GID:-1000}"
+    environment:
+      DRA_DATA_DIR: /data
+      DRA_MAX_ACTIVE_RUNS: ${DRA_MAX_ACTIVE_RUNS:-1}
+      HOME: ${DRA_RUNTIME_HOME:-/tmp}
+      # Caddy reaches the loopback-published port through Docker's bridge.
+      FORWARDED_ALLOW_IPS: "*"
+    ports:
+      - "127.0.0.1:${DRA_WEB_PORT:-8765}:8765"
+    volumes:
+      - type: bind
+        source: ${DRA_HOST_DATA_DIR}
+        target: /data
+        bind:
+          create_host_path: false
+    networks:
+      - default
+      - database
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  database:
+    name: deep-research-agent-database
+    external: true

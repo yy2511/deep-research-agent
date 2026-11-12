@@ -23,8 +23,20 @@
 - Web 服务需要 PostgreSQL（2026-11-06 起），并要求登录（#29）；研究、对话与资料库已按用户隔离（#31、#37）；模型、API 连接、技能、外部资料等全站设置只有管理员能改（#32）。旧研究与旧资料需先执行一次 `import-legacy`（服务停止时）才归到管理员。
 - 中断后的研究断点恢复尚未实现。取消、查看历史和继续追问有各自的现役路径。
 - 全新副本没有真实 provider 密钥或模型选择；界面与离线测试可以验证，真实研究需先配置自己的连接。
-- 本副本不含历史 `review_runs/` 或旧 Git 历史。发布脚本与 CI 已恢复（见 [docs/deployment.md](docs/deployment.md)），线上仍是 2026-08-10 的旧版本，新版本尚未发布；按现有发布脚本上线的实例不能运行代码。
+- 本副本不含历史 `review_runs/` 或旧 Git 历史。线上于 2026-11-12 切换到 `8f3288013a323d6e4977ecc3e5cb1dd8847b4a9a`，使用同机 Docker PostgreSQL 和应用账号登录，部署合同见 [docs/deployment.md](docs/deployment.md)。线上运行代码、浏览器与私域资料库暂不启用。
 - 不将离线测试通过推断为真实模型研究质量已通过。
+
+## 公开试用上线（2026-11-12，#57）
+
+- 已用不可变镜像 `sha-8f3288013a323d6e4977ecc3e5cb1dd8847b4a9a` 和 digest `sha256:27cb2c8882f2f0985878c60bbab79b35d440a878057c6a4d9e0ba09f0a9ed800` 完成 stage、migrate、canary verify、activate。迁移到 `0005`，发布状态无 pending，previous 为 `3fc23a98ec9c5bb8cc6c5bc34afa7281502c4032`。
+- 独立 PostgreSQL 16 容器通过内部网络供应用使用，持久卷独立于应用发布。每日北京时间 03:20 执行 `pg_dump -Fc` 并持续保留。切换前 shared 和 release 记录已归档，迁移后的数据库备份也通过 `pg_restore --list` 检查。
+- 管理员沿用本机 `yangyue2511@163.com` 的密码哈希，服务器原有 19 条研究已登记到该账号。GitHub OAuth App 由 `yy2511` 持有，已在真实浏览器完成授权和回调，首次登录创建访客账号。邮箱管理员和 GitHub 访客各有独立身份。
+- 试用沿用 OpenCode / `deepseek-v4.1-flash`，每日研究个人 2 次、全站 20 次，规划 10/100 次，访客并发 1，全站并发 2，单次 900 秒、模型与工具各 60 次，北京时间零点重置。可在管理员设置页修改。
+- Caddy 已改为应用账号登录，线上资料库接口返回 503。镜像保持私有，服务器使用只含 `read:packages` 的新凭据，2026-12-12 16:27 北京时间到期。
+- 实测公网首页与健康检查 200，匿名私有接口 401，HTTPS OAuth 回调与 Secure Cookie 正常。管理员会话能看到 19 条历史，GitHub 访客首页显示每天 2 次、历史为空，设置页只有通用选项。访客访问管理员历史 404、改全站设置 403、应用层资料库 403。
+- 上线后空载实测，应用约 126 MiB、PostgreSQL 约 74 MiB，主机可用约 821 MB，应用 healthy、restart count 0、OOM false。此为启动和空载状态，真实研究负载与模型质量尚未验收。
+- 本机离线全量 1688 passed、49 skipped，发布回归 11 passed，ruff 与 shell 语法检查通过。PR CI 的 SQLite 为 1688 passed、49 skipped，PostgreSQL 为 1696 passed、41 skipped，真实 Docker 执行 71 passed，前端 219 passed，lint/build 与 Basic checks 通过。
+- 跨回旧鉴权版本时，按部署文档先恢复 Caddy Basic Auth 和旧版运行配置，再切换镜像。
 
 ## 意见反馈与 README（2026-11-09，#55）
 
