@@ -2,32 +2,32 @@
    研究工作台样式
    只有这一份样式表。颜色、字号、圆角都在 :root 里定义一次，
    组件里只引用变量，不写死颜色。
-   字号只用 12 / 14 / 16 / 20 / 30（代码块 13）。字重只用 400 / 500 / 600。
+   EviSee：深绿、炭黑与浅色纸面；各页面扩展样式沿用下列语义变量。
    ============================================================ */
 :root {
-  --bg: #FAF9F5;          /* 页面底色 */
-  --sidebar: #F2F0EA;     /* 侧栏、次要底色 */
+  --bg: #F5F8F6;          /* 页面底色 */
+  --sidebar: #FFFFFF;     /* 侧栏、次要底色 */
   --surface: #FFFFFF;     /* 卡片 */
-  --subtle: #EFECE4;      /* 气泡、分段控件底色 */
-  --hover: #E9E6DE;
-  --selected: #E7E3DA;
-  --line: #E5E1D8;
-  --line-soft: #ECE8E0;
-  --line-strong: #D6D1C6;
+  --subtle: #EFF4F1;      /* 气泡、分段控件底色 */
+  --hover: #EDF5F0;
+  --selected: #E4F2EA;
+  --line: #E1EAE6;
+  --line-soft: #EDF2EF;
+  --line-strong: #C5D7CD;
 
-  --ink: #1F1E1B;         /* 正文 */
-  --ink-2: #3A3832;
-  --muted: #57534A;       /* 次要文字 */
-  --faint: #6F6A60;       /* 说明文字（在底色上对比度 ≥ 4.5） */
-  --placeholder: #9A958A;
+  --ink: #192723;         /* 正文 */
+  --ink-2: #34483D;
+  --muted: #52665A;       /* 次要文字 */
+  --faint: #637369;       /* 说明文字 */
+  --placeholder: #718278;
 
-  --accent: #B85A36;
-  --accent-hover: #A04C2B;
-  --accent-soft: #F5E9E2;
-  --accent-tint: #FBF3EE;
-  --accent-line: #E3C4B4;
-  --green: #3D7350;
-  --green-soft: #E8F0EA;
+  --accent: #08745B;
+  --accent-hover: #055D49;
+  --accent-soft: #E3F2EB;
+  --accent-tint: #F1F9F5;
+  --accent-line: #B9DCCD;
+  --green: #2B734C;
+  --green-soft: #E7F3EB;
   --amber: #8F6420;
   --amber-soft: #F6EEDC;
   --amber-ink: #5E4418;
@@ -38,11 +38,11 @@
 
   --radius-sm: 8px;
   --radius: 10px;
-  --radius-lg: 14px;
-  --shadow-pop: 0 1px 2px rgba(31, 30, 27, .04), 0 10px 28px -14px rgba(31, 30, 27, .22);
+  --radius-lg: 18px;
+  --shadow-pop: 0 2px 5px rgba(23, 53, 37, .03), 0 12px 36px -12px rgba(23, 53, 37, .17);
 
-  --font: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --serif: "Songti SC", "Noto Serif SC", "STSong", Georgia, serif;
+  --font: "Inter", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --serif: var(--font);
   --mono: "SF Mono", Menlo, Consolas, "IBM Plex Mono", monospace;
   color-scheme: light;
 }
@@ -78,7 +78,7 @@ summary::-webkit-details-marker { display: none; }
   background: var(--surface); color: var(--ink); font-size: 14px; white-space: nowrap;
   transition: background-color .12s, border-color .12s, color .12s;
 }
-.btn:hover:not(:disabled) { border-color: var(--line-strong); background: #FDFCFA; }
+.btn:hover:not(:disabled) { border-color: var(--line-strong); background: var(--accent-tint); }
 .btn:disabled { opacity: .5; }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
 .btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
@@ -146,7 +146,7 @@ select:focus { outline: none; border-color: var(--accent); }
 .switch:disabled { opacity: .45; }
 
 .tag { display: inline-flex; align-items: center; margin-left: 8px; padding: 1px 8px; border-radius: 999px; background: var(--subtle); color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.6; white-space: nowrap; }
-.tag-accent { background: var(--accent-soft); color: #9A4A2B; }
+.tag-accent { background: var(--accent-soft); color: var(--accent); }
 .badge { flex: none; padding: 1px 7px; border-radius: 5px; background: var(--subtle); color: var(--muted); font-size: 12px; line-height: 1.6; }
 .badge-model { background: #E9EEF5; color: #3C5578; }
 .status-text { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--faint); white-space: nowrap; }
@@ -919,3 +919,49 @@ select:focus { outline: none; border-color: var(--accent); }
   .operations-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .operations-filters select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Platform account management: identity data stays in this administrative view. */
+.management-filters { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin:18px 0; }
+.management-filters label,.management-fields label,.owner-management label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
+.management-filters label:first-child { flex:1; min-width:160px; }
+.management-filters select,.management-fields select { font:inherit; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--bg); color:inherit; }
+.management-table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:12px; }
+.management-table { width:100%; border-collapse:collapse; font-size:13px; }
+.management-table caption { padding:12px; text-align:left; color:var(--muted); }
+.management-table th,.management-table td { text-align:left; padding:12px; border-bottom:1px solid var(--line); vertical-align:middle; }
+.management-table th { font-size:12px; color:var(--muted); font-weight:600; }
+.management-table td small { display:block; margin-top:4px; color:var(--muted); overflow-wrap:anywhere; }
+.management-table tr:last-child td { border-bottom:none; }
+.management-pagination,.management-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+.management-dialog { border:1px solid var(--line); border-radius:16px; background:var(--bg); color:var(--ink); width:min(650px,calc(100vw - 32px)); max-height:calc(100dvh - 40px); padding:24px; box-shadow:0 20px 80px #0003; overflow:auto; }
+.management-dialog::backdrop { background:#17202b66; }
+.management-dialog-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:20px; }
+.management-dialog-head h2 { margin:0; font-size:20px; }
+.management-identity { margin-bottom:18px; overflow-wrap:anywhere; }
+.management-identity h3 { margin:0 0 8px; }
+.management-fields { padding:0; border:0; min-width:0; }
+.management-fields .card,.owner-management .card { margin:16px 0; padding:20px; }
+.management-fields h3,.owner-management h3 { margin:0 0 10px; font-size:15px; }
+.management-fields p,.owner-management p { line-height:1.7; font-size:13px; }
+.management-fields button { margin-top:12px; }
+.management-confirm { margin-top:20px; padding:18px; border:1px solid var(--line); border-radius:12px; background:var(--sidebar); }
+.management-confirm h3,.management-confirm h4 { margin:0 0 10px; }
+.management-confirm p { font-size:14px; line-height:1.7; }
+.management-audit { margin-top:28px; border-top:1px solid var(--line); padding-top:18px; }
+.management-audit ul { padding-left:18px; font-size:12px; line-height:1.8; overflow-wrap:anywhere; }
+.owner-management label.management-check { display:flex; flex-direction:row; align-items:flex-start; gap:8px; margin:16px 0; }
+.management-transfer-target { padding:16px 0 0; }
+.management-transfer-target form { display:flex; flex-wrap:wrap; align-items:end; gap:12px; }
+.management-transfer-target form label { flex:1; }
+.user-management :is(button,input,select):focus-visible,.owner-management :is(button,input,select):focus-visible,.management-dialog :is(button,input,select):focus-visible { outline:2px solid var(--accent,#19725d); outline-offset:3px; }
+@media (max-width:680px) {
+ .management-table thead { display:none; }
+ .management-table,.management-table caption,.management-table tbody,.management-table tr,.management-table td { display:block; width:100%; }
+ .management-table tr { padding:12px; border-bottom:1px solid var(--line); }
+ .management-table td { padding:5px 0; border:0; }
+ .management-table td[data-label]::before { content:attr(data-label) "："; display:inline-block; color:var(--muted); margin-right:6px; }
+ .management-table td:first-child strong { display:inline; }
+ .management-dialog { padding:16px; max-height:calc(100dvh - 20px); }
+ .management-filters { align-items:stretch; }
+ .management-filters label { flex:1 1 100%; }
+}

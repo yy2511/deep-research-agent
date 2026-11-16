@@ -102,8 +102,8 @@ export function Sidebar({
 
   return (
     <nav className="history-list" aria-label="最近的研究">
-      <div className="history-title">最近</div>
-      {runs.length === 0 && <p className="history-empty">还没有研究记录</p>}
+      <div className="history-title"><Icon name="history" size={13} /><span>最近的研究</span></div>
+      {runs.length === 0 && <div className="history-empty"><span>还没有研究记录</span><small>开始一个问题，逐步理清它的脉络。</small></div>}
       {runs.map((run) => (
         <RunHistoryItem
           key={run.run_id}

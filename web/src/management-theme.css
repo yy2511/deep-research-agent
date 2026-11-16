@@ -1,0 +1,318 @@
+/* EviSee account management. These views keep the existing permission and write flow. */
+.user-management,
+.owner-management {
+  max-width: none;
+  gap: 0;
+}
+.user-management { container-type: inline-size; }
+.management-page-heading { align-items: center; margin-bottom: 22px; }
+.management-page-heading h2 { margin: 0 0 8px; letter-spacing: -.035em; }
+.management-page-heading .field-hint { max-width: 620px; }
+.management-eyebrow {
+  margin: 0 0 10px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .14em;
+  line-height: 1.5;
+}
+.management-privacy-note {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  padding: 12px 15px;
+  border-radius: 10px;
+  background: var(--accent-tint);
+  color: var(--muted);
+  font-size: 12px;
+}
+.management-privacy-note > svg { color: var(--accent); }
+.user-management .management-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(130px, 170px) minmax(100px, 130px) auto;
+  align-items: end;
+  gap: 12px;
+  margin: 25px 0 20px;
+}
+.management-filters label,
+.management-fields label,
+.owner-management label { color: var(--muted); font-size: 12px; font-weight: 500; }
+.management-filters label { min-width: 0; gap: 7px; }
+.management-search-control { position: relative; display: block; }
+.management-search-control > svg { position: absolute; left: 12px; top: 12px; color: var(--faint); }
+.management-search-control .input { padding-left: 37px; }
+.management-filters .input,
+.management-filters select { height: 40px; width: 100%; background-color: var(--surface); }
+.management-filters > .btn { height: 40px; padding-inline: 20px; }
+.management-filters select,
+.management-fields select {
+  padding: 8px 32px 8px 12px;
+  border-color: var(--line);
+  background-color: var(--surface);
+  border-radius: 9px;
+  font-weight: 400;
+}
+.management-table-wrap { background: var(--surface); border-radius: 14px; border-color: var(--line); }
+.management-table { table-layout: auto; }
+.management-table caption {
+  padding: 17px 20px;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+}
+.management-page-count { float: right; margin-left: 16px; color: var(--faint); font-size: 11px; font-weight: 400; }
+.management-table th { padding: 12px 17px; background: var(--bg); color: var(--faint); font-size: 11px; letter-spacing: .01em; }
+.management-table td { padding: 19px 17px; border-bottom-color: var(--line-soft); }
+.management-table tbody tr { transition: background-color .15s; }
+.management-table tbody tr:hover { background: var(--accent-tint); }
+.management-account { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.management-account-copy { min-width: 0; }
+.management-account-copy strong { display: block; max-width: 255px; overflow-wrap: anywhere; font-size: 13px; font-weight: 500; color: var(--ink); }
+.management-account-copy small { font-size: 11px; line-height: 1.5; }
+.management-avatar {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--subtle);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+.management-avatar.is-owner { border-color: var(--accent); background: var(--accent); color: white; }
+.management-avatar.is-admin { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.management-avatar.is-guest { background: var(--surface); }
+.management-avatar.is-large { width: 52px; height: 52px; font-size: 21px; border-radius: 15px; }
+.management-role,
+.management-status { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 11px; font-weight: 500; line-height: 1.6; }
+.management-role { padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--muted); }
+.management-role.is-owner { background: var(--accent); border-color: var(--accent); color: white; }
+.management-role.is-admin { background: var(--accent-tint); border-color: var(--accent-line); color: var(--accent); }
+.management-role.is-user { background: var(--surface); color: var(--ink-2); }
+.management-role.is-guest { background: var(--subtle); border-color: transparent; color: var(--faint); }
+.management-status::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentColor; }
+.management-status.is-active { color: var(--green); }
+.management-status.is-disabled { color: var(--red); }
+.management-quota-source { color: var(--muted); white-space: nowrap; font-size: 12px; }
+.management-usage { color: var(--faint); white-space: nowrap; font-size: 12px; font-variant-numeric: tabular-nums; }
+.management-usage strong { color: var(--ink); font-size: 14px; font-weight: 500; }
+.management-table .management-row-action { text-align: right; white-space: nowrap; }
+.management-view { height: 31px; background: transparent; font-size: 12px; }
+.management-pagination { align-items: center; justify-content: space-between; margin-top: 18px; }
+.management-pagination > div { display: flex; gap: 8px; }
+.management-pagination .field-hint { font-size: 11px; }
+.management-pagination .btn { font-size: 12px; height: 32px; }
+.management-audit { margin-top: 34px; padding-top: 20px; border-color: var(--line); }
+.management-audit > .btn { padding-left: 0; gap: 7px; color: var(--muted); font-size: 12px; }
+.management-audit > .btn svg:last-child { margin-left: 5px; transition: transform .15s; }
+.management-audit > .btn svg.is-open { transform: rotate(180deg); }
+.management-audit h3 { font-size: 14px; margin: 20px 0 6px; }
+.management-audit ul { margin: 14px 0 20px; padding: 0; list-style: none; }
+.management-audit li { position: relative; margin-left: 3px; padding: 0 0 15px 20px; border-left: 1px solid var(--line); color: var(--muted); font-size: 11px; line-height: 1.8; }
+.management-audit li::before { position: absolute; left: -4px; top: 5px; width: 7px; height: 7px; content: ""; border-radius: 50%; background: var(--accent); }
+.management-audit li:last-child { padding-bottom: 0; border-left-color: transparent; }
+.management-audit time { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+/* A persistent title and confirmation area keep long account forms easy to follow. */
+.management-dialog {
+  width: min(710px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  padding: 0;
+  border-color: var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 24px 100px rgb(17 39 31 / .19);
+  overflow: hidden;
+}
+.management-dialog[open] { display: flex; flex-direction: column; }
+.management-dialog::backdrop { background: rgb(16 35 28 / .35); backdrop-filter: blur(3px); }
+.management-dialog-head { flex: none; margin: 0; padding: 23px 28px 21px; border-bottom: 1px solid var(--line); }
+.management-dialog-head .management-eyebrow { margin-bottom: 4px; font-size: 9px; }
+.management-dialog-head h2 { font-size: 21px; letter-spacing: -.025em; font-weight: 600; }
+.management-dialog-head > .btn { margin-left: 15px; font-size: 12px; }
+.management-dialog-body { min-height: 0; padding: 25px 28px 4px; overflow-y: auto; overscroll-behavior: contain; }
+.management-identity { margin: 0; padding-bottom: 21px; border-bottom: 1px solid var(--line); }
+.management-detail-account { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.management-detail-account > div { min-width: 0; }
+.management-detail-account h3 { margin: 0 0 7px; font-size: 18px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; letter-spacing: -.02em; }
+.management-detail-email { margin: -3px 0 8px; font-size: 12px; color: var(--muted); }
+.management-identity-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; color: var(--faint); font-size: 11px; }
+.management-usage-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin: 22px 0 11px; padding: 15px 18px; border-radius: 10px; background: var(--bg); }
+.management-usage-summary > div + div { border-left: 1px solid var(--line); padding-left: 20px; }
+.management-usage-summary dt { color: var(--muted); font-size: 11px; }
+.management-usage-summary dd { margin: 5px 0 0; color: var(--ink); font-size: 22px; line-height: 1.35; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.management-usage-summary dd span { color: var(--faint); font-size: 13px; font-weight: 400; }
+.management-identity > .field-hint { margin: 7px 0 0; font-size: 11px; }
+.management-readonly { display: flex; align-items: flex-start; gap: 9px; margin: 20px 0; background: var(--subtle); font-size: 12px; }
+.management-readonly > svg { flex: none; margin-top: 2px; color: var(--muted); }
+.management-fields .management-reason { margin-top: 22px; }
+.management-fields .input { font-weight: 400; }
+.management-fields .management-detail-section,
+.management-detail-section { margin: 0; padding: 24px 0; border-bottom: 1px solid var(--line); }
+.management-fields .management-detail-section:last-child { border-bottom: 0; }
+.management-section-heading { margin-bottom: 16px; }
+.management-section-heading h3 { margin: 0 0 5px; color: var(--ink); font-size: 14px; font-weight: 600; }
+.management-section-heading p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.management-detail-section > .field-hint { margin: 12px 0 0; font-size: 11px; }
+.management-detail-section > label { max-width: 310px; }
+.management-detail-section > .field-grid { margin-top: 14px; }
+.management-fields .management-detail-section > button { margin-top: 16px; }
+.management-split-section,
+.management-guest-quota { display: flex; align-items: center; gap: 18px; }
+.management-split-section .management-section-heading,
+.management-guest-quota .management-section-heading { flex: 1; margin-bottom: 0; }
+.management-fields .management-split-section > button { flex: none; margin: 0; }
+.management-danger-action { color: var(--red); border-color: var(--red-line); }
+.management-dialog > .management-confirm { flex: none; margin: 0; padding: 18px 28px 22px; border: 0; border-top: 1px solid var(--accent-line); border-radius: 0; background: var(--accent-tint); }
+.management-confirm h3 { color: var(--ink); font-size: 16px; }
+.management-confirm > p:not(.management-confirm-label) { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
+.management-confirm-label { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; color: var(--accent); font-size: 11px; font-weight: 500; }
+.management-actions { margin-top: 15px; }
+.management-actions .btn { margin-top: 0; }
+
+/* Platform ownership is a deliberately separate, explicit three-step process. */
+.owner-current { display: flex; align-items: center; gap: 16px; margin-bottom: 28px; padding: 22px 24px; border: 1px solid var(--accent-line); border-radius: 14px; background: var(--accent-tint); }
+.owner-current-icon { display: flex; align-items: center; justify-content: center; flex: none; width: 48px; height: 48px; border-radius: 14px; background: var(--surface); color: var(--accent); }
+.owner-current > div { flex: 1; min-width: 0; }
+.owner-current h3 { margin: 0 0 5px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.owner-current strong { color: var(--ink); font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.owner-current p { margin: 5px 0 0; color: var(--faint); font-size: 11px; }
+.owner-transfer-section,
+.owner-timezone-section { margin: 0 0 28px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.owner-section-heading { padding: 23px 25px 20px; }
+.owner-section-heading h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 7px; color: var(--ink); font-size: 15px; font-weight: 600; }
+.owner-section-heading h3 > svg { color: var(--accent); }
+.owner-section-heading p { margin: 0; font-size: 12px; }
+.owner-transfer-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin: 0; padding: 17px 25px; border-block: 1px solid var(--line); list-style: none; background: var(--bg); }
+.owner-transfer-steps li { position: relative; display: flex; align-items: center; gap: 8px; color: var(--faint); }
+.owner-transfer-steps li:not(:last-child)::after { content: ""; height: 1px; flex: 1; margin-inline: 8px 18px; background: var(--line); }
+.owner-transfer-steps li > span { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: none; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--faint); font-size: 11px; }
+.owner-transfer-steps strong { white-space: nowrap; font-size: 12px; font-weight: 400; }
+.owner-transfer-steps li.is-current { color: var(--accent); }
+.owner-transfer-steps li.is-current strong { font-weight: 600; }
+.owner-transfer-steps li.is-current > span,
+.owner-transfer-steps li.is-complete > span { border-color: var(--accent); background: var(--accent); color: var(--surface); }
+.owner-transfer-steps li.is-complete { color: var(--ink-2); }
+.owner-transfer-content { padding: 25px; }
+.owner-step-heading { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 19px; }
+.owner-step-heading > span { margin-top: 2px; color: var(--accent); font-size: 10px; font-weight: 600; font-family: var(--mono); }
+.owner-step-heading h4 { margin: 0 0 5px; color: var(--ink); font-size: 14px; font-weight: 600; }
+.owner-step-heading p { margin: 0; font-size: 11px; }
+.owner-management .owner-target-form { display: flex; align-items: end; gap: 10px; margin: 0; padding-left: 27px; }
+.owner-target-form > label { flex: 1; max-width: 350px; }
+.owner-target-form > .btn { height: 40px; }
+.owner-management .management-transfer-target { padding: 19px 0 0 27px; }
+.owner-target-identity { display: flex; align-items: center; gap: 11px; padding: 13px 16px; border: 1px solid var(--accent-line); border-radius: 10px; background: var(--accent-tint); }
+.owner-target-identity > div { flex: 1; min-width: 0; }
+.owner-target-identity strong { color: var(--ink); font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.owner-target-identity p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+.owner-target-identity > svg { flex: none; color: var(--accent); }
+.owner-verification { margin-top: 25px; padding-top: 22px; border-top: 1px solid var(--line); }
+.owner-verification .owner-step-heading { margin-left: -27px; }
+.owner-management .owner-verification form { display: flex; align-items: end; gap: 10px; margin: 0 0 12px; }
+.owner-verification form label { max-width: 350px; }
+.owner-verification form .btn { height: 40px; }
+.owner-management .owner-transfer-confirm { margin: 22px 0 0; padding: 20px; border-color: var(--accent-line); background: var(--accent-tint); }
+.owner-transfer-confirm h4 { font-size: 15px; }
+.owner-transfer-footnote { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 15px 25px; border-top: 1px solid var(--line); color: var(--muted); background: var(--bg); font-size: 11px; line-height: 1.7; }
+.owner-transfer-footnote svg { margin-top: 2px; }
+.owner-timezone-section { padding-bottom: 24px; }
+.owner-timezone-section > :not(.owner-section-heading) { margin-left: 25px; margin-right: 25px; }
+.owner-timezone-current { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin-bottom: 20px; border-radius: 8px; background: var(--bg); }
+.owner-timezone-current span { color: var(--faint); font-size: 11px; }
+.owner-timezone-current strong { color: var(--ink); font-size: 12px; font-weight: 500; font-family: var(--mono); }
+.owner-timezone-input { max-width: 350px; }
+.owner-timezone-section > .field-hint { margin-block: 8px 12px; font-size: 11px; }
+.owner-timezone-section .management-check,
+.owner-transfer-confirm .management-check { color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.7; }
+.owner-management .management-check input { flex: none; margin: 3px 0 0; accent-color: var(--accent); }
+
+@container (max-width: 720px) {
+  .user-management .management-filters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 11px; }
+  .management-filters .management-search { grid-column: 1 / -1; }
+  .management-table-wrap { border: 0; border-radius: 0; background: transparent; overflow: visible; }
+  .management-table { display: block; width: 100%; }
+  .management-table caption { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 3px 0 13px; border: 0; font-size: 12px; }
+  .management-page-count { float: none; margin: 0; flex: none; }
+  .management-table thead { display: none; }
+  .management-table tbody { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: 100%; }
+  .management-table tbody tr { display: flex; flex-direction: column; width: 100%; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  .management-table tbody td { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 6px 0; border: 0; }
+  .management-table td[data-label]::before { display: inline; margin: 0; color: var(--faint); content: attr(data-label); font-size: 11px; }
+  .management-table tbody .management-account-cell { display: block; padding: 0 0 12px; margin-bottom: 8px; border-bottom: 1px solid var(--line-soft); }
+  .management-table td.management-account-cell::before { display: none; }
+  .management-table .management-account strong { display: block; }
+  .management-table tbody .management-row-action { justify-content: end; padding: 10px 0 0; margin-top: auto; }
+  .management-view { width: 100%; justify-content: space-between; padding-inline: 11px; background: var(--bg); border-color: var(--line); }
+  .management-role { font-size: 10px; }
+  .management-pagination { align-items: flex-end; gap: 10px; }
+  .management-pagination .field-hint { max-width: 190px; }
+}
+@container (max-width: 480px) {
+  .management-table tbody { grid-template-columns: 1fr; }
+  .management-table caption { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .management-pagination > .field-hint { display: none; }
+  .management-pagination { justify-content: end; }
+}
+@media (max-width: 680px) {
+  .management-page-heading { align-items: flex-start; gap: 10px; margin-bottom: 18px; }
+  .management-page-heading > .btn { flex: none; margin-top: 22px; }
+  .management-privacy-note { align-items: flex-start; padding: 10px 12px; font-size: 11px; line-height: 1.7; }
+  .management-privacy-note > svg { flex: none; margin-top: 2px; }
+  .management-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 24px); padding: 0; border-radius: 15px; }
+  .management-dialog-head { padding: 19px 18px 17px; }
+  .management-dialog-head h2 { font-size: 19px; }
+  .management-dialog-body { padding: 21px 18px 2px; }
+  .management-detail-account { gap: 11px; }
+  .management-detail-account h3 { font-size: 16px; }
+  .management-avatar.is-large { width: 44px; height: 44px; border-radius: 12px; font-size: 18px; }
+  .management-identity-meta { gap: 6px; }
+  .management-identity-meta .management-role { font-size: 10px; }
+  .management-usage-summary { gap: 13px; padding: 14px; }
+  .management-usage-summary > div + div { padding-left: 13px; }
+  .management-usage-summary dd { font-size: 20px; }
+  .management-usage-summary dd span { font-size: 11px; }
+  .management-split-section,
+  .management-guest-quota { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .management-dialog > .management-confirm { padding: 15px 18px 18px; }
+  .management-confirm h3 { font-size: 15px; }
+  .management-confirm > p:not(.management-confirm-label) { font-size: 11px; }
+  .management-confirm .management-actions { gap: 6px; margin-top: 12px; }
+  .management-confirm .management-actions .btn { height: 34px; font-size: 12px; padding-inline: 10px; }
+  .owner-current { align-items: flex-start; flex-wrap: wrap; gap: 12px; padding: 18px; margin-bottom: 22px; }
+  .owner-current-icon { width: 40px; height: 40px; border-radius: 11px; }
+  .owner-current strong { font-size: 14px; }
+  .owner-current > .management-role { margin-left: 52px; margin-top: -8px; }
+  .owner-section-heading { padding: 20px 18px 17px; }
+  .owner-transfer-steps { padding: 14px 18px; }
+  .owner-transfer-steps li { gap: 6px; }
+  .owner-transfer-steps strong { font-size: 10px; }
+  .owner-transfer-steps li > span { width: 21px; height: 21px; font-size: 10px; }
+  .owner-transfer-steps li:not(:last-child)::after { margin-inline: 6px; }
+  .owner-transfer-content { padding: 20px 18px; }
+  .owner-step-heading { gap: 9px; }
+  .owner-step-heading h4 { font-size: 13px; }
+  .owner-management .owner-target-form { padding-left: 0; flex-wrap: wrap; }
+  .owner-target-form > label { flex-basis: 100%; max-width: none; }
+  .owner-target-form > .btn { height: 36px; }
+  .owner-management .management-transfer-target { padding-left: 0; }
+  .owner-target-identity { padding: 11px; gap: 9px; }
+  .owner-target-identity .management-avatar { width: 30px; height: 30px; font-size: 12px; }
+  .owner-verification .owner-step-heading { margin-left: 0; }
+  .owner-management .owner-verification form { flex-direction: column; align-items: stretch; }
+  .owner-verification form label { max-width: none; }
+  .owner-verification form .btn { align-self: flex-start; height: 36px; }
+  .owner-management .owner-transfer-confirm { padding: 15px; }
+  .owner-transfer-footnote { padding: 13px 18px; }
+  .owner-timezone-section { padding-bottom: 20px; }
+  .owner-timezone-section > :not(.owner-section-heading) { margin-left: 18px; margin-right: 18px; }
+  .owner-timezone-current { flex-wrap: wrap; gap: 6px 11px; }
+  .owner-timezone-current strong { font-size: 11px; }
+}

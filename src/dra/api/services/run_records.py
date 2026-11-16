@@ -20,11 +20,12 @@ from pathlib import Path
 from sqlalchemy import delete, func, select
 
 from dra.api.services import trial as trial_service
+from dra.api.services import quotas
 from dra.api.services.db_errors import database_errors
 from dra.api.services.errors import Conflict, InvalidRequest, NotFound
 from dra.api.services.ids import RUN_ID_RE
 from dra.db import Database
-from dra.db_tables import Conversation, ResearchTask, RunAttempt, Showcase, User, utcnow
+from dra.db_tables import Conversation, ResearchTask, RunAttempt, Showcase, User, QuotaReservation, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -35,25 +36,37 @@ LEGACY_NOT_IMPORTED = (
 )
 
 
-def reserve_new_run(db: Database, user_id: int, run_id: str, query: str, *, trial=None) -> None:
+def reserve_new_run(db: Database, user_id: int, run_id: str, query: str, *, trial=None) -> quotas.Access:
     """新研究：新对话（id 即 run_id）+ 一个请求 + 一条执行记录，同一事务。
 
     ``trial``（访客，#49）：在同一事务里扣今天的研究次数；用完时整个占位不写入。
     """
     now = utcnow()
     with database_errors(), db.session() as session:
-        if trial is not None:
-            trial_service.take_in_session(session, trial, trial_service.RUN)
+        access = quotas.reserve_in_session(session, user_id, quotas.RUN, f"run:{run_id}")
         session.add(Conversation(id=run_id, user_id=user_id, created_at=now))
         task = ResearchTask(user_id=user_id, conversation_id=run_id, query=query, created_at=now)
         session.add(task)
         session.flush()
         session.add(RunAttempt(task_id=task.id, run_id=run_id, created_at=now,
-                               quota_day=trial.day if trial is not None else None))
+                               quota_day=access.day))
+    return access
+
+
+@dataclass(frozen=True)
+class FollowupReservation:
+    conversation_id: str
+    counted: set[str]
+    access: quotas.Access
+
+    def __iter__(self):
+        # 保留历史两个返回值的解包约定，启动层另外读取原子占位时的有效权限。
+        yield self.conversation_id
+        yield self.counted
 
 
 def reserve_followup(db: Database, user_id: int, parent_run_id: str, run_id: str,
-                     query: str, *, trial=None) -> tuple[str, set[str]]:
+                     query: str, *, trial=None) -> FollowupReservation:
     """追问：在父研究所在的对话下加一个请求 + 一条执行记录。
 
     返回（对话 id，本次占位之前该对话已登记的 run_id 集合）。后者交给追问的
@@ -64,6 +77,9 @@ def reserve_followup(db: Database, user_id: int, parent_run_id: str, run_id: str
     """
     now = utcnow()
     with database_errors(), db.session() as session:
+        # 锁序与管理写一致：治理 -> 用户 -> 对话 -> 计数。
+        quotas.begin_write(session)
+        quotas.access_in_session(session, user_id)
         conversation_id = session.scalar(
             select(ResearchTask.conversation_id)
             .join(RunAttempt, RunAttempt.task_id == ResearchTask.id)
@@ -82,27 +98,28 @@ def reserve_followup(db: Database, user_id: int, parent_run_id: str, run_id: str
             raise Conflict(SHOWCASE_FROZEN)
         counted = conversation_run_ids(session, conversation_id)
         # 访客追问也算一次研究（#49）；在同一事务里扣，用完时不占位。
-        if trial is not None:
-            trial_service.take_in_session(session, trial, trial_service.RUN)
+        access = quotas.reserve_in_session(session, user_id, quotas.RUN, f"run:{run_id}")
         task = ResearchTask(user_id=user_id, conversation_id=conversation_id, query=query,
                             created_at=now)
         session.add(task)
         session.flush()
         session.add(RunAttempt(task_id=task.id, run_id=run_id, created_at=now,
-                               quota_day=trial.day if trial is not None else None))
-    return conversation_id, counted
+                               quota_day=access.day))
+    return FollowupReservation(conversation_id, counted, access)
 
 
 def release(db: Database, run_id: str) -> None:
     """撤销占位：删执行记录、请求；对话里没有别的请求时连对话一起删。"""
     with database_errors(), db.session() as session:
-        attempt = session.scalars(select(RunAttempt).where(RunAttempt.run_id == run_id)).first()
+        quotas.begin_write(session)
+        attempt = session.scalars(select(RunAttempt).where(RunAttempt.run_id == run_id).with_for_update()).first()
         if attempt is None:
             return
+        ledger = session.get(QuotaReservation, f"run:{run_id}")
+        if ledger is not None and ledger.state == "started":
+            return  # 已开始的研究不能通过启动补偿删除归属或退款。
         task = session.get(ResearchTask, attempt.task_id)
-        if attempt.quota_day is not None:
-            # 研究没能启动：退回这次扣的试用次数（#49）。
-            trial_service.give_back_in_session(session, task.user_id, attempt.quota_day)
+        quotas.refund_in_session(session, f"run:{run_id}")
         session.delete(attempt)
         session.flush()
         conversation_id = task.conversation_id
@@ -188,7 +205,7 @@ def import_legacy(db: Database, runs_root: Path, owner_email: str) -> ImportRepo
         owner = session.scalars(select(User).where(User.email == email)).first()
         if owner is None:
             raise NotFound(f"用户 {email} 不存在")
-        if owner.role != "admin":
+        if owner.role not in {"admin", "owner"}:
             raise InvalidRequest(f"{email} 不是管理员；旧数据只导入到管理员名下")
         owner_id = owner.id
         known = set(session.scalars(select(RunAttempt.run_id)))

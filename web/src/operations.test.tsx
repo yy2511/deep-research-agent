@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OperationsResults, OperationsStatus } from "./components/OperationsDashboard";
+import { OperationsResults, OperationsStatus, OperationsTrend } from "./components/OperationsDashboard";
 import { customRangeError, INITIAL_OPERATIONS, OperationsLoader, operationsQuery, presetDates, utcDate,
   type OperationsSnapshot, type OperationsState } from "./operations";
 import { onUnauthorized } from "./session";
@@ -107,6 +107,24 @@ describe("统计加载与错误隔离", () => {
 });
 
 describe("汇总页面离线渲染", () => {
+  it("趋势纵轴为完整的大计数留出空间，不截断数值", () => {
+    const small = renderToStaticMarkup(<OperationsTrend days={[snapshot.daily[1]]} />);
+    const large = renderToStaticMarkup(<OperationsTrend days={[{ ...snapshot.daily[1], research_tasks: 123456789012345 }]} />);
+    const labelX = (html: string) => Number(html.match(/<text x="([\d.]+)" y="[^"]+" text-anchor="end">/)?.[1]);
+    expect(labelX(large)).toBeGreaterThan(labelX(small) + 50);
+    expect(large).toContain("123,456,789,012,345</text>");
+    expect(large).not.toMatch(/NaN|Infinity/);
+  });
+  it("趋势图区分无每日记录和单日零活动，不出现无效坐标", () => {
+    const empty = renderToStaticMarkup(<OperationsTrend days={[]} />);
+    expect(empty).toContain("暂无每日记录"); expect(empty).not.toContain("<svg");
+    const html = renderToStaticMarkup(<OperationsTrend days={[snapshot.daily[0]]} />);
+    expect(html).toContain("每日研究任务与研究用户（UTC）");
+    expect(html).toContain("最高每日计数 0");
+    expect(html).toContain("2026-11-11 至 2026-11-11");
+    expect(html).not.toMatch(/NaN|Infinity/);
+    expect(html.match(/<circle /g)).toHaveLength(2);
+  });
   it("显示指标口径、真实 0、UTC 范围与倒序趋势，不产生私有记录链接", () => {
     const html = renderToStaticMarkup(<OperationsResults data={snapshot} />);
     for (const label of ["账号总数", "可用账号", "公开示例", "研究用户（去重）", "新建对话", "期间去重数", "UTC", "不受日期筛选影响"]) expect(html).toContain(label);

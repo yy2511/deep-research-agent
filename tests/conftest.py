@@ -53,6 +53,10 @@ def _truncate_postgres(database) -> None:
     names = ", ".join(table.name for table in Base.metadata.sorted_tables)
     with database.engine.begin() as connection:
         connection.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+        # Keep the migration's singleton seed after clearing test accounts. SQLite
+        # gets this row from its template copy; PostgreSQL reuses one migrated DB.
+        connection.execute(text("INSERT INTO platform_governance (id,version,tracking_started_at) "
+                                "VALUES (1,0,CURRENT_TIMESTAMP)"))
 
 
 @pytest.fixture(autouse=True)

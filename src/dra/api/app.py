@@ -35,6 +35,7 @@ from dra.api.routers import (
     runs,
     settings,
     showcases,
+    user_management,
     skills,
 )
 from dra.api.services.runs import RunRegistry, drain_pending_cleanups
@@ -108,6 +109,7 @@ app.router.lifespan_context = _lifespan
 # tests/test_auth.py 遍历路由表，检查没有遗漏。
 app.include_router(health.router)
 app.include_router(auth.router, dependencies=[Depends(same_origin)])
+app.include_router(user_management.router, dependencies=[Depends(same_origin)])
 # 带研究编号 / 对话编号的修改接口另外挂归属检查（#31，在各自 router 文件里）；
 # tests/test_run_ownership.py 遍历这类接口，检查没有遗漏。
 # 改全站设置的 admin_router 分组另外要求管理员（#32）；tests/test_admin_permissions.py 检查没有遗漏。

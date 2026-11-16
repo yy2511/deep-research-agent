@@ -5,9 +5,9 @@ import { LlmCallsList, llmCallsFromPlanTrace } from "./LlmCalls";
 
 // 示例问题：点一下填进输入框，让空白页一眼知道“能问什么”。
 const EXAMPLES = [
-  "Python 3.12 的 asyncio.wait_for 超时后会不会取消任务？",
-  "Redis 的 AOF 和 RDB，哪个更适合对丢数据敏感的场景？",
-  "sqlite3_rsync 能不能同步同一台机器上的两个数据库文件？",
+  { topic: "技术查证", title: "理解技术边界", query: "Python 3.12 的 asyncio.wait_for 超时后会不会取消任务？" },
+  { topic: "方案比较", title: "看清方案取舍", query: "Redis 的 AOF 和 RDB，哪个更适合对丢数据敏感的场景？" },
+  { topic: "版本研究", title: "找到可靠出处", query: "sqlite3_rsync 能不能同步同一台机器上的两个数据库文件？" },
 ];
 
 export function NewResearch({
@@ -45,8 +45,10 @@ export function NewResearch({
   return (
     <div className="landing">
       <div className="landing-head">
+        <p className="landing-eyebrow"><span aria-hidden="true" />EviSee · 深度研究</p>
         <h1 className="landing-title">想弄清什么问题？</h1>
-        <p className="landing-sub">我会先和你确认目标，再去检索、阅读、保存证据，最后给出一份每个结论都能点开查看原文的回答。</p>
+        <p className="landing-sub">深入研究，理清脉络。让答案背后的证据与出处，<br className="landing-desktop-break" />都能看得见、查得到。</p>
+        <div className="landing-principles"><span><Icon name="search" size={14} />多源检索</span><span><Icon name="layers" size={14} />证据卡片</span><span><Icon name="book" size={14} />原文回查</span></div>
       </div>
 
       <div className="composer composer-large">
@@ -62,7 +64,7 @@ export function NewResearch({
         />
         <div className="composer-bar">
           <div className="composer-controls">{controls}</div>
-          <span className="composer-hint">⌘ Enter 发送</span>
+          <span className="composer-hint">Ctrl / ⌘ Enter</span>
           <button className="btn btn-primary" disabled={!ready} onClick={submit}>
             {busy ? <><Icon name="loading" className="icon-spin" size={15} />准备中…</> : <>开始研究<Icon name="arrow-right" size={15} /></>}
           </button>
@@ -80,13 +82,19 @@ export function NewResearch({
       )}
 
       {progress ?? <div className="examples">
-        <div className="examples-label">可以这样问</div>
+        <div className="examples-heading"><div className="examples-label">从一个问题开始</div><span>也可以先试试这些方向</span></div>
+        <div className="examples-grid">
         {EXAMPLES.map((ex) => (
-          <button key={ex} className="example-row" disabled={busy} onClick={() => fill(ex)}>
-            <span>{ex}</span><Icon name="arrow-right" size={15} />
+          <button key={ex.query} className="example-row" disabled={busy} onClick={() => fill(ex.query)}>
+            <span className="example-topic">{ex.topic}</span>
+            <strong className="example-title">{ex.title}</strong>
+            <span className="example-query">{ex.query}</span>
+            <Icon name="arrow-right" size={16} />
           </button>
         ))}
+        </div>
       </div>}
+      <p className="landing-brandline">See the evidence. Check the source.</p>
     </div>
   );
 }
