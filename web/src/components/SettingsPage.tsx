@@ -86,9 +86,10 @@ export function settingsUpdate(config: ConfigPayload) {
 export interface LocalPrefs { showRecords: boolean; showReplay: boolean; traceFull: boolean }
 
 export type SettingsTab = "users" | "owner" | "operations" | "models" | "capabilities" | "trial" | "connections" | "skills" | "mcp" | "general";
-const TABS: Array<[SettingsTab, string]> = [
-  ["operations", "运营概览"], ["users", "用户管理"],
-  ["models", "模型"], ["capabilities", "研究能力"], ["trial", "试用"], ["connections", "API 连接"], ["skills", "技能"], ["mcp", "外部资料（MCP）"], ["general", "通用"],
+const SETTINGS_GROUPS: Array<{ label: string; tabs: Array<[SettingsTab, string]> }> = [
+  { label: "平台管理", tabs: [["operations", "运营概览"], ["users", "用户管理"], ["trial", "试用"]] },
+  { label: "研究配置", tabs: [["models", "模型"], ["capabilities", "研究能力"], ["connections", "API 连接"], ["skills", "技能"], ["mcp", "外部资料（MCP）"]] },
+  { label: "个人偏好", tabs: [["general", "通用"]] },
 ];
 
 /** 模型页与能力页共用的一份草稿与保存状态，由 SettingsPage 持有；两页之间切换不丢未保存的修改。 */
@@ -393,10 +394,13 @@ export function SettingsPage({ isAdmin, ...props }: SettingsPageProps) {
 
 /** 普通用户：只有存在本机浏览器里的偏好；全站设置的修改入口一个都不显示，也不去读取它们。 */
 function MemberSettingsPage({ prefs, onPrefs, onDemo }: Omit<SettingsPageProps, "isAdmin">) {
-  return <div className="settings-page">
+  return <div className="settings-page settings-page-member">
     <nav className="settings-nav" aria-label="设置分类">
-      <h1>设置</h1>
-      <button type="button" aria-current="page" className="settings-nav-item is-active">通用</button>
+      <div className="settings-nav-head"><span className="settings-nav-kicker">WORKSPACE</span><h1>设置</h1></div>
+      <div className="settings-nav-group" role="group" aria-label="个人偏好">
+        <p className="settings-nav-group-label">个人偏好</p>
+        <button type="button" aria-current="page" className="settings-nav-item is-active">通用</button>
+      </div>
     </nav>
     <div className="settings-main">
       <div className="settings-scroll">
@@ -416,11 +420,14 @@ function AdminSettingsPage({ tab, onTab, prefs, onPrefs, onDemo, onSaved, accoun
     if (isRuntimeTab(id) && !isRuntimeTab(tab) && config) reloadProviders();
     onTab(id);
   }
-  return <div className="settings-page">
+  return <div className="settings-page settings-page-admin">
     <nav className="settings-nav" aria-label="设置分类">
-      <h1>平台管理</h1>
-      {([...TABS, ...(account?.role === "owner" ? [["owner", "负责人管理"] as [SettingsTab, string]] : [])]).map(([id, label]) => <button key={id} type="button" aria-current={tab === id ? "page" : undefined}
-        className={`settings-nav-item${tab === id ? " is-active" : ""}`} onClick={() => selectTab(id)}>{label}</button>)}
+      <div className="settings-nav-head"><span className="settings-nav-kicker">WORKSPACE</span><h1>工作区设置</h1></div>
+      {SETTINGS_GROUPS.map(group => <div className="settings-nav-group" role="group" aria-label={group.label} key={group.label}>
+        <p className="settings-nav-group-label">{group.label}</p>
+        {[...group.tabs, ...(group.label === "平台管理" && account?.role === "owner" ? [["owner", "负责人管理"] as [SettingsTab, string]] : [])].map(([id, label]) => <button key={id} type="button" aria-current={tab === id ? "page" : undefined}
+          className={`settings-nav-item${tab === id ? " is-active" : ""}`} onClick={() => selectTab(id)}>{label}</button>)}
+      </div>)}
     </nav>
     <div className="settings-main">
       <div className="settings-scroll">

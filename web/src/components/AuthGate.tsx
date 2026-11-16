@@ -4,6 +4,7 @@ import {
   GITHUB_LOGIN_URL, PASSWORD_MAX, PASSWORD_MIN, type Account, type AuthFields, type AuthMode,
 } from "../auth";
 import { Icon } from "./Icon";
+import { Brand } from "./Brand";
 import { fetchShowcases, hasViewableShowcase, type Showcase } from "../showcases";
 
 type GateState =
@@ -152,13 +153,28 @@ export function AuthPage({ onAuthed, notice, initialMode = "login", github = fal
 
   const registering = mode === "register";
   return (
-    <div className="auth-shell">
-      <form className="auth-card" onSubmit={(e) => void submit(e)} noValidate>
-        <div className="brand auth-brand">
-          <span className="brand-mark"><Icon name="search" size={16} strokeWidth={2.2} /></span>
-          <span className="brand-text">研究工作台</span>
+    <div className="auth-shell auth-layout">
+      <section className="auth-story" aria-label="关于 EviSee">
+        <Brand className="auth-story-brand" tagline />
+        <div className="auth-story-copy">
+          <p className="auth-eyebrow">有据可查的深度研究</p>
+          <h2>看见证据，<br /><span>找到答案的来处。</span></h2>
+          <p>从问题出发，连接资料、证据与结论。<br />一个可以回到原文的研究工作台。</p>
         </div>
-        <h1 className="auth-title">{registering ? "用邀请码注册" : "登录"}</h1>
+        <div className="auth-principles">
+          <div><span><Icon name="page" size={19} /></span><p><strong>证据卡，保留依据</strong><small>关键引文与出处，清楚地放在一起。</small></p></div>
+          <div><span><Icon name="book" size={19} /></span><p><strong>回到原文，再看一遍</strong><small>从结论打开保存的来源快照。</small></p></div>
+          <div><span><Icon name="verify" size={19} /></span><p><strong>把研究边界说清楚</strong><small>已回答、待确认与缺口，分别呈现。</small></p></div>
+        </div>
+      </section>
+      <div className="auth-form-panel">
+      <form className="auth-card" onSubmit={(e) => void submit(e)} noValidate>
+        <Brand className="auth-brand" />
+        <div className="auth-form-heading">
+          <p className="auth-form-kicker">{registering ? "开始你的研究旅程" : "欢迎回来"}</p>
+          <h1 className="auth-title">{registering ? "用邀请码注册" : "登录"}</h1>
+          <p className="auth-description">{registering ? "填写邀请信息，创建你的研究账号。" : "继续探索问题背后的依据。"}</p>
+        </div>
         {notice && <p className="auth-notice">{notice}</p>}
         {github && !registering && (
           <>
@@ -203,6 +219,8 @@ export function AuthPage({ onAuthed, notice, initialMode = "login", github = fal
         {!registering && <p className="field-hint">忘记密码请联系管理员重设。</p>}
         {onBackToShowcases && <button type="button" className="link-btn" onClick={onBackToShowcases}>先看看示例</button>}
       </form>
+      <p className="auth-access-note"><Icon name="verify" size={14} />登录后仅展示你有权访问的研究与资料</p>
+      </div>
     </div>
   );
 }

@@ -5,6 +5,10 @@ import { UserManagement } from '../src/components/UserManagement';
 import { OwnerManagement } from '../src/components/OwnerManagement';
 import type { ManagedUser } from '../src/userManagement';
 import '../src/styles.css';
+import '../src/theme.css';
+import '../src/workspace-theme.css';
+import '../src/settings-theme.css';
+import '../src/management-theme.css';
 const roles = ['owner', 'admin', 'user', 'guest'] as const;
 const names = ['合成负责人', '合成管理员', '合成普通用户', '合成访客'];
 const users: ManagedUser[] = roles.map((role, i) => ({

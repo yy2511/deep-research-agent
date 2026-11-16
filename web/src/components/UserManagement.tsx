@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Account } from "../auth";
 import { notifyUnauthorized } from "../session";
+import { Icon } from "./Icon";
 import {
   canManageAccount, editableRoles, emptyLoad, ManagementError, ManagementLoader,
   managementWrite, quotaInputError, ROLE_LABELS, usersPath,
@@ -37,31 +38,32 @@ export function UserManagement({ account, onTrial }: { account: Account; onTrial
     setState({ data: null, loading: false, error: "管理权限已失效，请重新登录。", denied: true });
   };
   return <div className="settings-section user-management">
-    <div className="section-head"><div><h2>用户管理</h2><p className="field-hint">管理账号身份、状态和每日免费次数，不显示私人研究内容。</p></div>
-      <button type="button" className="btn btn-sm" disabled={state.loading || state.denied} onClick={refresh}>刷新</button></div>
+    <div className="section-head management-page-heading"><div><p className="management-eyebrow">PLATFORM / PEOPLE</p><h2>用户管理</h2><p className="field-hint">让每个账号的身份、权限与使用额度清晰可见。</p></div>
+      <button type="button" className="btn btn-sm" disabled={state.loading || state.denied} onClick={refresh}><Icon name="refresh" size={14} />刷新</button></div>
+    <p className="management-privacy-note"><Icon name="verify" size={16} /><span>管理账号与使用额度，私人研究内容始终独立。</span></p>
     {data?.governance.owner_user_id === null && <p className="notice">尚未设置平台负责人，请联系部署维护者在服务器明确指定负责人。不会自动选择账号。</p>}
     <form className="management-filters" onSubmit={event => { event.preventDefault(); applied.current = { ...draft }; cursors.current = [null]; setNotice(""); void loader.current?.load(usersPath(draft)); }}>
-      <label>查找账号<input className="input" type="search" value={draft.search} placeholder="邮箱或 GitHub 账号" onChange={event => setDraft({ ...draft, search: event.target.value })} /></label>
+      <label className="management-search">查找账号<span className="management-search-control"><Icon name="search" size={16} /><input className="input" type="search" value={draft.search} placeholder="邮箱或 GitHub 账号" onChange={event => setDraft({ ...draft, search: event.target.value })} /></span></label>
       <label>身份<select value={draft.role} onChange={event => setDraft({ ...draft, role: event.target.value })}><option value="">全部身份</option>{Object.entries(ROLE_LABELS).map(([role, label]) => <option key={role} value={role}>{label}</option>)}</select></label>
       <label>状态<select value={draft.status} onChange={event => setDraft({ ...draft, status: event.target.value })}><option value="">全部状态</option><option value="active">正常</option><option value="disabled">停用</option></select></label>
-      <button className="btn btn-sm" type="submit" disabled={state.denied}>查询</button>
+      <button className="btn btn-sm btn-primary" type="submit" disabled={state.denied}>查询</button>
     </form>
     {notice && <p className="notice" role="status">{notice}</p>}
     <LoadNotice state={state} />
     {data && <>
-      <div className="management-table-wrap"><table className="management-table"><caption>平台账号及每日研究使用情况</caption>
+      <div className="management-table-wrap"><table className="management-table"><caption><span>平台账号及每日研究使用情况</span><span className="management-page-count">当前页 {data.items.length} 个账号</span></caption>
         <thead><tr><th>账号</th><th>身份</th><th>额度来源</th><th>今日研究</th><th>状态</th><th>操作</th></tr></thead>
         <tbody>{data.items.map(user => <tr key={user.id}>
-          <td data-label="账号"><strong>{identity(user)}</strong><small>{user.email || "GitHub 登录"} · ID {user.id}</small></td>
-          <td data-label="身份">{ROLE_LABELS[user.role]}</td><td data-label="额度来源">{user.role === "guest" ? "平台通用配置" : user.role === "user" ? "个人设置" : "管理账号"}</td>
-          <td data-label="今日研究">{user.usage ? `${user.usage.runs_used} / ${count(user.usage.runs_limit)}` : "暂无数据"}</td>
-          <td data-label="状态">{user.status === "active" ? "正常" : "停用"}</td>
-          <td><button className="btn btn-sm" type="button" onClick={() => { setSelected(user.id); setNotice(""); }}>查看{canManageAccount(account, user) ? "/编辑" : ""}</button></td>
+          <td data-label="账号" className="management-account-cell"><div className="management-account"><span className={`management-avatar is-${user.role}`} aria-hidden="true">{identity(user).slice(0, 1).toUpperCase()}</span><div className="management-account-copy"><strong>{identity(user)}</strong><small>{user.display_name && user.email ? user.email : user.email ? "邮箱账号" : "GitHub 登录"} · ID {user.id}</small></div></div></td>
+          <td data-label="身份"><span className={`management-role is-${user.role}`}>{ROLE_LABELS[user.role]}</span></td><td data-label="额度来源"><span className="management-quota-source">{user.role === "guest" ? "平台通用配置" : user.role === "user" ? "个人设置" : "管理账号"}</span></td>
+          <td data-label="今日研究"><span className="management-usage">{user.usage ? <><strong>{user.usage.runs_used}</strong><span> / {count(user.usage.runs_limit)}</span></> : "暂无数据"}</span></td>
+          <td data-label="状态"><span className={`management-status is-${user.status}`}>{user.status === "active" ? "正常" : "停用"}</span></td>
+          <td className="management-row-action"><button className="btn btn-sm management-view" type="button" onClick={() => { setSelected(user.id); setNotice(""); }}>查看{canManageAccount(account, user) ? "/编辑" : ""}<Icon name="arrow-right" size={14} /></button></td>
         </tr>)}</tbody>
       </table></div>
       {!data.items.length && <p className="field-hint">没有符合条件的账号。</p>}
-      <div className="management-pagination"><button type="button" className="btn btn-sm" disabled={cursors.current.length === 1 || state.loading} onClick={() => { cursors.current.pop(); refresh(); }}>上一页</button>
-        <button type="button" className="btn btn-sm" disabled={data.next_cursor === null || state.loading} onClick={() => { if (data.next_cursor !== null) { cursors.current.push(data.next_cursor); refresh(); } }}>下一页</button></div>
+      <div className="management-pagination"><span className="field-hint">身份与额度变更均保留管理记录</span><div><button type="button" className="btn btn-sm" disabled={cursors.current.length === 1 || state.loading} onClick={() => { cursors.current.pop(); refresh(); }}>上一页</button>
+        <button type="button" className="btn btn-sm" disabled={data.next_cursor === null || state.loading} onClick={() => { if (data.next_cursor !== null) { cursors.current.push(data.next_cursor); refresh(); } }}>下一页</button></div></div>
     </>}
     {!state.denied && <ManagementAudit onDenied={deny} />}
     {selected !== null && <UserDetail key={selected} id={selected} account={account} onClose={() => setSelected(null)} onTrial={() => { setSelected(null); onTrial(); }}
@@ -123,33 +125,35 @@ export function UserDetail({ id, account, onClose, onSaved, onTrial, onDenied }:
     } finally { writing.current = false; if (active.current) setBusy(false); }
   }
   return <dialog ref={dialog} className="management-dialog" aria-labelledby="user-detail-title" onCancel={event => { event.preventDefault(); if (!writing.current) onClose(); }}>
-    <div className="management-dialog-head"><h2 id="user-detail-title">账号详情</h2><button type="button" className="btn btn-sm" disabled={busy} onClick={onClose}>关闭</button></div>
+    <div className="management-dialog-head"><div><p className="management-eyebrow">ACCOUNT DETAILS</p><h2 id="user-detail-title">账号详情</h2></div><button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={onClose}><Icon name="close" size={15} />关闭</button></div>
+    <div className="management-dialog-body">
     <LoadNotice state={state} />
     {error && <p role="alert" className="field-hint is-bad">{error}</p>}{success && <p role="status" className="notice">{success}</p>}
     {user && <>
-      <section className="management-identity"><h3>{identity(user)}</h3><p>ID {user.id} · {ROLE_LABELS[user.role]} · {user.status === "active" ? "正常" : "停用"}</p>{user.email && <p>{user.email}</p>}
-        {user.usage && <p className="field-hint">今日研究 {user.usage.runs_used}/{count(user.usage.runs_limit)}，规划 {user.usage.briefs_used}/{count(user.usage.briefs_limit)}。时区 {user.usage.timezone}，下次重置 {user.usage.resets_at ? new Date(user.usage.resets_at).toLocaleString() : "暂不可用"}。</p>}
+      <section className="management-identity"><div className="management-detail-account"><span className={`management-avatar is-large is-${user.role}`} aria-hidden="true">{identity(user).slice(0, 1).toUpperCase()}</span><div><h3>{identity(user)}</h3>{user.display_name && user.email && <p className="management-detail-email">{user.email}</p>}<div className="management-identity-meta"><span>ID {user.id}</span><span className={`management-role is-${user.role}`}>{ROLE_LABELS[user.role]}</span><span className={`management-status is-${user.status}`}>{user.status === "active" ? "正常" : "停用"}</span></div></div></div>
+        {user.usage && <><dl className="management-usage-summary"><div><dt>今日研究</dt><dd>{user.usage.runs_used}<span> / {count(user.usage.runs_limit)}</span></dd></div><div><dt>今日规划</dt><dd>{user.usage.briefs_used}<span> / {count(user.usage.briefs_limit)}</span></dd></div></dl><p className="field-hint management-reset-note">时区 {user.usage.timezone} · 下次重置 {user.usage.resets_at ? new Date(user.usage.resets_at).toLocaleString() : "暂不可用"}</p></>}
         {user.usage?.tracking_started_at && <p className="field-hint">使用记录从 {new Date(user.usage.tracking_started_at).toLocaleString()} 起计，不代表完整历史。</p>}
       </section>
-      {!editable && <p className="notice">该账号只能查看。不能管理自己、负责人或超出你的权限层级的账号。</p>}
-      {user.role === "guest" && <section className="card"><h3>访客免费额度</h3><p>由平台通用配置决定，不支持个人覆盖。</p><button type="button" className="btn btn-sm" onClick={onTrial} disabled={busy}>查看平台试用配置</button></section>}
+      {!editable && <p className="notice management-readonly"><Icon name="verify" size={16} /><span>该账号只能查看。不能管理自己、负责人或超出你的权限层级的账号。</span></p>}
+      {user.role === "guest" && <section className="management-detail-section management-guest-quota"><div className="management-section-heading"><h3>访客免费额度</h3><p>由平台通用配置决定，不支持个人覆盖。</p></div><button type="button" className="btn btn-sm" onClick={onTrial} disabled={busy}>查看平台试用配置<Icon name="arrow-right" size={14} /></button></section>}
       {editable && <fieldset disabled={busy} className="management-fields">
-        <label>操作说明<input className="input" value={reason} onChange={event => setReason(event.target.value)} placeholder="说明调整原因（写入管理记录）" /></label>
-        <section className="card"><h3>账号状态</h3><p>停用后不能登录或发起新研究；不会删除研究记录。</p><button type="button" className="btn btn-sm" onClick={() => propose({ title: user.status === "active" ? "确认停用账号" : "确认恢复账号", description: `${identity(user)}（ID ${user.id}）将${user.status === "active" ? "停用，现有登录会话失效" : "恢复登录权限"}。`, path: `/api/admin/users/${id}/status`, method: "PATCH", body: { status: user.status === "active" ? "disabled" : "active", expected_version: user.management_version } })}>{user.status === "active" ? "停用账号" : "恢复账号"}</button></section>
-        <section className="card"><h3>身份</h3><label>新的身份<select value={role} onChange={event => { setRole(event.target.value as PlatformRole); setPending(null); }}>{editableRoles(account).map(value => <option key={value} value={value}>{ROLE_LABELS[value]}</option>)}</select></label>
+        <label className="management-reason">操作说明<input className="input" value={reason} onChange={event => setReason(event.target.value)} placeholder="说明调整原因（写入管理记录）" /></label>
+        <section className="management-detail-section management-split-section"><div className="management-section-heading"><h3>账号状态</h3><p>停用后不能登录或发起新研究；不会删除研究记录。</p></div><button type="button" className={`btn btn-sm${user.status === "active" ? " management-danger-action" : ""}`} onClick={() => propose({ title: user.status === "active" ? "确认停用账号" : "确认恢复账号", description: `${identity(user)}（ID ${user.id}）将${user.status === "active" ? "停用，现有登录会话失效" : "恢复登录权限"}。`, path: `/api/admin/users/${id}/status`, method: "PATCH", body: { status: user.status === "active" ? "disabled" : "active", expected_version: user.management_version } })}>{user.status === "active" ? "停用账号" : "恢复账号"}</button></section>
+        <section className="management-detail-section"><div className="management-section-heading"><h3>身份</h3><p>为账号选择与其职责相符的平台身份。</p></div><label>新的身份<select value={role} onChange={event => { setRole(event.target.value as PlatformRole); setPending(null); }}>{editableRoles(account).map(value => <option key={value} value={value}>{ROLE_LABELS[value]}</option>)}</select></label>
           <p className="field-hint">普通用户可使用代码、浏览器、MCP、资料库和附件等完整研究能力；访客仅用网页及全站试用额度。管理员拥有全站配置权且不限次数。</p>
           {role === "user" && user.role !== "user" && <p className="notice">转换为普通用户时，必须同时确认下面的个人每日额度。</p>}
           <button type="button" className="btn btn-sm" disabled={role === user.role} onClick={() => { const policy = role === "user" ? quota() : undefined; if (role === "user" && !policy) return; propose({ title: "确认变更身份", description: `${identity(user)}（ID ${user.id}）：${ROLE_LABELS[user.role]} → ${ROLE_LABELS[role]}。${role === "admin" ? "将授予全站配置管理权和不限次数的研究能力。" : role === "guest" ? "将仅能使用网页研究，不能使用代码、浏览器、MCP、资料库和附件，并改用平台通用额度。" : "将允许使用代码、浏览器、MCP、资料库和附件等研究能力，并采用已确认的个人额度。"}该账号需要重新登录。`, path: `/api/admin/users/${id}/role`, method: "PATCH", body: { role, expected_version: user.management_version, ...(policy ? { quota: policy } : {}) } }); }}>变更身份</button>
         </section>
-        {(user.role === "user" || role === "user") && <section className="card"><h3>个人每日免费次数</h3>
+        {(user.role === "user" || role === "user") && <section className="management-detail-section"><div className="management-section-heading"><h3>个人每日免费次数</h3><p>研究与规划分别计数，按平台日界重置。</p></div>
           <label>额度模式<select value={mode} onChange={event => { setMode(event.target.value); setPending(null); }}><option value="limited">设置每日次数</option>{account.role === "owner" && <option value="unlimited">不限次数</option>}</select></label>
           {mode === "limited" && <div className="field-grid"><label>每日研究次数<input className="input" type="number" min="0" max="9223372036854775807" step="1" value={runs} onChange={event => { setRuns(event.target.value); setPending(null); }} /></label><label>每日规划次数<input className="input" type="number" min="0" max="9223372036854775807" step="1" value={briefs} onChange={event => { setBriefs(event.target.value); setPending(null); }} /></label></div>}
           <p className="field-hint">0 表示禁止新的调用。首问与追问各算一次，规划另计。调整不会清空今日已用；只有负责人可以授予不限次数。</p>
           {user.role === "user" && <button type="button" className="btn btn-sm" onClick={() => { const policy = quota(); if (!policy) return; propose({ title: "确认修改每日额度", description: `${identity(user)}（ID ${user.id}）：${mode === "unlimited" ? "不限次数" : `每天研究 ${runs} 次、规划 ${briefs} 次`}，保留今日已用次数。`, path: `/api/admin/users/${id}/quota`, method: "PUT", body: { ...policy, expected_management_version: user.management_version } }); }}>保存个人额度</button>}
         </section>}
       </fieldset>}
-      {pending && <section className="management-confirm" aria-label="确认账号修改"><h3>{pending.title}</h3><p>{pending.description}</p><div className="management-actions"><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPending(null)}>取消修改</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>{busy ? "保存中…" : "确认保存"}</button></div></section>}
     </>}
+    </div>
+    {user && pending && <section className="management-confirm" aria-label="确认账号修改"><p className="management-confirm-label"><Icon name="verify" size={15} />请核对本次变更</p><h3>{pending.title}</h3><p>{pending.description}</p><div className="management-actions"><button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setPending(null)}>取消修改</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>{busy ? "保存中…" : "确认保存"}</button></div></section>}
   </dialog>;
 }
 
@@ -165,7 +169,7 @@ function ManagementAudit({ onDenied }: { onDenied: () => void }) {
     return () => { current.dispose(); loader.current = null; };
   }, [open]);
   const load = () => { const cursor = cursors.current.at(-1); void loader.current?.load(`/api/admin/audit-events${cursor == null ? "" : `?cursor=${cursor}`}`); };
-  return <section className="management-audit"><button type="button" className="btn btn-ghost" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "收起" : "查看"}管理记录</button>
+  return <section className="management-audit"><button type="button" className="btn btn-ghost" aria-expanded={open} onClick={() => setOpen(!open)}><Icon name="history" size={15} />{open ? "收起" : "查看"}管理记录<Icon name="chevron-down" size={14} className={open ? "is-open" : ""} /></button>
     {open && <><h3>管理记录</h3><p className="field-hint">只显示你有权查看的账号管理操作，不包含私人研究。</p><LoadNotice state={state} />{state.data && <><ul>{state.data.items.map(event => <li key={event.id}><time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString()}</time> · 操作者 {event.actor_id ?? "服务器维护者"} · 目标 {event.target_id ?? "平台"} · {event.action}{event.reason ? ` · ${event.reason}` : ""}</li>)}</ul>{!state.data.items.length && <p className="field-hint">暂无管理记录。</p>}<div className="management-pagination"><button type="button" className="btn btn-sm" disabled={cursors.current.length === 1 || state.loading} onClick={() => { cursors.current.pop(); load(); }}>较新记录</button><button type="button" className="btn btn-sm" disabled={state.data.next_cursor === null || state.loading} onClick={() => { if (state.data?.next_cursor != null) { cursors.current.push(state.data.next_cursor); load(); } }}>较早记录</button></div></>}</>}
   </section>;
 }

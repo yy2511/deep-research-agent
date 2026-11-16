@@ -2,6 +2,10 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import { AuthGate } from './components/AuthGate.tsx'
+import './theme.css'
+import './workspace-theme.css'
+import './settings-theme.css'
+import './management-theme.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

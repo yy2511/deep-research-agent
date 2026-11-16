@@ -1,0 +1,103 @@
+{
+  "baseUrl": "http://127.0.0.1:8765",
+  "browser": "156.0.8078.79",
+  "viewports": [
+    {
+      "name": "desktop",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "tablet",
+      "width": 1024,
+      "height": 900
+    },
+    {
+      "name": "mobile",
+      "width": 390,
+      "height": 844
+    }
+  ],
+  "screenshots": [
+    "desktop-login.png",
+    "desktop-home.png",
+    "desktop-settings-models.png",
+    "desktop-operations.png",
+    "desktop-operations-trend.png",
+    "desktop-users.png",
+    "desktop-user-dialog.png",
+    "desktop-owner.png",
+    "tablet-login.png",
+    "tablet-home.png",
+    "tablet-settings-models.png",
+    "tablet-operations.png",
+    "tablet-operations-trend.png",
+    "tablet-users.png",
+    "tablet-user-dialog.png",
+    "tablet-owner.png",
+    "mobile-login.png",
+    "mobile-home.png",
+    "mobile-settings-models.png",
+    "mobile-operations.png",
+    "mobile-operations-trend.png",
+    "mobile-users.png",
+    "mobile-user-dialog.png",
+    "mobile-owner.png"
+  ],
+  "checks": [
+    "desktop: operations today/all/custom GET filters",
+    "desktop: user list/filter, account dialog scrolling, Escape/focus restore",
+    "desktop: owner settings navigation and viewport screenshots",
+    "tablet: operations today/all/custom GET filters",
+    "tablet: user list/filter, account dialog scrolling, Escape/focus restore",
+    "tablet: owner settings navigation and viewport screenshots",
+    "mobile: operations today/all/custom GET filters",
+    "mobile: user list/filter, account dialog scrolling, Escape/focus restore",
+    "mobile: owner settings navigation and viewport screenshots"
+  ],
+  "pageErrors": [],
+  "consoleErrors": [],
+  "httpErrors": [],
+  "blockedExternal": [],
+  "blockedWrites": [],
+  "layoutIssues": [],
+  "chartGeometry": [
+    {
+      "viewport": "desktop",
+      "width": 948,
+      "viewBoxWidth": 948,
+      "labelFontSizes": [
+        11,
+        11,
+        11,
+        11,
+        11
+      ]
+    },
+    {
+      "viewport": "tablet",
+      "width": 752,
+      "viewBoxWidth": 752,
+      "labelFontSizes": [
+        11,
+        11,
+        11,
+        11,
+        11
+      ]
+    },
+    {
+      "viewport": "mobile",
+      "width": 354,
+      "viewBoxWidth": 354,
+      "labelFontSizes": [
+        11,
+        11,
+        11,
+        11,
+        11
+      ]
+    }
+  ],
+  "passed": true
+}

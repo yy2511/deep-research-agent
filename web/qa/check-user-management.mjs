@@ -6,7 +6,7 @@ const base = process.env.DRA_QA_URL;
 if (!base || !['localhost','127.0.0.1'].includes(new URL(base).hostname)) throw new Error('DRA_QA_URL must be an explicitly supplied localhost fixture URL');
 const directory = process.env.DRA_QA_SCREENSHOTS ?? '/tmp/user-management-screenshots';
 await fs.mkdir(directory, { recursive: true });
-const browser = await chromium.launch({ headless: true, executablePath: process.env.DRA_BROWSER_EXECUTABLE || undefined });
+const browser = await chromium.launch({ headless: true, chromiumSandbox: true, executablePath: process.env.DRA_BROWSER_EXECUTABLE || undefined });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
 const errors = []; page.on('pageerror', error => errors.push(String(error)));
 await page.route('**/*', route => ['localhost','127.0.0.1'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort());

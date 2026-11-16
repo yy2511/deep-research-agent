@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, fetchNdjson, getJSON, openStream, postJSON, postStream, replay, type PlannerEvent } from "./api";
 import { BriefCard, type ResearchBrief } from "./components/BriefCard";
+import { Brand } from "./components/Brand";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
 import { GapCard, type BriefGap, type GapAnswer } from "./components/GapCard";
 import { Icon } from "./components/Icon";
@@ -711,23 +712,30 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
   const guestBlocked = isGuest && trialBlocked(trial) !== null;
   const memberBlocked = account?.role === "user" && quota?.mode === "limited" && quota.runs_left === 0;
   const canSubmit = !guestBlocked && !memberBlocked && (isGuest || sourceSelection.source_mode === "web" || sourceSelection.document_ids.length > 0);
+  const currentAccountLabel = account ? accountLabel(account) : "";
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark"><Icon name="search" size={16} strokeWidth={2.2} /></span>
-          <span className="brand-text">研究工作台</span>
+        <div className="sidebar-brand-block">
+          <Brand />
+          <p className="sidebar-brand-caption">有据可查的深度研究</p>
         </div>
         {publicMode ? (
           <button className="btn btn-primary sidebar-new" onClick={onLogin}>
-            <span>登录后提问</span>
+            <Icon name="arrow-right" size={16} /><span>登录后提问</span>
           </button>
         ) : (
-          <button className="btn sidebar-new" onClick={openNewResearch}>
+          <button className="btn btn-primary sidebar-new" onClick={openNewResearch}>
             <Icon name="plus" size={16} /><span>新研究</span>
           </button>
         )}
+        <nav className="sidebar-navigation" aria-label="工作空间">
+          <button className={`sidebar-nav-item${page === "research" ? " is-active" : ""}`}
+            aria-current={page === "research" ? "page" : undefined} onClick={() => setPage("research")}>
+            <Icon name="layers" size={17} /><span>{publicMode ? "研究示例" : "研究空间"}</span>
+          </button>
+        </nav>
         <button className="icon-btn history-toggle" aria-label="最近的研究" aria-expanded={historyOpen}
           onClick={() => setHistoryOpen((open) => !open)}>
           <Icon name="history" size={18} />
@@ -740,25 +748,33 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
             onSelectLive={openLiveRun} onSelectReplay={openHistoryRun} showReplay={prefs.showReplay}
           />}
         </div>
+        {!publicMode && (
+          <button className={`sidebar-settings${page === "settings" ? " is-active" : ""}`} aria-label="设置"
+            aria-current={page === "settings" ? "page" : undefined} onClick={() => setPage(page === "settings" ? "research" : "settings")}>
+            <Icon name="sliders" size={16} /><span>{account?.role === "admin" || account?.role === "owner" ? "设置与管理" : "设置"}</span>
+          </button>
+        )}
         {account && (
           <div className="sidebar-account">
-            {account.avatar_url && <img className="sidebar-account-avatar" src={account.avatar_url} alt="" width={20} height={20} referrerPolicy="no-referrer" />}
-            <span className="sidebar-account-email" title={account.email ?? accountLabel(account)}>{accountLabel(account)}</span>
-            <span className="sidebar-account-role">{ROLE_LABELS[account.role]}</span>
+            {account.avatar_url
+              ? <img className="sidebar-account-avatar" src={account.avatar_url} alt="" width={32} height={32} referrerPolicy="no-referrer" />
+              : <span className="sidebar-account-avatar sidebar-account-initial" aria-hidden="true">{Array.from(currentAccountLabel.trim())[0]?.toUpperCase() || "E"}</span>}
+            <div className="sidebar-account-details">
+              <span className="sidebar-account-email" title={account.email ?? currentAccountLabel}>{currentAccountLabel}</span>
+              <span className="sidebar-account-role">{ROLE_LABELS[account.role]}</span>
+            </div>
             <button className="icon-btn" aria-label="退出登录" title="退出登录" onClick={onLogout}>
               <Icon name="logout" size={16} />
             </button>
           </div>
         )}
         <FeedbackLinks className="sidebar-feedback" compact />
-        {!publicMode && (
-          <button className={`sidebar-settings${page === "settings" ? " is-active" : ""}`} aria-label="设置"
-            aria-current={page === "settings" ? "page" : undefined} onClick={() => setPage(page === "settings" ? "research" : "settings")}>
-            <Icon name="sliders" size={16} /><span>设置</span>
-          </button>
-        )}
       </aside>
       <main className="workbench">
+        {page === "research" && !hasContent && <header className="workspace-header">
+          <div className="workspace-breadcrumb"><span>工作空间</span><Icon name="chevron-right" size={13} /><strong>{publicMode ? "公开示例" : "深度研究"}</strong></div>
+          <span className="workspace-status"><span aria-hidden="true" />原文可回查</span>
+        </header>}
         {streamDropped && <div className="conn-warn"><Icon name="warning" size={15} />连接中断，浏览器正在自动重连…</div>}
         {page === "settings" ? (
           <SettingsPage tab={settingsTab} onTab={setSettingsTab} prefs={prefs} onPrefs={updatePrefs} onDemo={playDemo}

@@ -1,0 +1,18 @@
+{
+  "status": "PASS",
+  "checks": [
+    "desktop: report",
+    "desktop: report-evidence",
+    "desktop: evidence",
+    "desktop: context",
+    "desktop: source",
+    "mobile: report",
+    "mobile: report-evidence",
+    "mobile: evidence",
+    "mobile: context",
+    "mobile: source"
+  ],
+  "browserErrors": [],
+  "blockedRequests": [],
+  "syntheticOnly": true
+}

@@ -10,7 +10,7 @@ const out = process.env.DRA_OPERATIONS_SCREENSHOTS;
 if (!out) throw new Error('Screenshot output directory required');
 await fs.mkdir(out, { recursive: true });
 const executablePath = process.env.DRA_BROWSER_EXECUTABLE || (process.platform === 'linux' ? '/usr/bin/chromium' : undefined);
-const browser = await chromium.launch({ headless: true, executablePath, args: ['--no-sandbox'] });
+const browser = await chromium.launch({ headless: true, executablePath, chromiumSandbox: true });
 const errors = [], external = [];
 const password = 'synthetic-browser-test-only';
 async function context(viewport) {
@@ -44,7 +44,12 @@ async function badge(page) {
     document.body.append(tag);
   });
 }
-async function metric(page, label) { return await page.locator('.operations-metric').filter({ has: page.locator('dt', { hasText: label }) }).locator('dd').innerText(); }
+async function metric(page, label) {
+  const exactLabel = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
+  return await page.locator('.operations-metric, .operations-current-metrics > div')
+    .filter({ has: page.locator('dt', { hasText: exactLabel }) })
+    .locator('dd > .operations-metric-value').innerText();
+}
 try {
   const admin = await context({ width: 1440, height: 1150 });
   await login(admin, 'admin@browser-test.example');

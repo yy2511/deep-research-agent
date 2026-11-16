@@ -1,0 +1,102 @@
+/* Shared EviSee foundations. Page-specific layouts live beside their components. */
+.evisee-brand { padding: 0; gap: 10px; }
+.evisee-mark { display: block; width: 37px; height: 37px; flex: none; color: var(--accent); }
+.evisee-wordmark { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.evisee-brand .brand-text { color: var(--ink); font-size: 24px; line-height: 1.1; font-weight: 750; letter-spacing: -.9px; }
+.evisee-tagline { color: var(--faint); font-size: 11px; line-height: 1.5; letter-spacing: .01em; }
+
+body { line-height: 1.65; text-rendering: optimizeLegibility; }
+::selection { background: var(--accent-line); color: var(--ink); }
+button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+button { transition: background-color .15s, border-color .15s, color .15s, box-shadow .15s; }
+.btn { height: 38px; padding: 0 15px; font-weight: 500; }
+.btn-primary { box-shadow: 0 2px 3px rgba(8, 116, 91, .08); }
+.btn-primary:focus-visible { outline-offset: 3px; }
+.btn-primary:disabled { box-shadow: none; }
+.btn-sm { height: 33px; padding-inline: 12px; font-size: 13px; }
+.icon-btn:hover { background: var(--accent-soft); color: var(--accent); }
+.input { height: 40px; border-color: var(--line-strong); box-shadow: 0 1px 2px rgba(24, 50, 36, .025); }
+.input:focus { box-shadow: 0 0 0 3px var(--accent-soft); }
+.textarea { height: auto; }
+.field-label { color: var(--ink-2); font-size: 13px; font-weight: 500; }
+.field-hint { color: var(--faint); }
+.search-field { height: 40px; border-color: var(--line-strong); }
+select, .uiselect-btn { border-color: var(--line-strong); }
+select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.uiselect-btn { min-height: 38px; }
+.uiselect-opt.on { background: var(--accent-soft); color: var(--accent); }
+.uiselect-list, .popover-panel { border-color: var(--line); box-shadow: var(--shadow-pop); }
+.tag, .badge { font-variant-numeric: tabular-nums; }
+.badge-model { background: #edf2f6; color: #496274; }
+.callout { background: var(--subtle); border-radius: 12px; }
+.callout-warn { background: var(--amber-soft); }
+.notice { border: 1px solid var(--accent-line); background: var(--accent-tint); color: var(--accent-hover); }
+.card, .list-card { border-color: var(--line); border-radius: 14px; }
+.list-row { padding-block: 17px; }
+.model-card .card-head strong { font-weight: 650; }
+.section-head h2 { letter-spacing: -.4px; }
+.setting-group > h3 { color: var(--ink); font-size: 15px; }
+.setting-row { padding-block: 17px; }
+.setting-row-text strong { font-weight: 550; }
+.switch { background: #cbd8d0; }
+.switch.is-on { background: var(--accent); }
+.switch:focus-visible { outline-offset: 4px; }
+
+/* Keep long-form research calm and readable while making source affordances distinct. */
+.workbench { background: var(--bg); }
+.cw-toolbar { background: var(--surface); border-color: var(--line); }
+.cw-title { font-weight: 600; }
+.tab { color: var(--faint); padding-inline: 15px; }
+.tab[aria-current="page"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.tab-count { border-radius: 5px; background: var(--subtle); padding: 0 5px; }
+.cw-reading { width: min(820px, 100%); padding: 36px 32px 48px; gap: 20px; }
+.cw-user-question, .user-bubble { background: var(--accent-soft); border-radius: 17px 17px 5px 17px; color: var(--ink-2); }
+.cw-user-followup { background: var(--subtle); }
+.cw-answer { font-size: 15px; line-height: 1.95; letter-spacing: .005em; }
+.cw-answer :is(h1, h2) { font-size: 22px; letter-spacing: -.3px; }
+.cw-answer h3 { font-size: 17px; }
+.cw-markdown pre { background: #edf3ef; border: 1px solid var(--line); }
+.cw-markdown th { background: var(--subtle); }
+.cw-markdown blockquote { border-left-color: var(--accent-line); }
+.cite-btn, .cite-num { border-radius: 5px; padding-inline: 6px; font-weight: 600; }
+.cw-process-rows .cw-fold-body { border-radius: 12px; }
+.cw-notice { background: var(--subtle); }
+.cw-notice-bar { border-radius: 0; background: var(--accent-tint); }
+.plan-card, .prerun-card { box-shadow: 0 3px 14px rgba(24, 53, 37, .035); }
+.plan-progress { border-radius: 14px; }
+.plan-icon { color: var(--placeholder); }
+.gap-option:hover:not(:disabled) { background: var(--accent-tint); }
+.cw-evidence-list { background: #f1f6f3; padding: 20px 16px; gap: 12px; }
+.evidence-item { padding: 17px; border-radius: 13px; box-shadow: 0 2px 4px rgba(23, 53, 37, .025); }
+.evidence-item:hover { border-color: var(--accent-line); }
+.evidence-item[aria-pressed="true"] { background: var(--accent-tint); }
+.evidence-item-claim { font-size: 14px; line-height: 1.75; font-weight: 550; }
+.cw-evidence-main { background: var(--surface); }
+.cw-evidence-detail > h2 { font-size: 23px; line-height: 1.55; letter-spacing: -.35px; }
+.cw-origin { width: fit-content; padding: 3px 9px; border-radius: 6px; background: var(--accent-soft); font-weight: 500; }
+.cw-quote-section blockquote { background: var(--accent-tint); border: 0; border-left: 3px solid var(--accent); border-radius: 0 10px 10px 0; padding: 16px 20px; }
+.cw-source-text { background: #fbfdfb; border-color: var(--line); }
+.cw-source-wide > .cw-link:first-child { position: sticky; top: 12px; z-index: 2; min-height: 36px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 2px 7px rgb(24 53 37 / .04); }
+.cw-source-badge { background: var(--accent-soft); color: var(--accent); }
+.cw-inspector { background: #fcfdfc; }
+.cw-payload { border-color: var(--line); background: #f6f9f7; }
+.cw-link { font-weight: 500; }
+.conn-warn { font-size: 13px; }
+
+@media (max-width: 800px) {
+  .evisee-mark { width: 30px; height: 30px; }
+  .evisee-brand .brand-text { font-size: 21px; }
+  .evisee-tagline { display: none; }
+  .cw-reading { padding: 24px 18px 36px; gap: 16px; }
+  .cw-source-wide { padding: 22px 20px; }
+  .cw-answer { font-size: 15px; }
+  .cw-answer :is(h1, h2) { font-size: 20px; }
+  .cw-evidence-list { padding: 14px; }
+  .cw-evidence-detail > h2 { font-size: 20px; }
+  .cw-toolbar { padding-inline: 16px; }
+  .cw-quote-section blockquote { padding: 14px 16px; font-size: 15px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button { transition: none; }
+}
