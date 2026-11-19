@@ -21,6 +21,9 @@ export function UserManagement({ account, onTrial }: { account: Account; onTrial
   const [draft, setDraft] = useState(EMPTY_FILTERS);
   const [selected, setSelected] = useState<number | null>(null);
   const [notice, setNotice] = useState("");
+  const [invitation, setInvitation] = useState<{ link: string; expiresAt: string } | null>(null);
+  const [creatingInvite, setCreatingInvite] = useState(false);
+  const [inviteFeedback, setInviteFeedback] = useState<{ message: string; error?: boolean } | null>(null);
   const applied = useRef(EMPTY_FILTERS);
   const cursors = useRef<Array<number | null>>([null]);
   const loader = useRef<ManagementLoader<UsersResult> | null>(null);
@@ -31,14 +34,57 @@ export function UserManagement({ account, onTrial }: { account: Account; onTrial
   }, []);
   const refresh = () => void loader.current?.load(usersPath(applied.current, cursors.current.at(-1) ?? null));
   const data = state.data;
+  const canIssueInvites = account.role === "owner" && !state.denied;
   const deny = () => {
     loader.current?.dispose();
     setSelected(null);
     setState({ data: null, loading: false, error: "管理权限已失效，请重新登录。", denied: true });
   };
+  async function generateInvite() {
+    setCreatingInvite(true);
+    setInviteFeedback(null);
+    try {
+      const created = await managementWrite<{ invite_code: string; expires_at: string }>("/api/admin/invites", "POST", {});
+      const link = `${window.location.origin}/#invite=${encodeURIComponent(created.invite_code)}`;
+      setInvitation({ link, expiresAt: created.expires_at });
+    } catch (failure) {
+      if (failure instanceof ManagementError && failure.status === 401) notifyUnauthorized();
+      setInviteFeedback({ message: failure instanceof Error ? failure.message : "生成邀请链接失败。", error: true });
+    } finally {
+      setCreatingInvite(false);
+    }
+  }
+
+  async function copyInvite(link: string) {
+    try {
+      await navigator.clipboard.writeText(link);
+      setInviteFeedback({ message: "邀请链接已复制。" });
+    } catch {
+      setInviteFeedback({ message: "复制失败，请选中链接手动复制。", error: true });
+    }
+  }
+
   return <div className="settings-section user-management">
     <div className="section-head"><div><h2>用户管理</h2><p className="field-hint">管理账号身份、状态和每日免费次数，不显示私人研究内容。</p></div>
-      <button type="button" className="btn btn-sm" disabled={state.loading || state.denied} onClick={refresh}>刷新</button></div>
+      <div className="section-head-actions">
+        {canIssueInvites && <button type="button" className="btn btn-sm" disabled={creatingInvite} onClick={() => void generateInvite()}>
+          {creatingInvite ? "正在生成…" : "生成邀请链接"}
+        </button>}
+        <button type="button" className="btn btn-sm" disabled={state.loading || state.denied} onClick={refresh}>刷新</button>
+      </div>
+    </div>
+    {canIssueInvites && invitation && <div className="management-invite">
+      <label className="field">
+        <span className="field-label">邀请链接</span>
+        <input className="input" readOnly value={invitation.link} />
+      </label>
+      <div className="management-invite-actions">
+        <button type="button" className="btn btn-sm" disabled={creatingInvite} onClick={() => void copyInvite(invitation.link)}>复制链接</button>
+        <p className="field-hint">有效期至 <time dateTime={invitation.expiresAt}>{new Date(invitation.expiresAt).toLocaleString()}</time></p>
+      </div>
+    </div>}
+    {canIssueInvites && inviteFeedback && <p role={inviteFeedback.error ? "alert" : "status"}
+      className={inviteFeedback.error ? "field-hint is-bad" : "field-hint is-ok"}>{inviteFeedback.message}</p>}
     {data?.governance.owner_user_id === null && <p className="notice">尚未设置平台负责人，请联系部署维护者在服务器明确指定负责人。不会自动选择账号。</p>}
     <form className="management-filters" onSubmit={event => { event.preventDefault(); applied.current = { ...draft }; cursors.current = [null]; setNotice(""); void loader.current?.load(usersPath(draft)); }}>
       <label>查找账号<input className="input" type="search" value={draft.search} placeholder="邮箱或 GitHub 账号" onChange={event => setDraft({ ...draft, search: event.target.value })} /></label>

@@ -10,7 +10,7 @@ from pydantic import Field, StrictInt, field_validator
 
 from dra.api.common import _StrictPayload, service_errors
 from dra.api.deps import ADMIN_ONLY, SESSION_COOKIE, CurrentUserDep, ReadyDatabaseDep
-from dra.api.services import github_auth, user_management as service
+from dra.api.services import auth, github_auth, user_management as service
 from dra.api.services.errors import ServiceError
 
 router = APIRouter(dependencies=ADMIN_ONLY)
@@ -72,6 +72,16 @@ class PasswordReq(TransferReq):
 
 class EmptyReq(_StrictPayload):
     pass
+
+
+@router.post('/api/admin/invites', status_code=201)
+def create_invite(_req: EmptyReq, response: Response, user: CurrentUserDep, db: ReadyDatabaseDep):
+    if user.role != 'owner':
+        raise HTTPException(403, '只有平台负责人可以生成邀请链接')
+    no_store(response)
+    with service_errors():
+        code, expires_at = auth.create_invite(db, created_by=user.id)
+    return {'invite_code': code, 'expires_at': expires_at}
 
 
 @router.get('/api/admin/users')

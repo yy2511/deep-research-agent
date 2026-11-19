@@ -1,5 +1,5 @@
 """管理边界、乐观锁、会话撤销及负责人单次移交证明的离线回归。"""
-from datetime import timedelta
+from datetime import datetime, timedelta
 import threading
 
 import pytest
@@ -10,7 +10,7 @@ from dra.api.app import app
 from dra.api.deps import SESSION_COOKIE
 from dra.api.services import auth, user_management as management
 from dra.api.services.errors import Conflict, Forbidden, InvalidRequest, Unauthorized
-from dra.db_tables import ManagementAudit, OwnerTransferProof, PlatformGovernance, User, UserQuotaPolicy, utcnow
+from dra.db_tables import Invite, ManagementAudit, OwnerTransferProof, PlatformGovernance, User, UserQuotaPolicy, utcnow
 
 pytestmark = pytest.mark.real_auth
 PASSWORD = "correct horse battery"
@@ -39,6 +39,46 @@ def test_management_routes_deny_non_managers_and_anonymous(accounts):
         for path in paths:
             assert client.get(path).status_code == code
         assert client.patch(f"/api/admin/users/{rows['user'].id}/status", json={"status": "disabled", "expected_version": 0}).status_code == code
+
+
+def test_only_owner_can_issue_invites(database, accounts):
+    _, _, clients = accounts
+    path = "/api/admin/invites"
+    assert TestClient(app).post(path, json={}).status_code == 401
+    for role in ("admin", "user", "guest"):
+        assert clients[role].post(path, json={}).status_code == 403
+    assert clients["owner"].post(path, json={}, headers={"Origin": "https://other.test"}).status_code == 403
+    with database.session() as session:
+        assert session.scalar(select(Invite)) is None
+
+
+def test_owner_invite_uses_existing_registration_and_expires_after_one_signup(database, accounts):
+    rows, _, clients = accounts
+    response = clients["owner"].post("/api/admin/invites", json={})
+    assert response.status_code == 201
+    assert response.headers["Cache-Control"] == "no-store"
+    invite = response.json()
+    code = invite["invite_code"]
+    with database.session() as session:
+        saved = session.scalars(select(Invite)).one()
+        assert saved.created_by == rows["owner"].id
+        assert saved.code_hash == auth.hash_secret(code)
+        assert saved.expires_at - saved.created_at == timedelta(days=14)
+        assert datetime.fromisoformat(invite["expires_at"]) == saved.expires_at
+
+    invitee = TestClient(app)
+    payload = {"invite_code": code, "password": PASSWORD}
+    existing_email = invitee.post("/api/auth/register", json={**payload, "email": rows["user"].email})
+    assert existing_email.status_code == 409
+    registered = invitee.post("/api/auth/register", json={**payload, "email": "invitee@example.com"})
+    assert registered.status_code == 201
+    account = invitee.get("/api/me").json()
+    assert account["id"] == registered.json()["id"]
+    assert account["role"] == "user"
+    assert account["quota"]["mode"] == "unlimited"
+    reused = TestClient(app).post("/api/auth/register", json={**payload, "email": "second@example.com"})
+    assert reused.status_code == 400
+    assert reused.json()["detail"] == auth.INVITE_INVALID
 
 
 def test_list_has_stable_pagination_search_and_no_sensitive_fields(accounts):

@@ -12,6 +12,10 @@ type GateState =
   | { kind: "error"; message: string }
   | { kind: "ready"; account: Account };
 
+function inviteFromLocation(): string {
+  return new URLSearchParams(window.location.hash.slice(1)).get("invite") ?? "";
+}
+
 /**
  * 进入工作台前确认登录。已登录才渲染工作台；任何请求 401 时回到登录页。
  * 研究在服务端继续进行，重新登录后可以接着查看。
@@ -24,6 +28,7 @@ export function AuthGate({ children, renderPublic }: {
 }) {
   const [state, setState] = useState<GateState>({ kind: "checking" });
   const [wantsLogin, setWantsLogin] = useState(false);
+  const [invite, setInvite] = useState(inviteFromLocation);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   // GitHub 登录失败跳回来时带着 ?login_error=…：读出说明后从地址栏去掉，刷新不再重复显示。
   const [githubError] = useState(() => {
@@ -49,6 +54,11 @@ export function AuthGate({ children, renderPublic }: {
   }, []);
 
   useEffect(() => { void check(); }, [check]);
+  useEffect(() => {
+    const updateInvite = () => setInvite(inviteFromLocation());
+    window.addEventListener("hashchange", updateInvite);
+    return () => window.removeEventListener("hashchange", updateInvite);
+  }, []);
   useEffect(() => onUnauthorized(() => setState((s) =>
     s.kind === "ready" ? { kind: "anonymous", notice: "登录已过期，请重新登录。进行中的研究不受影响。" } : s)), []);
   // 登录过期、退出后回到登录页时也要知道有没有 GitHub 登录。
@@ -92,11 +102,23 @@ export function AuthGate({ children, renderPublic }: {
   }
   const showcases = state.showcases ?? [];
   const viewable = hasViewableShowcase(showcases);
-  const showPublic = renderPublic && viewable && !wantsLogin && !state.notice && !githubError;
+  const showPublic = renderPublic && viewable && !wantsLogin && !invite && !state.notice && !githubError;
   if (showPublic) return <>{renderPublic(showcases, () => setWantsLogin(true))}</>;
-  return <AuthPage notice={state.notice} github={state.github === true} initialError={githubError}
-    onBackToShowcases={renderPublic && viewable ? () => setWantsLogin(false) : undefined}
-    onAuthed={(account) => { setWantsLogin(false); setState({ kind: "ready", account }); }} />;
+  return <AuthPage key={invite} initialMode={invite ? "register" : "login"} initialInvite={invite}
+    notice={state.notice} github={state.github === true} initialError={githubError}
+    onBackToShowcases={!invite && renderPublic && viewable ? () => setWantsLogin(false) : undefined}
+    onAuthed={(account, mode) => {
+      if (mode === "register" && invite) {
+        const url = new URL(window.location.href);
+        const fragment = new URLSearchParams(url.hash.slice(1));
+        fragment.delete("invite");
+        url.hash = fragment.toString();
+        window.history.replaceState(window.history.state, "", url);
+        setInvite("");
+      }
+      setWantsLogin(false);
+      setState({ kind: "ready", account });
+    }} />;
 }
 
 export function LogoutError({ message, onRetry, onDismiss }: { message: string; onRetry: () => void; onDismiss: () => void }) {
@@ -112,15 +134,15 @@ export function LogoutError({ message, onRetry, onDismiss }: { message: string; 
 
 const EMPTY: AuthFields = { email: "", password: "", confirm: "", invite: "" };
 
-export function AuthPage({ onAuthed, notice, initialMode = "login", github = false, initialError = null, onBackToShowcases }: {
-  onAuthed: (account: Account) => void; notice?: string; initialMode?: AuthMode;
+export function AuthPage({ onAuthed, notice, initialMode = "login", initialInvite = "", github = false, initialError = null, onBackToShowcases }: {
+  onAuthed: (account: Account, mode: AuthMode) => void; notice?: string; initialMode?: AuthMode; initialInvite?: string;
   /** 服务端配置了 GitHub 登录时显示按钮（阶段 2，#45）。 */
   github?: boolean; initialError?: string | null;
   /** 有示例时（#47），登录页可以回去继续看示例。 */
   onBackToShowcases?: () => void;
 }) {
   const [mode, setMode] = useState<AuthMode>(initialMode);
-  const [fields, setFields] = useState<AuthFields>(EMPTY);
+  const [fields, setFields] = useState<AuthFields>({ ...EMPTY, invite: initialInvite });
   const [error, setError] = useState<string | null>(initialError);
   const [busy, setBusy] = useState(false);
   const set = (key: keyof AuthFields) => (e: { target: { value: string } }) =>
@@ -142,7 +164,7 @@ export function AuthPage({ onAuthed, notice, initialMode = "login", github = fal
       const account = mode === "login"
         ? await login(fields.email, fields.password)
         : await register(fields.invite, fields.email, fields.password);
-      onAuthed(account);
+      onAuthed(account, mode);
     } catch (err) {
       setError(err instanceof Error ? err.message : "请求失败");
     } finally {

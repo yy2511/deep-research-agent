@@ -58,7 +58,9 @@ uv run python -m dra.web
 cd web && npm ci && npm run dev
 ```
 
-打开工作台后用这个账号登录。别人要用时，用 `uv run python -m dra.admin create-invite` 生成邀请码（只显示一次、默认 14 天有效），对方在登录页“注册账号”里填写；忘记密码由管理员执行 `reset-password --email ...` 重设，`disable-user` / `enable-user` 停用或恢复账号。模型、API 连接、技能和外部资料是全站设置，只有管理员能在设置页修改；通过邀请码注册的是普通用户。
+打开工作台后用这个账号登录。平台负责人可以在「平台管理 → 用户管理」生成并复制邀请链接。对方打开链接，填写邮箱和密码即可注册为普通用户。链接默认 14 天有效，成功注册一次后失效。[负责人初始化见部署说明](docs/deployment.md)。
+
+部署维护者也可以用 `uv run python -m dra.admin create-invite` 生成邀请码（只显示一次、默认 14 天有效），由对方在登录页“注册账号”里手动填写。忘记密码由管理员执行 `reset-password --email ...` 重设，`disable-user` / `enable-user` 停用或恢复账号。模型、API 连接、技能和外部资料是全站设置，只有管理员能在设置页修改。
 
 **GitHub 登录（可选）**：在 GitHub → Settings → Developer settings → OAuth Apps 新建应用，回调地址填 `http://localhost:5173/api/auth/github/callback`（线上换成自己的域名），把 Client ID、Client Secret 写进 `.env` 的 `DRA_GITHUB_CLIENT_ID`、`DRA_GITHUB_CLIENT_SECRET`。两个都配置后登录页出现“用 GitHub 登录”。GitHub 登录的账号是访客（`guest`），只申请公开资料；用 `set-role --github <登录名> --role user` 可升为普通用户，`disable-user --github <登录名>` 停用。
 

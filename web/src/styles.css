@@ -922,6 +922,8 @@ select:focus { outline: none; border-color: var(--accent); }
 
 /* Platform account management: identity data stays in this administrative view. */
 .management-filters { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin:18px 0; }
+.management-invite { margin-top: 16px; }
+.management-invite-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 8px 0; }
 .management-filters label,.management-fields label,.owner-management label { display:flex; flex-direction:column; gap:6px; font-size:13px; }
 .management-filters label:first-child { flex:1; min-width:160px; }
 .management-filters select,.management-fields select { font:inherit; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--bg); color:inherit; }
