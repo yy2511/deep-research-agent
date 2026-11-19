@@ -36,6 +36,11 @@ describe("登录页", () => {
     expect(html).toMatch(/autocomplete="new-password"/i);
   });
 
+  it("注册表单显示链接里带来的邀请码", () => {
+    const html = renderToStaticMarkup(<AuthPage onAuthed={() => {}} initialMode="register" initialInvite="test-code" />);
+    expect(html).toMatch(/<input[^>]+name="invite"[^>]+value="test-code"/);
+  });
+
   it("登录失效时说明原因", () => {
     const html = renderToStaticMarkup(<AuthPage onAuthed={() => {}} notice="登录已过期，请重新登录。" />);
     expect(html).toContain("登录已过期，请重新登录。");

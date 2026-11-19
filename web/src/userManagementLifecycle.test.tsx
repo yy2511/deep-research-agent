@@ -13,7 +13,9 @@ vi.mock("react", async original => ({
   },
   useRef(initial: unknown) { const index = hooks.cursor++; if (!(index in hooks.cells)) hooks.cells[index] = { current: initial }; return hooks.cells[index]; },
   useEffect(effect: () => void | (() => void)) { if (!hooks.initialized) hooks.effects.push(effect); },
+  useCallback(callback: unknown) { return callback; },
 }));
+import { AuthGate, AuthPage } from "./components/AuthGate";
 import { UserDetail, UserManagement } from "./components/UserManagement";
 import { OwnerManagement } from "./components/OwnerManagement";
 
@@ -111,5 +113,66 @@ describe("负责人初始化生命周期", () => {
     hooks.effects = []; hooks.initialized = false; mount(); await flush();
     resolveOld(response({ ...governance, owner_user_id: 999 })); await flush();
     expect(text(render())).toContain("账号 ID 1"); expect(text(render())).not.toContain("账号 ID 999");
+  });
+});
+
+describe("邀请链接", () => {
+  const list = { items: [], next_cursor: null, governance: { owner_user_id: 1, version: 1 } };
+
+  it("负责人生成并复制本站邀请链接", async () => {
+    const expiresAt = "2026-12-03T04:00:00Z";
+    const fetch = vi.fn((url: string) => Promise.resolve(url === "/api/admin/invites"
+      ? response({ invite_code: "test-code_1", expires_at: expiresAt }, 201)
+      : response(list)));
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("fetch", fetch);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    vi.stubGlobal("window", { location: { origin: "https://research.example.test" } });
+    component = () => UserManagement({ account, onTrial: vi.fn() });
+    mount();
+    await flush();
+
+    button(render(), "生成邀请链接").props.onClick();
+    expect(button(render(), "正在生成…").props.disabled).toBe(true);
+    await flush();
+    expect(fetch).toHaveBeenCalledWith("/api/admin/invites", expect.objectContaining({ method: "POST", body: "{}" }));
+    expect(nodes(render()).find(node => node.type === "time")?.props.dateTime).toBe(expiresAt);
+    button(render(), "复制链接").props.onClick();
+    await flush();
+    expect(writeText).toHaveBeenCalledWith("https://research.example.test/#invite=test-code_1");
+    expect(text(render())).toContain("邀请链接已复制");
+  });
+
+  it("普通管理员的用户管理页不显示发放入口", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(response(list))));
+    component = () => UserManagement({ account: { ...account, role: "admin" }, onTrial: vi.fn() });
+    mount();
+    await flush();
+    expect(text(render())).not.toContain("生成邀请链接");
+  });
+
+  it("邀请链接优先于公开示例，同页打开也有效，注册成功后清除邀请码", async () => {
+    const location = new URL("https://research.example.test/#invite=first-code");
+    const replaceState = vi.fn((_state: unknown, _title: string, url: URL) => { location.href = url.href; });
+    const browser = Object.assign(new EventTarget(), { location, history: { state: null, replaceState } });
+    vi.stubGlobal("window", browser);
+    vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(
+      url === "/api/me" ? response({}, 401) :
+        url === "/api/showcases" ? response([{ available: true }]) : response({ github: true }),
+    )));
+    const renderPublic = vi.fn(() => <div>公开示例</div>);
+    component = () => AuthGate({ children: () => <div>已登录</div>, renderPublic });
+    mount();
+    await flush();
+
+    const registration = () => nodes(render()).find(node => node.type === AuthPage)!;
+    expect(registration().props).toMatchObject({ initialMode: "register", initialInvite: "first-code" });
+    expect(renderPublic).not.toHaveBeenCalled();
+    location.hash = "#invite=second-code";
+    browser.dispatchEvent(new Event("hashchange"));
+    expect(registration().props.initialInvite).toBe("second-code");
+    registration().props.onAuthed({ ...account, role: "user" }, "register");
+    expect(location.hash).toBe("");
+    expect(text(render())).toBe("已登录");
   });
 });
