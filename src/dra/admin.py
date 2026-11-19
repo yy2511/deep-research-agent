@@ -183,6 +183,44 @@ def _showcase(args: argparse.Namespace) -> int:
         database.dispose()
 
 
+def _governance(args: argparse.Namespace) -> int:
+    from dra.api.services import user_management as management
+    database = _ready_database()
+    try:
+        if args.command == "list-users":
+            for user in management.cli_users(database):
+                print(f"{user['id']}  {user['email'] or user['display_name'] or '(无显示名)'}  "
+                      f"{user['role']}  {user['status']}")
+            return 0
+        candidates = {user['id']: user for user in management.cli_users(database)}
+        target = candidates.get(args.user_id)
+        if target is None:
+            raise _UsageError("目标账号不存在")
+        print(f"目标账号：id={target['id']}，显示名={target['display_name'] or '(无)'}，"
+              f"邮箱={target['email'] or '(无)'}，角色={target['role']}，状态={target['status']}")
+        if target['role'] != 'admin' or target['status'] != 'active':
+            raise _UsageError("目标必须是有效的平台管理员")
+        if args.command == "recover-owner":
+            old = candidates.get(args.old_owner_id)
+            if old is None:
+                raise _UsageError("原负责人账号不存在")
+            print(f"原负责人：id={old['id']}，显示名={old['display_name'] or '(无)'}，"
+                  f"邮箱={old['email'] or '(无)'}，角色={old['role']}，状态={old['status']}")
+            print(f"恢复原因：{args.reason}")
+        print(f"将账号 id={args.user_id} 设为唯一平台负责人，原有登录会话会失效。")
+        if not args.yes and input("确认目标身份？输入 y：").strip().lower() != "y":
+            print("已取消，没有改动")
+            return 1
+        if args.command == "bootstrap-owner":
+            management.bootstrap_owner(database, args.user_id)
+        else:
+            management.recover_owner(database, args.old_owner_id, args.user_id, args.reason)
+        print(f"平台负责人已设为 id={args.user_id}，请重新登录。")
+        return 0
+    finally:
+        database.dispose()
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m dra.admin", description="研究工作台管理命令")
     commands = parser.add_subparsers(dest="command", required=True, metavar="命令")
@@ -243,6 +281,16 @@ def _parser() -> argparse.ArgumentParser:
     showcase.add_argument("--yes", action="store_true", help="不询问，直接确认（脚本用）")
     showcase.add_argument("--runs-dir", type=Path, help="运行目录，默认 <数据目录>/runs")
     showcase.set_defaults(handler=_showcase)
+    listing = commands.add_parser("list-users", help="只读列出账号ID、身份与状态")
+    listing.set_defaults(handler=_governance)
+    for name in ("bootstrap-owner", "recover-owner"):
+        command = commands.add_parser(name, help="显式初始化/恢复唯一平台负责人")
+        command.add_argument("--user-id", type=int, required=True)
+        command.add_argument("--yes", action="store_true", help="已人工核对，确认变更")
+        if name == "recover-owner":
+            command.add_argument("--old-owner-id", type=int, required=True)
+            command.add_argument("--reason", required=True)
+        command.set_defaults(handler=_governance)
     return parser
 
 

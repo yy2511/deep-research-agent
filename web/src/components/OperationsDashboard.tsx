@@ -24,7 +24,7 @@ export function OperationsResults({ data }: { data: OperationsSnapshot }) {
         <Metric label="停用账号" value={data.totals.disabled_users} />
         <Metric label="公开示例" value={data.totals.showcases} />
       </dl>
-      <p className="field-hint">访客 {number(data.totals.roles.guest)} / 用户 {number(data.totals.roles.user)} / 管理员 {number(data.totals.roles.admin)}。可用账号不代表近期活跃。</p>
+      <p className="field-hint">访客 {number(data.totals.roles.guest)} / 用户 {number(data.totals.roles.user)} / 管理员 {number(data.totals.roles.admin)} / 平台负责人 {number(data.totals.roles.owner ?? 0)}。可用账号不代表近期活跃。</p>
     </section>
     <section aria-labelledby="operations-period">
       <h3 id="operations-period">期间活动</h3>

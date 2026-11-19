@@ -11,10 +11,11 @@ export { onUnauthorized } from "./session";
 
 /** GitHub 登录的访客（guest）没有邮箱，显示 display_name（阶段 2，#45）。 */
 export type Account = {
-  id: number; email: string | null; role: "guest" | "user" | "admin";
+  id: number; email: string | null; role: "guest" | "user" | "admin" | "owner";
   display_name?: string | null; avatar_url?: string | null;
   /** 访客的试用次数（#49/#50）；非访客为 null。 */
   trial?: TrialStatus | null;
+  quota?: import("./userManagement").UsageStatus | null;
 };
 
 /** 侧边栏等处显示的名字。 */

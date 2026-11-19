@@ -290,3 +290,41 @@ describe("计划卡的内容", () => {
     expect(html).not.toContain("规划器调用");
   });
 });
+
+
+describe("规划额度幂等键与重复点击", () => {
+  it("三个主动阶段各有唯一请求键，首次规划同 tick 双击只提交一次", async () => {
+    let resolvePrepare!: (value: unknown) => void;
+    mockPost("/api/skills/prepare", () => new Promise(resolve => { resolvePrepare = resolve; }));
+    mockPost("/api/brief", () => ({ kind: "clarify", gaps: GAPS }));
+    const first = handlers.handleSimpleSubmit("合成问题");
+    const duplicate = handlers.handleSimpleSubmit("合成问题");
+    resolvePrepare({ skill_selection: "frozen-catalog" });
+    await Promise.all([first, duplicate]);
+    expect(bodies().filter(item => item.url === "/api/brief")).toHaveLength(1);
+    handlers = appFactory();
+    let resolvePlan!: (value: unknown) => void;
+    mockPost("/api/brief/plan", () => new Promise(resolve => { resolvePlan = resolve; }));
+    const plan = handlers.handleGapSubmit([]); const duplicatePlan = handlers.handleGapSubmit([]);
+    resolvePlan({ kind: "plan", brief: BRIEF }); await Promise.all([plan, duplicatePlan]);
+    expect(bodies().filter(item => item.url === "/api/brief/plan")).toHaveLength(1);
+    handlers = appFactory();
+    let resolveRevise!: (value: unknown) => void;
+    mockPost("/api/brief/revise", () => new Promise(resolve => { resolveRevise = resolve; }));
+    const revise = handlers.handleBriefRevise("合成反馈"); const duplicateRevise = handlers.handleBriefRevise("合成反馈");
+    resolveRevise({ kind: "plan", brief: BRIEF }); await Promise.all([revise, duplicateRevise]);
+    expect(bodies().filter(item => item.url === "/api/brief/revise")).toHaveLength(1);
+    const ids = bodies().filter(item => item.url.startsWith("/api/brief")).map(item => item.body.request_id);
+    expect(ids).toHaveLength(3); expect(new Set(ids).size).toBe(3);
+    for (const id of ids) expect(id).toMatch(/^[a-f0-9-]{36}$/);
+  });
+  it("明确失败后主动新规划释放防重锁并使用新请求键", async () => {
+    mockPost("/api/brief", () => { throw new Error("合成规划失败"); });
+    await handlers.handleSimpleSubmit("合成问题");
+    handlers = appFactory();
+    mockPost("/api/brief", () => ({ kind: "plan", brief: BRIEF }));
+    await handlers.handleSimpleSubmit("合成问题");
+    const ids = bodies().filter(item => item.url === "/api/brief").map(item => item.body.request_id);
+    expect(ids).toHaveLength(2); expect(ids[0]).not.toBe(ids[1]);
+  });
+});

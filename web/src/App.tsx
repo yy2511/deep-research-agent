@@ -22,6 +22,7 @@ import { type PlanTrace } from "./types";
 import { accountLabel, type Account } from "./auth";
 import { fetchShowcases, showcaseEntry, showcaseOf, type Showcase } from "./showcases";
 import { trialBlocked, type TrialStatus } from "./trial";
+import { ROLE_LABELS, type UsageStatus } from "./userManagement";
 import { TrialNotice } from "./components/TrialNotice";
 import { FeedbackLinks } from "./components/FeedbackLinks";
 
@@ -76,6 +77,7 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
   // 访客的试用次数（#50）：登录时随账号带来，之后每次有研究开始或结束时重新读。
   const isGuest = account?.role === "guest";
   const [trial, setTrial] = useState<TrialStatus | null>(account?.trial ?? null);
+  const [quota, setQuota] = useState<UsageStatus | null>(account?.quota ?? null);
   const [view, setView] = useState<RunView>(initialView());
   const [selectedSkills,setSelectedSkills] = useState<string[]>([]);
   const [sourceSelection,setSourceSelection] = useState<SourceSelection>(() => ({
@@ -93,6 +95,14 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
   // 主区显示研究还是设置；设置页不打断正在进行的研究。
   const [page, setPage] = useState<"research" | "settings">("research");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("models");
+  useEffect(() => {
+    if (account?.role !== "owner" || typeof window === "undefined") return;
+    const query = new URLSearchParams(window.location.search);
+    if (query.get("owner_transfer_ready") !== "1") return;
+    setPage("settings"); setSettingsTab("owner");
+    query.delete("owner_transfer_ready"); query.delete("target_id");
+    window.history.replaceState(null, "", `${window.location.pathname}${query.size ? `?${query}` : ""}${window.location.hash}`);
+  }, [account?.role]);
   // atMs 统一用事件自带的服务端时间戳 e.ts*1000，live/回放/demo 三路来源都一样——
   // 不用 Date.now()：刷新重连时补发的 backlog 是一批历史事件，若按"收到的这一刻"
   // 打点，startedAtMs 会被记成重连时刻，早前流逝的时间全部消失，秒表从 0 重新走
@@ -114,6 +124,8 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
   const [planProgress, setPlanProgress] = useState<PlanProgress | null>(null);
   const [planThinking, setPlanThinking] = useState("");
   const planProgressRef = useRef<PlanProgress | null>(null);
+  // React state updates are batched; a ref blocks two submissions in the same tick.
+  const planningInFlight = useRef(false);
   // 取消请求已发出、运行还没结束：按钮显示"取消中…"并禁用，直到本次运行收尾。
   const [cancelling, setCancelling] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
@@ -452,7 +464,8 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
    *  让用户看清目标与路线。是否要确认由模型判、服务端只透传，前端不再二次裁决。
    */
   async function handleSimpleSubmit(q: string) {
-    if (briefing || submitting) return;
+    if (briefing || submitting || planningInFlight.current) return;
+    planningInFlight.current = true;
     setBriefing(true);
     setBriefError(null);
     setBriefFailTrace(null);
@@ -462,6 +475,7 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
       const prepared = await postJSON<{skill_selection:string}>("/api/skills/prepare", {selected:selectedSkills});
       sourceRef.current = {...sourceRef.current, skill_selection:prepared.skill_selection};
       const res = await postStream<BriefResponse>("/api/brief", {
+        request_id: crypto.randomUUID(),
         query: q,
         ...sourceRef.current,
         trace_full_llm_io: traceFull,
@@ -476,6 +490,7 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
       setBriefError(e instanceof Error ? e.message : String(e));
       if (e instanceof ApiError && e.trace) setBriefFailTrace(e.trace);
     } finally {
+      planningInFlight.current = false;
       finishPlanning();
       setBriefing(false);
     }
@@ -492,12 +507,14 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
 
   /** 带着用户对缺口问题的回答生成计划；answers 为空表示"全部跳过"。 */
   async function handleGapSubmit(answers: GapAnswer[]) {
-    if (submitting || gaps === null) return;
+    if (submitting || gaps === null || planningInFlight.current) return;
+    planningInFlight.current = true;
     setSubmitting(true);
     setBriefError(null);
     setBriefFailTrace(null);
     try {
       const res = await postStream<BriefResponse>("/api/brief/plan", {
+        request_id: crypto.randomUUID(),
         query: queryRef.current,
         gaps,
         ...sourceRef.current,
@@ -514,6 +531,7 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
       setBriefError(e instanceof Error ? e.message : String(e));
       if (e instanceof ApiError && e.trace) setBriefFailTrace(e.trace);
     } finally {
+      planningInFlight.current = false;
       finishPlanning();
       setSubmitting(false);
     }
@@ -549,10 +567,13 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
   }
 
   async function handleBriefRevise(feedback: string) {
+    if (submitting || briefing || !brief || planningInFlight.current) return;
+    planningInFlight.current = true;
     setBriefHint(null);
     setSubmitting(true);   // 修订飞行中也要挡住"开始研究"/"取消"，跟 handleStart 共用同一个忙态
     try {
       const res = await postStream<BriefResponse>("/api/brief/revise", {
+        request_id: crypto.randomUUID(),
         brief,
         feedback,
         ...sourceRef.current,
@@ -571,6 +592,7 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
       }
       setBrief(next);
     } finally {
+      planningInFlight.current = false;
       finishPlanning();
       setSubmitting(false);
     }
@@ -680,14 +702,15 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
   const hasContent = runId !== null || view.startedAtMs !== undefined;
   const busy = briefing || submitting;
   useEffect(() => {
-    if (!isGuest) return;
+    if (!isGuest && account?.role !== "user") return;
     let live = true;
-    getJSON<Account>("/api/me").then((me) => { if (live) setTrial(me.trial ?? null); }).catch(() => {});
+    getJSON<Account>("/api/me").then((me) => { if (live) { setTrial(me.trial ?? null); setQuota(me.quota ?? null); } }).catch(() => {});
     return () => { live = false; };
-  }, [isGuest, runsVersion, runId, briefError, startError]);
+  }, [isGuest, account?.role, runsVersion, runId, briefError, startError]);
   // 访客只用网页来源（服务端同样强制）；次数用完或未开放时按钮变灰，说明在 TrialNotice 里。
   const guestBlocked = isGuest && trialBlocked(trial) !== null;
-  const canSubmit = !guestBlocked && (isGuest || sourceSelection.source_mode === "web" || sourceSelection.document_ids.length > 0);
+  const memberBlocked = account?.role === "user" && quota?.mode === "limited" && quota.runs_left === 0;
+  const canSubmit = !guestBlocked && !memberBlocked && (isGuest || sourceSelection.source_mode === "web" || sourceSelection.document_ids.length > 0);
 
   return (
     <div className="app-shell">
@@ -721,8 +744,7 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
           <div className="sidebar-account">
             {account.avatar_url && <img className="sidebar-account-avatar" src={account.avatar_url} alt="" width={20} height={20} referrerPolicy="no-referrer" />}
             <span className="sidebar-account-email" title={account.email ?? accountLabel(account)}>{accountLabel(account)}</span>
-            {account.role === "admin" && <span className="sidebar-account-role">管理员</span>}
-            {account.role === "guest" && <span className="sidebar-account-role">访客</span>}
+            <span className="sidebar-account-role">{ROLE_LABELS[account.role]}</span>
             <button className="icon-btn" aria-label="退出登录" title="退出登录" onClick={onLogout}>
               <Icon name="logout" size={16} />
             </button>
@@ -740,11 +762,12 @@ function App({ account, onLogout, publicShowcases, onLogin }: {
         {streamDropped && <div className="conn-warn"><Icon name="warning" size={15} />连接中断，浏览器正在自动重连…</div>}
         {page === "settings" ? (
           <SettingsPage tab={settingsTab} onTab={setSettingsTab} prefs={prefs} onPrefs={updatePrefs} onDemo={playDemo}
-            isAdmin={account?.role === "admin"} />
+            isAdmin={account?.role === "admin" || account?.role === "owner"} account={account} />
         ) : !hasContent && publicMode ? (
           <div className="stage-main"><p className="history-empty">从左侧选一个示例查看。</p></div>
         ) : !hasContent ? (
           <div className="stage-main">
+            {account?.role === "user" && quota && <p className="notice" role="status">{quota.mode === "unlimited" ? "个人额度：不限次数。" : `今日研究剩余 ${quota.runs_left ?? 0} 次，规划剩余 ${quota.briefs_left ?? 0} 次；研究含首问和追问。`}{quota.resets_at ? ` 下次重置：${new Date(quota.resets_at).toLocaleString()}（额度时区 ${quota.timezone}）。` : ""}</p>}
             {brief !== null || gaps !== null ? (
               <div className="prerun">
                 {queryRef.current && <div className="user-bubble">{queryRef.current}</div>}

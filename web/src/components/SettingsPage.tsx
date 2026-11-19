@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { getJSON, postJSON, putJSON } from "../api";
+import type { Account } from "../auth";
+import { UserManagement } from "./UserManagement";
+import { OwnerManagement } from "./OwnerManagement";
 import type { ExecutionEffective, RetryPolicy } from "../capabilities";
 import { effortOptions, modelSettingsError, selectModel, type ProviderStatus } from "../providerSettings";
 import { CapabilitySettings } from "./CapabilitySettings";
@@ -82,9 +85,9 @@ export function settingsUpdate(config: ConfigPayload) {
 /** 本机偏好：只存在浏览器里，不影响后端配置。 */
 export interface LocalPrefs { showRecords: boolean; showReplay: boolean; traceFull: boolean }
 
-export type SettingsTab = "operations" | "models" | "capabilities" | "trial" | "connections" | "skills" | "mcp" | "general";
+export type SettingsTab = "users" | "owner" | "operations" | "models" | "capabilities" | "trial" | "connections" | "skills" | "mcp" | "general";
 const TABS: Array<[SettingsTab, string]> = [
-  ["operations", "运营概览"],
+  ["operations", "运营概览"], ["users", "用户管理"],
   ["models", "模型"], ["capabilities", "研究能力"], ["trial", "试用"], ["connections", "API 连接"], ["skills", "技能"], ["mcp", "外部资料（MCP）"], ["general", "通用"],
 ];
 
@@ -287,7 +290,7 @@ export function TrialSettingsTab({ s }: { s: RuntimeSettings }) {
   const provider = providers.find(p => p.name === trial.provider);
   return <>
     <div className="settings-section">
-      <div className="section-head"><div><h2>试用</h2><p>只作用于用 GitHub 登录的访客；邀请码用户和管理员不受影响。访客只能用网页搜索，运行代码、浏览器、资料库、外部资料服务都不可用。</p></div></div>
+      <div className="section-head"><div><h2>试用</h2><p>试用模型及免费次数只作用于访客；普通用户的每日次数在用户管理中单独设置。访客只能用网页搜索，运行代码、浏览器、资料库、外部资料服务都不可用。</p></div></div>
       {notice && <p className="notice" role="status">{notice}</p>}
       <section className="card model-card">
         <div className="card-head"><strong>试用模型</strong><small>访客的规划和研究都用这一个模型；没选时访客看到“试用暂未开放”。</small></div>
@@ -315,8 +318,8 @@ export function TrialSettingsTab({ s }: { s: RuntimeSettings }) {
             </label>
           ))}
           <label className="field"><span className="field-label">时区</span>
-            <input className="input" aria-label="试用时区" value={trial.timezone} onChange={e => update({ timezone: e.target.value.trim() })} />
-            <span className="field-hint">例如 Asia/Shanghai</span>
+            <input className="input" aria-label="试用时区" value={trial.timezone} readOnly />
+            <span className="field-hint">额度日界由平台负责人在“负责人管理”中安排变更；此处只读。</span>
           </label>
         </div>
       </section>
@@ -381,6 +384,7 @@ type SettingsPageProps = {
   onSaved?: (c: ConfigPayload) => void;
   /** 模型、连接、技能、外部资料是全站设置，只有管理员能改（#32）；普通用户只看到“通用”。 */
   isAdmin: boolean;
+  account?: Account;
 };
 
 export function SettingsPage({ isAdmin, ...props }: SettingsPageProps) {
@@ -403,7 +407,7 @@ function MemberSettingsPage({ prefs, onPrefs, onDemo }: Omit<SettingsPageProps, 
   </div>;
 }
 
-function AdminSettingsPage({ tab, onTab, prefs, onPrefs, onDemo, onSaved }: Omit<SettingsPageProps, "isAdmin">) {
+function AdminSettingsPage({ tab, onTab, prefs, onPrefs, onDemo, onSaved, account }: Omit<SettingsPageProps, "isAdmin">) {
   const runtime = useRuntimeSettings(onSaved);
   const { config, reloadProviders } = runtime;
   const isRuntimeTab = (id: SettingsTab) => id === "models" || id === "capabilities" || id === "trial";
@@ -414,13 +418,15 @@ function AdminSettingsPage({ tab, onTab, prefs, onPrefs, onDemo, onSaved }: Omit
   }
   return <div className="settings-page">
     <nav className="settings-nav" aria-label="设置分类">
-      <h1>设置</h1>
-      {TABS.map(([id, label]) => <button key={id} type="button" aria-current={tab === id ? "page" : undefined}
+      <h1>平台管理</h1>
+      {([...TABS, ...(account?.role === "owner" ? [["owner", "负责人管理"] as [SettingsTab, string]] : [])]).map(([id, label]) => <button key={id} type="button" aria-current={tab === id ? "page" : undefined}
         className={`settings-nav-item${tab === id ? " is-active" : ""}`} onClick={() => selectTab(id)}>{label}</button>)}
     </nav>
     <div className="settings-main">
       <div className="settings-scroll">
-        {tab === "operations" ? <OperationsDashboard />
+        {tab === "users" && account ? <UserManagement account={account} onTrial={() => onTab("trial")} />
+          : tab === "owner" && account?.role === "owner" ? <OwnerManagement account={account} />
+          : tab === "operations" ? <OperationsDashboard />
           : tab === "models" || tab === "capabilities" ? <RuntimeTab tab={tab} s={runtime} onTab={onTab} />
           : tab === "trial" ? <TrialSettingsTab s={runtime} />
           : tab === "connections" ? <div className="settings-section-wrap"><ConnectionSettings /></div>

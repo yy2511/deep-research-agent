@@ -26,7 +26,7 @@ class Snapshot:
             select(User.role, User.status, func.count()).group_by(User.role, User.status)
         )
         result = {"users": 0, "enabled_users": 0, "disabled_users": 0,
-                  "roles": {"guest": 0, "user": 0, "admin": 0}}
+                  "roles": {"guest": 0, "user": 0, "admin": 0, "owner": 0}}
         for role, status, count in rows:
             result["users"] += count
             result["roles"][role] += count

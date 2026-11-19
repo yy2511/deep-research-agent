@@ -67,7 +67,9 @@ def test_register_with_invite_logs_in(client, invite, database):
     assert response.status_code == 201
     assert response.json()["email"] == "alice@example.com"
     assert response.json()["role"] == "user"
-    assert client.get("/api/me").json() == response.json()
+    me = client.get("/api/me").json()
+    assert me.pop("quota")["mode"] == "unlimited"
+    assert me == response.json()
     with database.session() as session:
         used = session.scalars(select(Invite)).one()
         user = session.scalars(select(User)).one()

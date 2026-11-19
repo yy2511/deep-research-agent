@@ -258,7 +258,9 @@ def test_admin_commands_find_github_users(client, github, database, monkeypatch,
     monkeypatch.setattr(admin, "_ready_database", lambda: database)
     assert admin.main(["set-role", "--github", "octo", "--role", "user"]) == 0
     assert "GitHub 用户 octo 的角色已改为 user" in capsys.readouterr().out
-    assert client.get("/api/me").json()["role"] == "user"  # 立即生效
+    assert client.get("/api/me").status_code == 401  # 角色变化撤销旧会话
+    _github_login(client)
+    assert client.get("/api/me").json()["role"] == "user"
     assert admin.main(["disable-user", "--github", "octo"]) == 0
     assert client.get("/api/me").status_code == 401
     assert admin.main(["enable-user", "--github", "octo"]) == 0

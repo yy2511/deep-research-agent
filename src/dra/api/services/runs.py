@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from dra import events, llm, mcp_client
 from dra.api.services.errors import CapacityFull, Conflict, InvalidRequest, NotFound, Unavailable
-from dra.api.services import run_records
+from dra.api.services import run_records, quotas
 from dra.api.services import trial as trial_service
 from dra.api.services.ids import RUN_ID_RE as _RUN_ID_RE
 from dra.api.services.planning import _strip_plan_trace
@@ -271,6 +271,10 @@ class RunRegistry:
         scope = chain[0].get("config_summary", {})
         selection = scope.get("library_selection") or {}
         source_mode = scope.get("source_mode", "web")
+        if guest_limit is not None and (source_mode != "web" or selection or scope.get("mcp_server_ids")):
+            # A former member can retain private research after demotion. Never restore its
+            # private sources over the guest configuration or expose them to a new run.
+            raise HistoryError("访客不能追问含私域资料或外部资料服务的历史研究，请新建网页研究")
         if source_mode != "web":
             # 追问沿用父研究的资料范围，在当前用户自己的资料库里核对（#37）。
             if not config.library_root:
@@ -660,6 +664,15 @@ async def _release_after(reservation: asyncio.Future, db: Database, run_id: str)
     await asyncio.to_thread(run_records.release_quietly, db, run_id)
 
 
+async def _mark_started_quietly(db, run_id):
+    try:
+        await asyncio.to_thread(quotas.mark_started, db, run_id)
+    except Exception:
+        # 运行已经启动，不能因为状态标记失败退款或谎称未启动；占位计数仍保留。
+        import logging
+        logging.getLogger(__name__).warning("研究已启动，额度台账标记暂未完成：%s", run_id)
+
+
 def _with_trial(reserve, trial):
     """只有访客才带上试用规则；其他人的占位调用与原来完全相同。"""
     return functools.partial(reserve, trial=trial) if trial is not None else reserve
@@ -677,12 +690,20 @@ async def start_owned_research(db: Database, registry: RunRegistry, user_id: int
                                     document_ids=options.get("document_ids"),
                                     mcp_server_ids=options.get("mcp_server_ids"))
     run_id = new_run_id()
-    await _reserve(db, run_id, _with_trial(run_records.reserve_new_run, trial), db, user_id, run_id, query)
+    access = await _reserve(db, run_id, _with_trial(run_records.reserve_new_run, trial), db, user_id, run_id, query)
+    # 实际占位时重新读取身份；请求开始后的降级不能绕过访客能力限制。
+    trial = access.trial
     try:
-        return start_research(registry, query, run_id=run_id, user_id=user_id, trial=trial, **options)
+        if trial is not None:
+            trial_service.check_options(source_mode=options.get("source_mode", "web"),
+                                        document_ids=options.get("document_ids"),
+                                        mcp_server_ids=options.get("mcp_server_ids"))
+        result = start_research(registry, query, run_id=run_id, user_id=user_id, trial=trial, **options)
     except BaseException:
         await asyncio.to_thread(run_records.release_quietly, db, run_id)
         raise
+    await _mark_started_quietly(db, run_id)
+    return result
 
 
 async def start_owned_followup(db: Database, store: RunStore, registry: RunRegistry, user_id: int,
@@ -691,11 +712,29 @@ async def start_owned_followup(db: Database, store: RunStore, registry: RunRegis
 
     同一 request_id 重复提交时，现有逻辑返回之前那一轮的编号、不再启动；这时也撤销这次的占位。
     """
-    if store.get_meta(parent_run_id) is None:
+    parent = store.get_meta(parent_run_id)
+    if parent is None:
         raise NotFound("run 不存在")
+    # A completed retry is a read, not a new quota reservation. Check ownership
+    # before inspecting persisted request bodies and ignore orphaned run files.
+    owner = await asyncio.to_thread(run_records.run_owner, db, parent_run_id)
+    if owner is None:
+        raise Conflict(run_records.LEGACY_NOT_IMPORTED)
+    if owner != user_id:
+        raise NotFound("run 不存在")
+    counted = await asyncio.to_thread(run_records.registered_conversation_run_ids, db,
+                                      parent.get("conversation_id") or parent_run_id)
+    for item in store.conversation_turns(parent.get("conversation_id") or parent_run_id,
+                                          counted=counted.__contains__):
+        if item.get("request_id") == request_id:
+            if item.get("followup_request") != {"parent_run_id": parent_run_id, "text": text}:
+                raise Conflict("同一 request_id 对应不同追问，请勿修改后重试")
+            return {k: item[k] for k in ("run_id", "conversation_id", "turn_index", "status", "parent_run_id")}
     run_id = new_run_id()
-    _conversation, counted = await _reserve(
+    reservation = await _reserve(
         db, run_id, _with_trial(run_records.reserve_followup, trial), db, user_id, parent_run_id, run_id, text)
+    _conversation, counted = reservation
+    trial = reservation.access.trial
     try:
         result = start_followup(store, registry, parent_run_id, request_id, text,
                                 reserved_run_id=run_id, user_id=user_id,
@@ -705,6 +744,8 @@ async def start_owned_followup(db: Database, store: RunStore, registry: RunRegis
         raise
     if result["run_id"] != run_id:
         await asyncio.to_thread(run_records.release_quietly, db, run_id)
+    else:
+        await _mark_started_quietly(db, run_id)
     return result
 
 
