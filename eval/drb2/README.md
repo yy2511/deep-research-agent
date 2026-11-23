@@ -111,3 +111,51 @@ uv run python eval/drb2/judge.py --batch 20260929-pilot-2 --run-live  # 调用 G
 ## 还没做
 
 - 只跑了 2 题，结论不能推广到整个数据集。
+
+## 固定证据的报告修补对照
+
+这一阶段比较同一草稿和同一批已读证据下的四组报告，判断按失败类型修补是否能增加有充分证据支撑的声明，同时保留题目要点和正确的综合结论。
+
+| 组 | 操作 |
+|---|---|
+| 原稿 | 保持历史或新跑的研究原稿 |
+| 仅重选引文 | 只编辑引文标记，逐行检查其他字符完全一致 |
+| 通用最小改写 | 依据共享核验结果，用同一模型改写一次 |
+| 分类修补 | 依据同一核验结果，按缺引、扩大推断、反证或依据不足分别修补 |
+
+三组修补使用相同模型、材料、共享核验及单次输出额度。分别记录实际请求用量。Jev 属于上游证据卡核验，启用会改变生成原稿的过程。第一阶段单独记录它的角色。补搜、风险路由以及运行期对照留到固定证据试验之后。
+
+### 锁题和冻结输入
+
+[repair_split.json](repair_split.json) 锁定 6 道开发题和 36 道验证题，验证集为中英文各 18 题。已跑过的 15、43 保留在开发集，112、114 沿用[官方临时排除](https://github.com/imlrz/DeepResearch-Bench-II#-news)。其余题在各语言内按 idx 升序，从同一随机数生成器种子 78 固定抽取，先抽英文再抽中文。清单含题库的 SHA-256。验证集前 18 题只能做探索，36 题跑齐才作正式判断。看过验证结果后如果修改研究方案，另选独立验证集。
+
+```bash
+uv run python -m eval.drb2.repair_experiment split development
+uv run python -m eval.drb2.repair_experiment freeze --idx 43 \
+  --run-dir runs/<run_id> --out eval/drb2/runs/repair-dev/idx-43-frozen.json
+```
+
+`<run_id>` 取自 `run_pilot.py` 生成的题目 `meta.json`，也可用历史评测的实际轨迹目录。冻结器核对回执中的字符范围和本地快照，只把主、子 Agent 的已读区间取并集。原有 `[cN]` 仍对应自己的引文子区间，新增 `[pN]` 指向冻结片段。仅用于定位的搜索摘要、未读的快照区间和排行榜评分项均不送入核验或改写模型。冻结器要求无回执分页的轨迹（现有 DRB-II runner 的实验配置）。若用了被屏蔽原文或原有泄漏审计有命中，该原稿须按试验约定处理并记录在案。
+
+### 单题回放与盲评
+
+```bash
+uv run python -m eval.drb2.repair_experiment replay \
+  --frozen eval/drb2/runs/repair-dev/idx-43-frozen.json \
+  --out eval/drb2/runs/repair-dev/idx-43 \
+  --model <模型> --provider <连接> --max-tokens <共同输出额度>
+```
+
+上面只打印准备结果，获授权后加 `--run-live`。回放至多四次模型调用，请求不自动重试。较长的已读材料需要有足够上下文的模型，脚本不截断证据来凑窗口。在同一输出目录重启同版本同配置的回放会复用已记下的成功响应。模型返回的不合规改写（如重选引文组动了正文）记在请求记录中，不能把它作为有效组出分。
+
+将 `annotations/blind/` 交给两位标注人，保留 `arm_key.json` 直到标注核对结束。看改写结果之前，从原稿和全部已读证据锁定正确综合结论清单，将需要诊断的声明人工分成「已找到充分支持」「确认需实质修订」「未决」。允许联合多段或不同文档的证据，计算结论应复算。开发期先测标注工作量。若不能全量标注，先预登记每篇固定随机抽样比例，然后再开启验证集。
+
+两位标注人独立标注，核对分歧后把裁定写入 `annotations/adjudicated.json`（字段见盲评模板）。`claims` 的每项写 `{"text":"声明","supported":true}`，无引文的事实也记录且标为不支持。用 DRB-II 的信息召回与分析评分项填写 `covered_rubric_ids`，正确综合结论以事先固定的 `baseline_synthesis_ids` 为分母，填写各报告的 `retained_synthesis_ids`。回放的共享核验结果用于生成对照报告，标签由独立标注人得出。
+
+```bash
+uv run python -m eval.drb2.repair_scores --group development \
+  --out eval/drb2/runs/repair-dev/summary.json \
+  eval/drb2/runs/repair-dev/idx-43/annotations
+```
+
+统计按报告等权，重采样时保留同一题各组的配对。第一阶段比较两个强对照，支持率至少高 10 个百分点且差值区间下界大于零，为继续信号；覆盖和综合结论保留的损失区间上界各应不超过 2 个百分点。明确达不到实用门槛或覆盖损失超界可止损，区间跨界时保留为未决。没有可计量的综合结论时记录其实际可用报告数。`interim` 只输出探索统计，`validation` 需提供完整锁定集。开发题冒烟用来排查流程，不能据此得出论文效果。
