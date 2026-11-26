@@ -20,4 +20,5 @@
 - 要推翻 `docs/adr/` 里已定的决定，先新写一份 ADR 说明理由，经用户确认后再改。
 - 带 `需要设计` 标签的 issue，设计文档或 ADR 合并前不写实现代码；实施中偏离设计，在同一 PR 更新设计文档。
 - 任务做完开 PR 前读 `.claude/skills/finish-task/SKILL.md`；任务没做完要停下时读 `.claude/skills/handoff/SKILL.md`，按其步骤执行。
+- 开 PR 后按 [后端 PR 学习](docs/开发流程.md#52-后端-pr-学习) 判断是否给学习入口。独立审查及带学使用 [backend-pr-learning](.agents/skills/backend-pr-learning/SKILL.md)。
 - 合并 PR 由用户决定，AI 不自行合并。
