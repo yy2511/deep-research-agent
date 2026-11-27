@@ -22,6 +22,7 @@
 | [0008](0008-admin-aggregate-dashboard.md) | 管理员运营面板只提供汇总统计，不扩展私有研究读取权限 | 已接受 |
 
 | [0009](0009-platform-roles-and-user-quotas.md) | 三级平台角色之外保留访客，支持个人免费次数管理 | 已接受；实现 #66 待评审 |
+| [0010](0010-event-file-and-pg-notify.md) | 跨进程事件流沿用共享目录 events.jsonl，用 PostgreSQL LISTEN/NOTIFY 推送进度 | 草稿 |
 
 ## 模板
 
