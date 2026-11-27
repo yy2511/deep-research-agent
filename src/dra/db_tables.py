@@ -142,8 +142,20 @@ class LoginSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
-# ---- 研究记录的归属（阶段 1 第 3 步，#30；设计 §1） --------------------------------
-# 第 1 阶段运行状态仍以 runs/<run_id>/meta.json 为准，这里只记“属于谁、在哪个对话里”。
+# ---- 研究任务、执行尝试与跨进程补充消息（阶段 1 #30；阶段 3-1 #84） ------------------
+
+TASK_STATUSES = ("queued", "running", "cancelling", "succeeded", "failed", "cancelled", "interrupted")
+ACTIVE_TASK_STATUSES = ("queued", "running", "cancelling")
+TERMINAL_TASK_STATUSES = ("succeeded", "failed", "cancelled", "interrupted")
+DELIVERY_STATUSES = ("done", "partial", "failed", "cancelled")
+INPUT_STATES = ("open", "closing", "closed")
+MESSAGE_STATUSES = ("queued", "included", "undelivered")
+
+_TASK_STATUS_SQL = "status IN ('queued', 'running', 'cancelling', 'succeeded', 'failed', 'cancelled', 'interrupted')"
+_DELIVERY_STATUS_SQL = "delivery_status IS NULL OR delivery_status IN ('done', 'partial', 'failed', 'cancelled')"
+_INPUT_STATE_SQL = "input_state IN ('open', 'closing', 'closed')"
+_MESSAGE_STATUS_SQL = "status IN ('queued', 'included', 'undelivered')"
+
 
 class Conversation(Base):
     """一串来回追问。id 沿用文件里的 conversation_id（即首轮的 run_id）。"""
@@ -157,28 +169,91 @@ class Conversation(Base):
 
 
 class ResearchTask(Base):
-    """用户提的一个问题（首问或追问）。"""
+    """用户提的一个问题（首问或追问）。阶段 3 起保存平台状态机、配置快照与提交幂等键。"""
 
     __tablename__ = "research_tasks"
-    __table_args__ = (Index("ix_research_tasks_user_id_created_at", "user_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_research_tasks_user_id_created_at", "user_id", "created_at"),
+        Index("ix_research_tasks_status_created_at", "status", "created_at"),
+        UniqueConstraint("conversation_id", "turn_index", name="uq_research_tasks_conversation_turn"),
+        UniqueConstraint("user_id", "idempotency_key", name="uq_research_tasks_user_idempotency"),
+        CheckConstraint("turn_index >= 1", name="turn_index_pos"),
+        CheckConstraint(_TASK_STATUS_SQL, name="status"),
+        CheckConstraint("free_interrupted_retries_used >= 0", name="free_retries_nonneg"),
+    )
 
     id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
+    turn_index: Mapped[int] = mapped_column(Integer, default=1)
     query: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    config_snapshot: Mapped[str | None] = mapped_column(Text)
+    current_run_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    free_interrupted_retries_used: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow)
 
 
 class RunAttempt(Base):
-    """一次实际执行，对应 runs/<run_id>/。第 1 阶段每个任务恰好一条。"""
+    """一次实际执行，对应 runs/<run_id>/。手动重新执行时在同一 task_id 下递增 attempt_no。"""
 
     __tablename__ = "run_attempts"
+    __table_args__ = (
+        Index("ix_run_attempts_status_heartbeat_at", "status", "heartbeat_at"),
+        UniqueConstraint("task_id", "attempt_no", name="uq_run_attempts_task_attempt_no"),
+        UniqueConstraint("task_id", "idempotency_key", name="uq_run_attempts_task_idempotency"),
+        CheckConstraint("attempt_no >= 1", name="attempt_no_pos"),
+        CheckConstraint(_TASK_STATUS_SQL, name="status"),
+        CheckConstraint(_DELIVERY_STATUS_SQL, name="delivery_status"),
+        CheckConstraint("last_event_seq >= -1", name="last_event_seq_min"),
+        CheckConstraint(_INPUT_STATE_SQL, name="input_state"),
+        CheckConstraint("input_revision >= 0", name="input_revision_nonneg"),
+    )
 
     id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
     task_id: Mapped[int] = mapped_column(ForeignKey("research_tasks.id"), index=True)
+    attempt_no: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     run_id: Mapped[str] = mapped_column(String(64), unique=True)
+    retry_of_run_id: Mapped[str | None] = mapped_column(String(64))
+    idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    delivery_status: Mapped[str | None] = mapped_column(String(16))
+    worker_id: Mapped[str | None] = mapped_column(String(128))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    error: Mapped[str | None] = mapped_column(Text)
+    last_event_seq: Mapped[int] = mapped_column(Integer, default=-1, server_default="-1")
+    input_state: Mapped[str] = mapped_column(String(16), default="open")
+    input_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # 访客试用：这次扣在哪一天的次数（YYYY-MM-DD，按试用时区）；撤销占位时据此退回。非访客为空（#49）。
     quota_day: Mapped[str | None] = mapped_column(String(10))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class RunMessage(Base):
+    """运行中用户补充消息（阶段 3-1 #84；设计 docs/design/阶段3-Worker与进度推送.md §1.3）。"""
+
+    __tablename__ = "run_messages"
+    __table_args__ = (
+        UniqueConstraint("attempt_id", "message_id", name="uq_run_messages_attempt_message_id"),
+        UniqueConstraint("attempt_id", "revision", name="uq_run_messages_attempt_revision"),
+        CheckConstraint("revision >= 1", name="revision_pos"),
+        CheckConstraint(_MESSAGE_STATUS_SQL, name="status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
+    attempt_id: Mapped[int] = mapped_column(ForeignKey("run_attempts.id"), index=True)
+    message_id: Mapped[str] = mapped_column(String(100))
+    revision: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    call_id: Mapped[str | None] = mapped_column(String(128))
+    reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 

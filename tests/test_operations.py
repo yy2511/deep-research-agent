@@ -38,14 +38,15 @@ def seed(database):
                               ("20240229-000000-bbbbbbbb", bid, "2024-02-29")]:
             s.add(Conversation(id=cid, user_id=uid, created_at=at(day)))
         s.flush()
-        for cid, uid, day, hour in [
-            ("20240228-000000-aaaaaaaa", aid, "2024-02-28", 23),
-            ("20240228-000000-aaaaaaaa", aid, "2024-02-29", 0),
-            ("20240228-000000-aaaaaaaa", aid, "2024-02-29", 12),
-            ("20240229-000000-bbbbbbbb", bid, "2024-02-29", 23),
-            ("20240229-000000-bbbbbbbb", bid, "2024-03-01", 0),
+        for cid, uid, turn, day, hour in [
+            ("20240228-000000-aaaaaaaa", aid, 1, "2024-02-28", 23),
+            ("20240228-000000-aaaaaaaa", aid, 2, "2024-02-29", 0),
+            ("20240228-000000-aaaaaaaa", aid, 3, "2024-02-29", 12),
+            ("20240229-000000-bbbbbbbb", bid, 1, "2024-02-29", 23),
+            ("20240229-000000-bbbbbbbb", bid, 2, "2024-03-01", 0),
         ]:
-            s.add(ResearchTask(user_id=uid, conversation_id=cid, query="PRIVATE_QUERY", created_at=at(day,hour)))
+            s.add(ResearchTask(user_id=uid, conversation_id=cid, turn_index=turn,
+                               query="PRIVATE_QUERY", created_at=at(day,hour)))
         s.add(Showcase(conversation_id="20240229-000000-bbbbbbbb", title="PRIVATE_SHOWCASE_TITLE"))
     return aid
 

@@ -19,38 +19,50 @@ from pathlib import Path
 
 from sqlalchemy import delete, func, select
 
-from dra.api.services import trial as trial_service
-from dra.api.services import quotas
+from dra.api.services import quotas, task_queue
 from dra.api.services.db_errors import database_errors
-from dra.api.services.errors import Conflict, InvalidRequest, NotFound
+from dra.api.services.errors import InvalidRequest, NotFound
 from dra.api.services.ids import RUN_ID_RE
 from dra.db import Database
-from dra.db_tables import Conversation, ResearchTask, RunAttempt, Showcase, User, QuotaReservation, utcnow
+from dra.db_tables import (
+    DELIVERY_STATUSES,
+    Conversation,
+    QuotaReservation,
+    ResearchTask,
+    RunAttempt,
+    User,
+    utcnow,
+)
 
 log = logging.getLogger(__name__)
 
-SHOWCASE_FROZEN = "该对话正作为示例展示，取消示例后才能追问"
-LEGACY_NOT_IMPORTED = (
-    "这条研究还没有登记到数据库，暂时不能追问。"
-    "请先执行 python -m dra.admin import-legacy --owner <管理员邮箱>"
-)
+SHOWCASE_FROZEN = task_queue.SHOWCASE_FROZEN
+LEGACY_NOT_IMPORTED = task_queue.LEGACY_NOT_IMPORTED
 
 
-def reserve_new_run(db: Database, user_id: int, run_id: str, query: str, *, trial=None) -> quotas.Access:
-    """新研究：新对话（id 即 run_id）+ 一个请求 + 一条执行记录，同一事务。
-
-    ``trial``（访客，#49）：在同一事务里扣今天的研究次数；用完时整个占位不写入。
-    """
-    now = utcnow()
-    with database_errors(), db.session() as session:
-        access = quotas.reserve_in_session(session, user_id, quotas.RUN, f"run:{run_id}")
-        session.add(Conversation(id=run_id, user_id=user_id, created_at=now))
-        task = ResearchTask(user_id=user_id, conversation_id=run_id, query=query, created_at=now)
-        session.add(task)
-        session.flush()
-        session.add(RunAttempt(task_id=task.id, run_id=run_id, created_at=now,
-                               quota_day=access.day))
-    return access
+def reserve_new_run(
+    db: Database,
+    user_id: int,
+    run_id: str,
+    query: str,
+    *,
+    trial=None,
+    idempotency_key: str | None = None,
+    fingerprint: str | None = None,
+    config_snapshot: str | None = None,
+) -> quotas.Access:
+    """新研究占位：新对话 + 任务 + 首次执行尝试，同一事务。"""
+    result = task_queue.enqueue_new_task(
+        db,
+        user_id,
+        run_id,
+        query,
+        idempotency_key=idempotency_key,
+        fingerprint=fingerprint,
+        config_snapshot=config_snapshot,
+        check_guest_active=False,
+    )
+    return result.access
 
 
 @dataclass(frozen=True)
@@ -58,54 +70,51 @@ class FollowupReservation:
     conversation_id: str
     counted: set[str]
     access: quotas.Access
+    run_id: str = ""
+    turn_index: int = 1
+    status: str = "queued"
+    created: bool = True
 
     def __iter__(self):
-        # 保留历史两个返回值的解包约定，启动层另外读取原子占位时的有效权限。
+        # 保留历史两个返回值的解包约定，启动层另外读取原子占位时的有效权限与幂等标记。
         yield self.conversation_id
         yield self.counted
 
 
-def reserve_followup(db: Database, user_id: int, parent_run_id: str, run_id: str,
-                     query: str, *, trial=None) -> FollowupReservation:
-    """追问：在父研究所在的对话下加一个请求 + 一条执行记录。
-
-    返回（对话 id，本次占位之前该对话已登记的 run_id 集合）。后者交给追问的
-    “重复提交”和“是否最新一轮”判断，残留的未登记目录不算（#39 审查）。
-
-    父研究还没登记（旧数据未导入）时拒绝，不自动认领（用户 2026-11-07 确认）。
-    对话不属于当前用户时按不存在处理（#31）；接口层的归属检查已先挡住，这里再守一道。
-    """
-    now = utcnow()
-    with database_errors(), db.session() as session:
-        # 锁序与管理写一致：治理 -> 用户 -> 对话 -> 计数。
-        quotas.begin_write(session)
-        quotas.access_in_session(session, user_id)
-        conversation_id = session.scalar(
-            select(ResearchTask.conversation_id)
-            .join(RunAttempt, RunAttempt.task_id == ResearchTask.id)
-            .where(RunAttempt.run_id == parent_run_id)
-        )
-        if conversation_id is None:
-            raise Conflict(LEGACY_NOT_IMPORTED)
-        # 第 4 步（#31）：对话必须属于当前用户；不属于与不存在同样处理。
-        # 锁住对话行：与“设为示例”（services/showcases.add）排队，见下面的冻结检查。
-        owner = session.scalar(select(Conversation.user_id).where(Conversation.id == conversation_id)
-                               .with_for_update())
-        if owner != user_id:
-            raise NotFound("run 不存在")
-        # 阶段 2 第 2 步（#47）：示例期间对话冻结，原主人也不能追问，否则新一轮会未经确认被公开。
-        if session.get(Showcase, conversation_id) is not None:
-            raise Conflict(SHOWCASE_FROZEN)
-        counted = conversation_run_ids(session, conversation_id)
-        # 访客追问也算一次研究（#49）；在同一事务里扣，用完时不占位。
-        access = quotas.reserve_in_session(session, user_id, quotas.RUN, f"run:{run_id}")
-        task = ResearchTask(user_id=user_id, conversation_id=conversation_id, query=query,
-                            created_at=now)
-        session.add(task)
-        session.flush()
-        session.add(RunAttempt(task_id=task.id, run_id=run_id, created_at=now,
-                               quota_day=access.day))
-    return FollowupReservation(conversation_id, counted, access)
+def reserve_followup(
+    db: Database,
+    user_id: int,
+    parent_run_id: str,
+    run_id: str,
+    query: str,
+    request_id: str | None = None,
+    fingerprint: str | None = None,
+    *,
+    trial=None,
+    config_snapshot: str | None = None,
+) -> FollowupReservation:
+    """追问占位：在同一 Conversation 行锁事务内完成重复去重、最新轮核验与扣次（#30、#40、#84）。"""
+    result = task_queue.enqueue_followup_task(
+        db,
+        user_id,
+        parent_run_id,
+        run_id,
+        query,
+        request_id=request_id,
+        fingerprint=fingerprint,
+        config_snapshot=config_snapshot,
+        check_parent_finished=False,
+        check_guest_active=False,
+    )
+    return FollowupReservation(
+        conversation_id=result.conversation_id,
+        counted=result.counted,
+        access=result.access,
+        run_id=result.run_id,
+        turn_index=result.turn_index,
+        status=result.status,
+        created=result.created,
+    )
 
 
 def release(db: Database, run_id: str) -> None:
@@ -125,9 +134,12 @@ def release(db: Database, run_id: str) -> None:
         conversation_id = task.conversation_id
         session.delete(task)
         session.flush()
-        remaining = session.scalar(select(func.count()).select_from(ResearchTask)
-                                   .where(ResearchTask.conversation_id == conversation_id))
-        if not remaining:
+        latest_remaining = session.scalars(
+            select(ResearchTask)
+            .where(ResearchTask.conversation_id == conversation_id)
+            .order_by(ResearchTask.turn_index.desc())
+        ).first()
+        if latest_remaining is None:
             session.execute(delete(Conversation).where(Conversation.id == conversation_id))
 
 
@@ -216,7 +228,8 @@ def import_legacy(db: Database, runs_root: Path, owner_email: str) -> ImportRepo
         return datetime.fromtimestamp(ts, UTC) if ts > 0 else utcnow()
 
     report = ImportReport(owner_id=owner_id)
-    turns: list[tuple[str, int, datetime, str, str]] = []  # (对话, 轮次, 开始时间, run_id, 问题)
+    # (对话, 轮次提示, 开始时间, run_id, 问题, meta_status)
+    turns: list[tuple[str, int, datetime, str, str, str | None]] = []
     root = Path(runs_root)
     for directory in sorted(root.iterdir()) if root.is_dir() else []:
         if not directory.is_dir() or directory.name.startswith("."):
@@ -238,21 +251,56 @@ def import_legacy(db: Database, runs_root: Path, owner_email: str) -> ImportRepo
             # 时间在逐目录检查时就转换好：坏值（毫秒、无穷大、NaN……）只跳过这一个目录，
             # 不在后面的整批事务里报错、把正常目录一起回滚（#36 审查）。
             started_at = at(float(meta.get("started_at") or 0))
+            raw_status = meta.get("status")
+            delivery = raw_status if raw_status in DELIVERY_STATUSES else None
             turns.append((conversation_id, int(meta.get("turn_index") or 1),
-                          started_at, run_id, str(meta.get("query") or "")))
+                          started_at, run_id, str(meta.get("query") or ""), delivery))
         except (OSError, ValueError, TypeError, OverflowError) as exc:
             report.unreadable.append((run_id, f"{exc.__class__.__name__}: {exc}"))
 
-    turns.sort(key=lambda t: (t[0], t[1], t[2]))
+    turns.sort(key=lambda t: (t[0], t[1], t[2], t[3]))
     with database_errors(), db.session() as session:
-        for conversation_id, _turn, started, run_id, query in turns:
+        max_turns = dict(
+            session.execute(
+                select(ResearchTask.conversation_id, func.max(ResearchTask.turn_index))
+                .group_by(ResearchTask.conversation_id)
+            ).all()
+        )
+        for conversation_id, _turn, started, run_id, query, delivery in turns:
             if session.get(Conversation, conversation_id) is None:
                 session.add(Conversation(id=conversation_id, user_id=owner_id, created_at=started))
                 session.flush()
-            task = ResearchTask(user_id=owner_id, conversation_id=conversation_id, query=query,
-                                created_at=started)
+            next_turn = (max_turns.get(conversation_id) or 0) + 1
+            max_turns[conversation_id] = next_turn
+            if delivery == "cancelled":
+                task_status = "cancelled"
+            elif delivery == "failed":
+                task_status = "failed"
+            else:
+                task_status = "succeeded"
+            task = ResearchTask(
+                user_id=owner_id,
+                conversation_id=conversation_id,
+                turn_index=next_turn,
+                query=query,
+                status=task_status,
+                current_run_id=run_id,
+                created_at=started,
+                updated_at=started,
+            )
             session.add(task)
             session.flush()
-            session.add(RunAttempt(task_id=task.id, run_id=run_id, created_at=started))
+            session.add(
+                RunAttempt(
+                    task_id=task.id,
+                    attempt_no=1,
+                    run_id=run_id,
+                    status=task_status,
+                    delivery_status=delivery,
+                    finished_at=started,
+                    input_state="closed",
+                    created_at=started,
+                )
+            )
             report.imported.append(run_id)
     return report

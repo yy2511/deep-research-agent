@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from dra import events, llm, mcp_client
 from dra.api.services.errors import CapacityFull, Conflict, InvalidRequest, NotFound, Unavailable
-from dra.api.services import run_records, quotas
+from dra.api.services import run_records, quotas, task_queue
 from dra.api.services import trial as trial_service
 from dra.api.services.ids import RUN_ID_RE as _RUN_ID_RE
 from dra.api.services.planning import _strip_plan_trace
@@ -59,7 +59,9 @@ class RunHandle:
         self.busy = False
         # 完成回调可能早于本任务的 finally 排期执行，所以终态必须随本任务结束立刻可见。
         self.simple_status: str | None = None
+        self.simple_error: str | None = None
         self.user_input: ResearchInput | None = None
+        self.db: Database | None = None
         # 试用并发上限用（#49）：谁的研究、是不是访客。
         self.user_id: int | None = None
         self.guest = False
@@ -436,6 +438,7 @@ class RunRegistry:
             raise
         except Exception as e:  # noqa: BLE001 — 失败也要善终入档
             status = "failed"
+            handle.simple_error = str(e)
             self.publish(run_id, {"type": EventType.ERROR.value, "message": str(e)})
         finally:
             llm.reset_trace_full_io(trace_token)
@@ -463,6 +466,7 @@ class RunRegistry:
             self.store.finalize(run_id, status, _simple_stats(h.buffer))
         except Exception:  # noqa: BLE001
             pass
+        task_queue.complete_attempt_quietly(h.db, run_id, simple_status=status, error=h.simple_error)
         self.publish(run_id, {"type": EventType.END.value})
         h.busy = False
         h.done = True
@@ -666,11 +670,11 @@ async def _release_after(reservation: asyncio.Future, db: Database, run_id: str)
 
 async def _mark_started_quietly(db, run_id):
     try:
-        await asyncio.to_thread(quotas.mark_started, db, run_id)
+        await asyncio.to_thread(task_queue.mark_running_in_process, db, run_id)
     except Exception:
         # 运行已经启动，不能因为状态标记失败退款或谎称未启动；占位计数仍保留。
         import logging
-        logging.getLogger(__name__).warning("研究已启动，额度台账标记暂未完成：%s", run_id)
+        logging.getLogger(__name__).warning("研究已启动，数据库运行状态标记暂未完成：%s", run_id)
 
 
 def _with_trial(reserve, trial):
@@ -678,19 +682,54 @@ def _with_trial(reserve, trial):
     return functools.partial(reserve, trial=trial) if trial is not None else reserve
 
 
+def _new_run_fingerprint(query: str, options: dict) -> str:
+    return task_queue.request_fingerprint({
+        "query": query,
+        "brief": _strip_plan_trace(options["brief"]) if options.get("brief") is not None else None,
+        "skill_selection": options.get("skill_selection"),
+        "source_mode": options.get("source_mode", "web"),
+        "document_ids": list(options.get("document_ids") or []),
+        "library_rerank": bool(options.get("library_rerank")),
+        "mcp_server_ids": list(options.get("mcp_server_ids") or []),
+        "blocked_sites": list(options.get("blocked_sites") or []),
+        "full_llm_io": bool(options.get("full_llm_io")),
+    })
+
+
 async def start_owned_research(db: Database, registry: RunRegistry, user_id: int, query: str,
-                               *, trial=None, **options) -> str:
+                               *, trial=None, idempotency_key: str | None = None, **options) -> str:
     """先在数据库占位（线程里的短事务），再在事件循环上启动研究；启动失败就撤销占位。
 
     设计 §3.2、ADR 0006 规则 3。写库失败时（Unavailable → 503）研究不会启动，也不建运行目录。
     访客（``trial``，#49）：先检查来源选项，再在占位事务里扣次数；启动失败撤销占位时次数退回。
+    阶段 3-1（#84）：支持 ``idempotency_key`` 原子防重，同一幂等键返回已有 ``run_id`` 且不重复扣费。
     """
     if trial is not None:
         trial_service.check_options(source_mode=options.get("source_mode", "web"),
                                     document_ids=options.get("document_ids"),
                                     mcp_server_ids=options.get("mcp_server_ids"))
     run_id = new_run_id()
-    access = await _reserve(db, run_id, _with_trial(run_records.reserve_new_run, trial), db, user_id, run_id, query)
+    fp = _new_run_fingerprint(query, options)
+    if idempotency_key is not None:
+        enqueued = await _reserve(
+            db,
+            run_id,
+            functools.partial(
+                task_queue.enqueue_new_task,
+                idempotency_key=idempotency_key,
+                fingerprint=fp,
+                check_guest_active=False,
+            ),
+            db,
+            user_id,
+            run_id,
+            query,
+        )
+        if not enqueued.created:
+            return enqueued.run_id
+        access = enqueued.access
+    else:
+        access = await _reserve(db, run_id, _with_trial(run_records.reserve_new_run, trial), db, user_id, run_id, query)
     # 实际占位时重新读取身份；请求开始后的降级不能绕过访客能力限制。
     trial = access.trial
     try:
@@ -702,6 +741,8 @@ async def start_owned_research(db: Database, registry: RunRegistry, user_id: int
     except BaseException:
         await asyncio.to_thread(run_records.release_quietly, db, run_id)
         raise
+    if registry is not None and result in registry.runs:
+        registry.runs[result].db = db
     await _mark_started_quietly(db, run_id)
     return result
 
@@ -710,7 +751,7 @@ async def start_owned_followup(db: Database, store: RunStore, registry: RunRegis
                                parent_run_id: str, request_id: str, text: str, *, trial=None) -> dict:
     """追问版的“先占位，再启动，失败就撤销”。
 
-    同一 request_id 重复提交时，现有逻辑返回之前那一轮的编号、不再启动；这时也撤销这次的占位。
+    同一 request_id 重复提交或并发重叠提交时，在 Conversation 行锁内原子去重并校验最新轮（#40、#84）。
     """
     parent = store.get_meta(parent_run_id)
     if parent is None:
@@ -731,8 +772,28 @@ async def start_owned_followup(db: Database, store: RunStore, registry: RunRegis
                 raise Conflict("同一 request_id 对应不同追问，请勿修改后重试")
             return {k: item[k] for k in ("run_id", "conversation_id", "turn_index", "status", "parent_run_id")}
     run_id = new_run_id()
+    fp = task_queue.request_fingerprint({"parent_run_id": parent_run_id, "text": text})
     reservation = await _reserve(
-        db, run_id, _with_trial(run_records.reserve_followup, trial), db, user_id, parent_run_id, run_id, text)
+        db,
+        run_id,
+        _with_trial(run_records.reserve_followup, trial),
+        db,
+        user_id,
+        parent_run_id,
+        run_id,
+        text,
+        request_id,
+        fp,
+    )
+    if not reservation.created:
+        meta = store.get_meta(reservation.run_id) or {}
+        return {
+            "run_id": reservation.run_id,
+            "conversation_id": reservation.conversation_id,
+            "turn_index": reservation.turn_index,
+            "status": meta.get("status", reservation.status),
+            "parent_run_id": parent_run_id,
+        }
     _conversation, counted = reservation
     trial = reservation.access.trial
     try:
@@ -745,6 +806,8 @@ async def start_owned_followup(db: Database, store: RunStore, registry: RunRegis
     if result["run_id"] != run_id:
         await asyncio.to_thread(run_records.release_quietly, db, run_id)
     else:
+        if registry is not None and run_id in registry.runs:
+            registry.runs[run_id].db = db
         await _mark_started_quietly(db, run_id)
     return result
 
