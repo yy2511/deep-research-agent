@@ -105,6 +105,7 @@ def reserve_followup(
         config_snapshot=config_snapshot,
         check_parent_finished=False,
         check_guest_active=False,
+        counted_loader=lambda session, cid: conversation_run_ids(session, cid),
     )
     return FollowupReservation(
         conversation_id=result.conversation_id,

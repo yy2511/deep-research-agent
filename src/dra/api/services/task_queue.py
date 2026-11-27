@@ -251,11 +251,13 @@ def enqueue_followup_task(
     config_snapshot: str | None = None,
     check_parent_finished: bool = False,
     check_guest_active: bool = True,
+    counted_loader=None,
     now: datetime | None = None,
 ) -> FollowupEnqueueResult:
     """在 Conversation 行锁内原子完成追问去重、最新轮校验、额度扣减与入队（修复 #40）。"""
     ts = _now(now)
     fp = fingerprint or request_fingerprint({"parent_run_id": parent_run_id, "text": query})
+    load_counted = counted_loader or _conversation_run_ids
 
     with database_errors(), db.session() as session:
         # 锁序固定：治理 -> 用户 -> 对话 -> 任务 -> 计数。
@@ -293,7 +295,7 @@ def enqueue_followup_task(
                 attempt = session.scalars(
                     select(RunAttempt).where(RunAttempt.run_id == existing.current_run_id)
                 ).first()
-                counted = _conversation_run_ids(session, conversation_id)
+                counted = load_counted(session, conversation_id)
                 return FollowupEnqueueResult(
                     task_id=existing.id,
                     attempt_id=attempt.id,
@@ -321,7 +323,7 @@ def enqueue_followup_task(
         if check_guest_active and access.role == "guest":
             _ensure_guest_has_no_active_task(session, user_id)
 
-        counted = _conversation_run_ids(session, conversation_id)
+        counted = load_counted(session, conversation_id)
         access = quotas.reserve_in_session(session, user_id, quotas.RUN, f"run:{run_id}", now=now)
         next_turn = latest_task.turn_index + 1
         task = ResearchTask(
