@@ -34,6 +34,7 @@ read_router = APIRouter(dependencies=READABLE_RUN)
 class ResearchReq(_StrictPayload):
     """现役研究请求；旧 plan 参数不再接受。"""
     query: str
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
     skill_selection: str | None = None
     mode: Literal["simple"]
     brief: dict | None = None
@@ -54,7 +55,8 @@ async def api_research(req: ResearchReq, user: CurrentUserDep, *, registry: Regi
         # 访客（#49）：试用模型未设置时 503；用完次数 429；来源选项不对 400。
         trial = trial_service.for_user(user)
         run_id = await run_service.start_owned_research(
-            db, registry, user.id, req.query, trial=trial, brief=req.brief, skill_selection=req.skill_selection,
+            db, registry, user.id, req.query, trial=trial, idempotency_key=req.idempotency_key,
+            brief=req.brief, skill_selection=req.skill_selection,
             source_mode=req.source_mode, document_ids=req.document_ids,
             library_rerank=req.library_rerank, mcp_server_ids=req.mcp_server_ids,
             blocked_sites=req.blocked_sites, full_llm_io=req.trace_full_llm_io,

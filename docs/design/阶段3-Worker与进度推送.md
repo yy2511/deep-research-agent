@@ -49,7 +49,7 @@
 | --- | --- | --- |
 | `turn_index` | `Integer`，非空；唯一约束 `(conversation_id, turn_index)` | 对话内轮次序号（首问为 1，追问递增），从数据库层面根治并发追问同序号竞争（#40） |
 | `status` | `String(16)`，非空，检查约束见 §2.1 | 当前平台执行状态（跟随最新一次 `run_attempts`） |
-| `idempotency_key` | `String(64)`，可空；唯一索引 `(user_id, idempotency_key)` | 提交幂等键：首问由前端生成传入，追问复用 `request_id`；历史旧记录为空 |
+| `idempotency_key` | `String(160)`，可空；唯一索引 `(user_id, idempotency_key)` | 提交幂等键：按 `new:<key>` / `followup:<conversation_id>:<request_id>` 分作用域保存，避免不同对话使用相同 `request_id` 冲突；历史旧记录为空 |
 | `request_fingerprint` | `String(64)`，可空 | 请求核心参数的 SHA-256 摘要；同一 `idempotency_key` 带不同内容重试时返回 `409` |
 | `config_snapshot` | `Text`（JSON），可空 | 入队时固定的执行配置快照（已解析的 `SimpleConfig`、初始 `requirements`、`brief`、`followup_context`、`full_llm_io`、`is_guest`）。**不含任何 API Key 明文**（连接凭据仍在运行时由 Worker 从受控环境读取） |
 | `current_run_id` | `String(64)`，可空，索引 | 当前生效（最新一次）尝试的 `run_id`，供列表、对话链与追问定位父轮次 |
@@ -65,6 +65,7 @@
 | --- | --- | --- |
 | `attempt_no` | `Integer`，非空，默认 `1`；唯一约束 `(task_id, attempt_no)` | 第几次执行尝试 |
 | `retry_of_run_id` | `String(64)`，可空 | 若为手动重试，记录被重试的那次 `run_id`，便于界面和审计追溯 |
+| `idempotency_key` | `String(160)`，可空；唯一约束 `(task_id, idempotency_key)` | 本次尝试（尤其是 `retry` 重试请求）的幂等键，保证网络超时重传返回同一尝试 |
 | `status` | `String(16)`，非空，检查约束同 `research_tasks.status` | 本次尝试的平台状态 |
 | `delivery_status` | `String(16)`，可空 | 引擎收尾后的结果分类（`done` / `partial` / `failed` / `cancelled`），与 `meta.json` 一致 |
 | `worker_id` | `String(128)`，可空 | 领取本次尝试的 Worker 实例标识（如 `<hostname>:<pid>:<uuid8>`） |
@@ -375,4 +376,10 @@ LIMIT 1;
 
 ## 实施记录
 
-待各实现 PR 合并后补充。
+### 第 1 步（3-1）：任务表迁移 `0007` 与入队状态机（#84，含 #40）
+
+按设计实施迁移 `0007`、`db_tables` 扩展与 `services/task_queue.py` 状态机服务：
+- 为避免同一用户在不同对话中使用相同字面值的追问 `request_id`（如 `req-1`）撞上 `(user_id, idempotency_key)` 唯一约束，`research_tasks.idempotency_key` 长度定为 `String(160)` 并按 `new:<key>` / `followup:<conversation_id>:<request_id>` 编码作用域。
+- `run_attempts` 补充可空列 `idempotency_key`（唯一约束 `(task_id, idempotency_key)`），用于保证 `retry_task` 在网络超时重发同一幂等键时返回已创建的新尝试，而不会误判为“该尝试已有新的重试记录”。
+- Worker 抢单在遇到队首为 `guest` 任务时，额外锁住 `platform_governance` 单例行核对活跃访客并发数，消除两个 PostgreSQL Worker 在 `READ COMMITTED` 下同时读到旧计数而超领访客槽位的竞争窗口；访客槽位已满时自动跳过访客任务优先领取非访客排队单。
+- `POST /api/research` 接入可选 `idempotency_key`，追问占位在 `Conversation` 行锁事务内原子完成幂等与最新轮次核验（关闭 #40）；Web 切换为纯异步入队留待步骤 3-2 与 `dra.worker` 同步接入。
